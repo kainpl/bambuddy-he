@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Loader2 } from 'lucide-react';
 import { api } from '../../api/client';
@@ -55,6 +55,15 @@ export function OrderPage() {
     isError,
     error,
   } = useOrderDetail(id);
+
+  // Only an active order can still be simulated forward — a completed or
+  // cancelled one has nothing left to schedule.
+  const forecast = useQuery({
+    queryKey: ['order-forecast', id],
+    queryFn: () => api.getOrderForecast(id),
+    enabled: Number.isFinite(id) && order?.status === 'active',
+    staleTime: 30_000,
+  });
 
   // The customer keys go too, and as prefixes — their tiles are computed
   // from this order and its siblings, and with a 60 s `staleTime` a key left
@@ -170,7 +179,7 @@ export function OrderPage() {
 
       {canEdit && <CloseSuggestionBanner order={order} onComplete={() => setStatus.mutate('completed')} />}
 
-      <OrderFigures figures={order.figures} />
+      <OrderFigures figures={order.figures} forecast={order.status === 'active' ? forecast.data ?? null : null} />
 
       <OrderLinesTable order={order} canEdit={canEdit} />
 

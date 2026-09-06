@@ -131,6 +131,23 @@ export function OrdersPage() {
   const visible = tab === 'all' ? orders : orders.filter((o) => o.status === tab);
   const groups = groupByCustomer ? groupBy(visible, (o) => o.customer_name ?? t('orders.list.noCustomer')) : null;
 
+  const visibleIds = visible.map((o) => o.id);
+  // The forecast is only meaningful in table view — cards don't show it, and
+  // the farm-wide simulation isn't cheap enough to run on every tab.
+  const forecastQuery = useQuery({
+    queryKey: ['orders-forecast', visibleIds],
+    queryFn: () => api.getOrdersForecast(visibleIds),
+    enabled: view === 'table' && visibleIds.length > 0,
+    staleTime: 30_000,
+  });
+  // `undefined` while loading (every cell reads «…»); `{}` once a fetch
+  // failed, so a stuck request doesn't hold every row at «…» forever.
+  const forecasts = useMemo(() => {
+    if (forecastQuery.isError) return {};
+    if (!forecastQuery.data) return undefined;
+    return Object.fromEntries(forecastQuery.data.orders.map((f) => [f.project_id, f]));
+  }, [forecastQuery.data, forecastQuery.isError]);
+
   // `CustomerListFigures` and `CustomerFigures` are computed from these very
   // orders, so every status change moves a customer tile — and this page
   // does not know whose order it just touched, which is why every key in the
@@ -278,7 +295,7 @@ export function OrdersPage() {
             <section key={customerName}>
               <h2 className="text-lg font-medium text-white mb-2">{customerName}</h2>
               {view === 'table' ? (
-                <OrdersTable orders={group} />
+                <OrdersTable orders={group} forecasts={forecasts} />
               ) : (
                 <div className="grid gap-4 grid-cols-[repeat(auto-fill,minmax(280px,1fr))]">{group.map(renderCard)}</div>
               )}
@@ -286,7 +303,7 @@ export function OrdersPage() {
           ))}
         </div>
       ) : view === 'table' ? (
-        <OrdersTable orders={visible} />
+        <OrdersTable orders={visible} forecasts={forecasts} />
       ) : (
         <div className="grid gap-4 grid-cols-[repeat(auto-fill,minmax(280px,1fr))]">{visible.map(renderCard)}</div>
       )}

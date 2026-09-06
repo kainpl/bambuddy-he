@@ -4,30 +4,28 @@ import { render } from '../../utils';
 import { strayZeroTextNodes } from '../../domHelpers';
 import { OrderFigures } from '../../../components/projects/OrderFigures';
 
+const FIGURES = {
+  ordered: 0,
+  printed: 0,
+  complete: 0,
+  remaining: 0,
+  total_time_seconds: 0,
+  total_filament_grams: 0,
+  total_cost: 0,
+  defective: 0,
+  from_stock_units: 0,
+  bankable_surplus: 0,
+  margin: null,
+  progress: 0,
+  other_prints_count: 0,
+  all_printed: false,
+  prints_in_progress: 0,
+  prints_queued: 0,
+};
+
 describe('OrderFigures', () => {
   it('renders nothing numeric-stray for an empty order and hides the bar', () => {
-    render(
-      <OrderFigures
-        figures={{
-          ordered: 0,
-          printed: 0,
-          complete: 0,
-          remaining: 0,
-          total_time_seconds: 0,
-          total_filament_grams: 0,
-          total_cost: 0,
-          defective: 0,
-          from_stock_units: 0,
-          bankable_surplus: 0,
-          margin: null,
-          progress: 0,
-          other_prints_count: 0,
-          all_printed: false,
-          prints_in_progress: 0,
-          prints_queued: 0,
-        }}
-      />,
-    );
+    render(<OrderFigures figures={FIGURES} />);
     expect(screen.queryByTestId('order-progress')).not.toBeInTheDocument();
     // Scoped to the progress area (pre-flight ruling 1): the figure tiles legitimately print "0" as labelled numbers;
     // the rule the detector guards is that a HIDDEN bar leaves no bare 0 behind where it would have been.
@@ -118,5 +116,18 @@ describe('OrderFigures', () => {
 
     rerender(<OrderFigures figures={{ ...figures, from_stock_units: 0 }} />);
     expect(screen.queryByText('From stock')).not.toBeInTheDocument();
+  });
+
+  it('shows the ready-at and machine-hours tiles and the unknown-prints line', () => {
+    render(
+      <OrderFigures
+        figures={FIGURES}
+        forecast={{ project_id: 1, now_eta: '2026-09-07T10:00:00Z', now_seconds: 7200, after_eta: null, after_seconds: null, machine_seconds: 5400, unknown_prints: 2, unroutable_prints: 0, ahead_count: 0, assumptions: ['prep'], lines: [] }}
+      />,
+    );
+    expect(screen.getByText('Ready ≈')).toBeInTheDocument();
+    expect(screen.getByText('1:30')).toBeInTheDocument();
+    expect(screen.getByText('2 prints without an estimate')).toBeInTheDocument();
+    expect(screen.getByLabelText(/upload and preheat/)).toBeInTheDocument();
   });
 });

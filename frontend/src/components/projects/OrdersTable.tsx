@@ -1,17 +1,22 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import type { OrderListItem } from '../../api/client';
+import { api } from '../../api/client';
+import type { OrderForecast, OrderListItem } from '../../api/client';
 import { ProgressBar } from './ProgressBar';
 import { StatusBadge } from './StatusBadge';
+import { ForecastHint } from './ForecastHint';
+import { etaFull, etaShort, hoursMinutes } from '../../utils/forecast';
 
-type SortKey = 'name' | 'due' | 'progress' | 'remaining' | 'printing' | 'queued';
+type SortKey = 'name' | 'due' | 'progress' | 'remaining' | 'printing' | 'queued' | 'ready' | 'hours';
 
 const remaining = (o: OrderListItem) => Math.max(0, o.ordered - o.printed - o.from_stock_units);
 
 /** A fresh click on one of these sorts most-first; `name` and `due` sort
- *  ascending instead — A→Z, soonest due first. */
-const DESC_FIRST: ReadonlySet<SortKey> = new Set(['printing', 'queued', 'remaining', 'progress']);
+ *  ascending instead — A→Z, soonest due first. `ready` joins them (soonest
+ *  ETA first); only `hours` (machine time left) sorts most-first. */
+const DESC_FIRST: ReadonlySet<SortKey> = new Set(['printing', 'queued', 'remaining', 'progress', 'hours']);
 
 /**
  * The orders list as a table — the farm's roll-up (spec 2026-09-06, Slice F).
@@ -20,8 +25,9 @@ const DESC_FIRST: ReadonlySet<SortKey> = new Set(['printing', 'queued', 'remaini
  * the list. Default order: due date, then name; a header click sorts by that
  * column and clicks again to flip.
  */
-export function OrdersTable({ orders }: { orders: OrderListItem[] }) {
+export function OrdersTable({ orders, forecasts }: { orders: OrderListItem[]; forecasts?: Record<number, OrderForecast> }) {
   const { t } = useTranslation();
+  const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: api.getSettings, staleTime: 60_000 });
   const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({ key: 'due', desc: false });
 
   const sorted = useMemo(() => {
@@ -33,6 +39,8 @@ export function OrdersTable({ orders }: { orders: OrderListItem[] }) {
         case 'remaining': return remaining(o);
         case 'printing': return o.prints_in_progress;
         case 'queued': return o.prints_queued;
+        case 'ready': return forecasts?.[o.id]?.now_eta ? Date.parse(forecasts[o.id].now_eta!) : Number.MAX_SAFE_INTEGER;
+        case 'hours': return forecasts?.[o.id]?.machine_seconds ?? -1;
       }
     };
     return [...orders].sort((a, b) => {
@@ -40,7 +48,7 @@ export function OrdersTable({ orders }: { orders: OrderListItem[] }) {
       const cmp = av < bv ? -1 : av > bv ? 1 : 0;
       return (sort.desc ? -cmp : cmp) || a.name.localeCompare(b.name);
     });
-  }, [orders, sort]);
+  }, [orders, sort, forecasts]);
 
   const header = (key: SortKey, label: string) => (
     <th className="font-normal p-2 text-left">
@@ -66,6 +74,8 @@ export function OrdersTable({ orders }: { orders: OrderListItem[] }) {
             {header('remaining', t('orders.table.remaining'))}
             {header('progress', t('orders.table.progress'))}
             {header('due', t('orders.table.due'))}
+            {header('ready', t('orders.table.readyAt'))}
+            {header('hours', t('orders.table.machineHours'))}
           </tr>
         </thead>
         <tbody>
@@ -86,6 +96,28 @@ export function OrdersTable({ orders }: { orders: OrderListItem[] }) {
                 <td className="p-2 text-right tabular-nums">{remaining(o)}</td>
                 <td className="p-2 min-w-[8rem]"><ProgressBar value={o.printed} max={o.ordered} testId={`order-${o.id}-table-progress`} /></td>
                 <td className={`p-2 text-xs ${overdue ? 'text-red-500' : 'text-bambu-gray'}`}>{o.due_date ? new Date(o.due_date).toLocaleDateString() : ''}</td>
+                <td className="p-2 text-xs whitespace-nowrap" data-testid={`order-${o.id}-ready`}>
+                  {!forecasts ? (
+                    '…'
+                  ) : !forecasts[o.id]?.now_eta ? (
+                    t('farmForecast.unavailable')
+                  ) : (
+                    <>
+                      <span title={etaFull(forecasts[o.id].now_eta, settings?.time_format, settings?.date_format)}>
+                        {etaShort(forecasts[o.id].now_eta, settings?.time_format)}
+                      </span>{' '}
+                      <ForecastHint forecast={forecasts[o.id]} />
+                      {forecasts[o.id].after_eta && forecasts[o.id].after_eta !== forecasts[o.id].now_eta && (
+                        <div className="text-bambu-gray" data-testid={`order-${o.id}-after`}>
+                          {t('orders.figures.afterAhead', { count: forecasts[o.id].ahead_count, when: etaShort(forecasts[o.id].after_eta, settings?.time_format) })}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </td>
+                <td className="p-2 text-right tabular-nums" data-testid={`order-${o.id}-machine-hours`}>
+                  {forecasts ? hoursMinutes(forecasts[o.id]?.machine_seconds) : '…'}
+                </td>
               </tr>
             );
           })}

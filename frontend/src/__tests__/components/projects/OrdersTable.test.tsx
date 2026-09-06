@@ -3,12 +3,17 @@ import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { render } from '../../utils';
 import { OrdersTable } from '../../../components/projects/OrdersTable';
-import type { OrderListItem } from '../../../api/client';
+import type { OrderForecast, OrderListItem } from '../../../api/client';
 
 const row = (over: Partial<OrderListItem>): OrderListItem => ({
   id: 1, name: 'A', customer_id: null, customer_name: null, color: null, status: 'active', due_date: null, priority: 'normal',
   price: null, tags: null, cover_image_filename: null, created_at: '2026-09-01T00:00:00', lines_count: 1, ordered: 10, printed: 4,
   progress: 0.4, from_stock_units: 0, line_products: [], prints_in_progress: 2, prints_queued: 3, ...over,
+});
+
+const fc = (over: Partial<OrderForecast>): OrderForecast => ({
+  project_id: 1, now_eta: null, now_seconds: null, after_eta: null, after_seconds: null, machine_seconds: null,
+  unknown_prints: 0, unroutable_prints: 0, ahead_count: 0, assumptions: ['stagger'], ...over,
 });
 
 describe('OrdersTable', () => {
@@ -58,5 +63,26 @@ describe('OrdersTable', () => {
     // A fresh click on Due sorts ascending — the soonest date leads.
     await userEvent.click(screen.getByRole('button', { name: 'Due' }));
     expect(rows()).toEqual(['B', 'A']);
+  });
+
+  it('shows ready-at and machine hours from the forecast and sorts by ready-at soonest first', async () => {
+    const forecasts = {
+      1: fc({ project_id: 1, now_eta: '2026-09-07T10:00:00Z', now_seconds: 7200, after_eta: '2026-09-08T10:00:00Z', after_seconds: 93600, machine_seconds: 5400, ahead_count: 1 }),
+      2: fc({ project_id: 2, now_eta: '2026-09-06T14:00:00Z', now_seconds: 3600, after_eta: '2026-09-06T14:00:00Z', after_seconds: 3600, machine_seconds: 3600 }),
+    };
+    render(<OrdersTable orders={[row({ id: 1, name: 'A' }), row({ id: 2, name: 'B' })]} forecasts={forecasts} />);
+    expect(screen.getByTestId('order-1-machine-hours')).toHaveTextContent('1:30');
+    expect(screen.getByTestId('order-1-after')).toHaveTextContent(/after 1 more urgent order/);
+    expect(screen.queryByTestId('order-2-after')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Ready' }));
+    const names = screen.getAllByRole('row').slice(1).map((r) => within(r).getAllByRole('cell')[0].textContent);
+    expect(names).toEqual(['B', 'A']);
+  });
+
+  it('renders «…» while the forecast is missing and «No estimate» for a null ETA', () => {
+    render(<OrdersTable orders={[row({ id: 1, name: 'A' })]} forecasts={{ 1: fc({ unknown_prints: 3 }) }} />);
+    expect(screen.getByTestId('order-1-ready')).toHaveTextContent('No estimate');
+    render(<OrdersTable orders={[row({ id: 5, name: 'C' })]} />);
+    expect(screen.getByTestId('order-5-ready')).toHaveTextContent('…');
   });
 });
