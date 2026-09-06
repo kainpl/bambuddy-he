@@ -180,9 +180,11 @@ def _initial_state(snapshot: FarmSnapshot) -> _State:
     for machine in snapshot.printers:
         t = max(0.0, float(machine.running_seconds))
         for row in machine.queued:
-            if not row.seconds or row.seconds <= 0:
+            if row.seconds is None:
                 if row.order_id is not None:
                     state.unknown[row.order_id] += 1
+                continue
+            if row.seconds <= 0:
                 continue
             t += row.seconds
             _bump(state.order_finish, row.order_id, t)
@@ -367,12 +369,14 @@ async def load_snapshot(db: AsyncSession, now: datetime) -> FarmSnapshot:
     """What the farm already owes, from the database alone.
 
     Machines = printers that are active and not archived, whose queue is
-    neither operator-paused nor in ``paused``/``error``. Running = the printing
-    archive's estimate minus what has elapsed (never negative; no ``started_at``
-    = the whole estimate). Queued = the queue's pending rows in position order,
-    timed by the reader the queue response uses. Staged = pending auto-queue
-    rows nobody has handed to a printer yet. ``PrinterQueue.id == printer_id``
-    is the invariant the queued-rows join leans on.
+    neither operator-paused nor in ``paused``/``error``. Running = the HEAD of
+    the machine's queued work: the printing archive, timed by its remaining
+    seconds (estimate minus elapsed, never negative; no ``started_at`` = the
+    whole estimate), or ``None`` when it has no estimate yet. Queued = the
+    queue's pending rows in position order, timed by the reader the queue
+    response uses. Staged = pending auto-queue rows nobody has handed to a
+    printer yet. ``PrinterQueue.id == printer_id`` is the invariant the
+    queued-rows join leans on.
     """
     # Columns, not the ``Printer`` entity: hydrating the mapped object would
     # fire its ``lazy="selectin"`` relationships (``location``, ``tags``) as a
@@ -394,19 +398,29 @@ async def load_snapshot(db: AsyncSession, now: datetime) -> FarmSnapshot:
         return FarmSnapshot(printers=[], staged=staged)
     running = (
         await db.execute(
-            select(PrintArchive.printer_id, PrintArchive.print_time_seconds, PrintArchive.started_at).where(
+            select(
+                PrintArchive.printer_id,
+                PrintArchive.print_time_seconds,
+                PrintArchive.started_at,
+                PrintArchive.project_id,
+            ).where(
                 PrintArchive.status == "printing",
                 PrintArchive.deleted_at.is_(None),
                 PrintArchive.printer_id.in_(list(machines)),
             )
         )
     ).all()
-    for printer_id, estimate, started_at in running:
+    for printer_id, estimate, started_at, project_id in running:
         machine = machines.get(printer_id)
-        if machine is None or not estimate:
+        if machine is None:
             continue
-        elapsed = (now - started_at).total_seconds() if started_at else 0.0
-        machine.running_seconds = max(machine.running_seconds, max(0.0, estimate - elapsed))
+        remaining = None
+        if estimate:
+            elapsed = (now - started_at).total_seconds() if started_at else 0.0
+            remaining = int(round(max(0.0, estimate - elapsed)))
+        # Appended before the pending-rows loop below, while ``queued`` is
+        # still empty — this IS the head of the machine's queued work.
+        machine.queued.append(QueuedRow(order_id=project_id, seconds=remaining))
     rows = (
         (
             await db.execute(

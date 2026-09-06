@@ -114,7 +114,7 @@ async def test_the_snapshot_reads_running_queued_and_staged_work(db_session, far
     await db_session.commit()
     snap = await farm_forecast.load_snapshot(db_session, NOW)
     by_id = {m.printer_id: m for m in snap.printers}
-    assert by_id[p1.id].running_seconds == pytest.approx(1800)
+    assert by_id[p1.id].running_seconds == 0 and [r.seconds for r in by_id[p1.id].queued] == [1800]
     assert [r.seconds for r in by_id[p2.id].queued] == [H]
     assert [(s.target_model, s.seconds) for s in snap.staged] == [
         ("P1S", 2 * H)
@@ -169,3 +169,28 @@ async def test_the_batch_does_not_grow_with_the_number_of_orders(db_session, far
     with counting_statements(test_engine, match="FROM printers") as printers:
         await farm_forecast.forecast_projects(db_session, ids, NOW)
     assert len(printers) == 1  # the plan engine reads no printers — only the snapshot does
+
+
+@pytest.mark.asyncio
+async def test_a_running_print_without_an_estimate_is_counted_on_its_order(db_session, farm):
+    """The window between print start and the 3MF attach: the machine is busy for an unknown time,
+    and that unknown lands on the order, never on the clock as zero."""
+    p1, _p2, _x1 = farm["printers"]
+    mine, _line = await _order(db_session, farm["product"].id, 1, name="M")
+    db_session.add(
+        PrintArchive(
+            printer_id=p1.id,
+            project_id=mine,
+            filename="r",
+            file_path="",
+            file_size=0,
+            status="printing",
+            started_at=NOW - timedelta(minutes=5),
+        )
+    )
+    await db_session.commit()
+    snap = await farm_forecast.load_snapshot(db_session, NOW)
+    head = {m.printer_id: m for m in snap.printers}[p1.id].queued[0]
+    assert head.order_id == mine and head.seconds is None
+    _farm, out = await farm_forecast.forecast_projects(db_session, [mine], NOW)
+    assert out[mine].unknown_prints == 1

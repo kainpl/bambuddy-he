@@ -168,3 +168,9 @@ def test_a_row_the_farm_cannot_place_proposes_nothing():
         FarmSnapshot(printers=[_machine(1, "A1MINI")], staged=[]), _plan(7, [(100, 3, H, "P1S", [(200, "X1C", H)])])
     )
     assert f.unroutable_prints == 3 and f.lines[0].rows[0].proposed_split is None
+
+
+def test_an_overrun_print_advances_nothing_and_is_not_unknown():
+    snap = FarmSnapshot(printers=[_machine(1, queued=[(7, 0), (7, H)])], staged=[])
+    f = forecast_orders(snap, {}, [7], {7}, NOW)[7]
+    assert f.unknown_prints == 0 and f.now_seconds == H
