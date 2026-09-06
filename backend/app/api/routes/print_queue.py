@@ -21,7 +21,7 @@ from backend.app.models.print_queue import PrintQueueItem
 from backend.app.models.printer_queue import PrinterQueue
 from backend.app.models.user import User
 from backend.app.schemas.calibration_mode import derive_mode, normalize_mode
-from backend.app.schemas.forecast import FarmForecastOut
+from backend.app.schemas.farm_forecast import FarmForecastOut
 from backend.app.schemas.print_queue import (
     PrintQueueBatchCreate,
     PrintQueueBulkUpdate,

@@ -34,7 +34,7 @@ from backend.app.models.project import Project
 from backend.app.models.project_line import ProjectLine, ProjectProcurement
 from backend.app.models.user import User
 from backend.app.schemas.auto_queue import AutoQueueItemCreate
-from backend.app.schemas.forecast import (
+from backend.app.schemas.farm_forecast import (
     FarmForecastOut,
     ForecastBatchOut,
     LineForecastOut,
