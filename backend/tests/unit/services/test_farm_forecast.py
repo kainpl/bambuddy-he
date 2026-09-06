@@ -160,3 +160,11 @@ def test_models_match_after_normalisation():
     snap = FarmSnapshot(printers=[_machine(1, "Bambu Lab P1S")], staged=[])
     f = _one(snap, _plan(7, [(100, 1, H, "P1S", [])]))
     assert f.unroutable_prints == 0 and f.now_seconds == H
+
+
+def test_a_row_the_farm_cannot_place_proposes_nothing():
+    """No printer of either model: the counters say why, and there is no split to apply."""
+    f = _one(
+        FarmSnapshot(printers=[_machine(1, "A1MINI")], staged=[]), _plan(7, [(100, 3, H, "P1S", [(200, "X1C", H)])])
+    )
+    assert f.unroutable_prints == 3 and f.lines[0].rows[0].proposed_split is None

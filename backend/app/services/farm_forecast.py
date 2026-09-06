@@ -84,7 +84,9 @@ class PrintJob:
 @dataclass
 class RowForecast:
     plate_id: int
-    proposed_split: dict[int, int] | None  # ProductPlate.id → prints; None for a row without alternatives
+    proposed_split: (
+        dict[int, int] | None
+    )  # ProductPlate.id → prints, summing to the row's count; None for a row without alternatives or one the farm could not place
 
 
 @dataclass
@@ -286,7 +288,8 @@ def _order_result(
             for p in line_placements:
                 if p.row_plate_id == row.plate_id:
                     split[p.plate_id] = split.get(p.plate_id, 0) + 1
-            rows.append(RowForecast(plate_id=row.plate_id, proposed_split=split))
+            proposed_split = split if sum(split.values()) == row.count else None
+            rows.append(RowForecast(plate_id=row.plate_id, proposed_split=proposed_split))
         lines.append(
             LineForecast(
                 line_id=line.line_id,
