@@ -2,7 +2,8 @@ import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { api } from '../../api/client';
-import type { LinePlan, Order, PlanRow as PlanRowData, PlateRecipe } from '../../api/client';
+import type { LineForecast, LinePlan, Order, PlanRow as PlanRowData, PlateRecipe } from '../../api/client';
+import { etaShort } from '../../utils/forecast';
 import { PlanRow } from './PlanRow';
 import { PlanUnsatisfiable } from './PlanUnsatisfiable';
 import { projectPlan, type YieldByPlate } from './planMath';
@@ -11,6 +12,10 @@ interface PlanLineProps {
   order: Order;
   /** The line's plan with the manually added plates already merged into `rows`. */
   line: LinePlan;
+  /** The farm's own read on this line — when it will be ready, and how it
+   *  would split a row with alternatives across the machines. Undefined while
+   *  the forecast is unresolved, or when the order is closed. */
+  forecast?: LineForecast;
   counts: Record<number, number>;
   /** `row plate_id → the plate that row is set to print`, when the operator has
    *  switched a row to one of its alternatives. */
@@ -84,6 +89,7 @@ function rowFromRecipe(plate: PlateRecipe, ratePerGram: number | null): PlanRowD
 export function PlanLine({
   order,
   line,
+  forecast,
   counts,
   chosen,
   split,
@@ -106,6 +112,10 @@ export function PlanLine({
     queryKey: ['product-plates', line.product_id],
     queryFn: () => api.getProductPlates(line.product_id),
   });
+
+  // The user's own time format, the way every other ETA-showing screen reads
+  // it; `etaShort` covers the unresolved first paint with its own default.
+  const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: api.getSettings, staleTime: 60_000 });
 
   const counted = useMemo(() => {
     const source = order.lines.find((l) => l.id === line.line_id);
@@ -156,6 +166,11 @@ export function PlanLine({
                 .map((o) => `${o.name} × ${o.count}`)
                 .join(' · ')}`}
             </p>
+          )}
+          {forecast?.now_eta && (
+            <span className="text-xs text-bambu-gray" data-testid={`plan-line-${line.line_id}-ready`}>
+              {t('orders.plan.readyAt', { when: etaShort(forecast.now_eta, settings?.time_format) })}
+            </span>
           )}
         </div>
         {line.material && (
@@ -215,6 +230,7 @@ export function PlanLine({
                     count={count}
                     chosen={chosen[row.plate_id]}
                     split={split[row.plate_id]}
+                    proposal={forecast?.rows.find((r) => r.plate_id === row.plate_id)?.proposed_split ?? null}
                     currency={currency}
                     showCost={showCost}
                     canQueue={canQueue}

@@ -20,6 +20,7 @@ import { strayZeroTextNodes } from '../../domHelpers';
 import { api } from '../../../api/client';
 import type {
   Order,
+  OrderForecastDetail,
   OrderPlan,
   PlanAlternative,
   PlanRow as PlanRowData,
@@ -282,6 +283,13 @@ const farm = [
   { id: 2, name: 'Pea', model: 'P1S', is_active: true },
 ] as unknown as Printer[];
 
+/** No line answers yet — the shape every test gets unless it asks for a
+ *  specific forecast. */
+const EMPTY_FORECAST: OrderForecastDetail = {
+  project_id: order.id, now_eta: null, now_seconds: null, after_eta: null, after_seconds: null, machine_seconds: 0,
+  unknown_prints: 0, unroutable_prints: 0, ahead_count: 0, assumptions: [], lines: [],
+};
+
 describe('PlanBlock', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -296,6 +304,7 @@ describe('PlanBlock', () => {
     // hand the dialog the file that machine was sliced for. A plan without one
     // asks nothing — the query is gated — and this mock covers both.
     vi.spyOn(api, 'getPrinters').mockResolvedValue(farm);
+    vi.spyOn(api, 'getOrderForecast').mockResolvedValue(EMPTY_FORECAST);
   });
 
   it('renders the recommended plates of every line', async () => {
@@ -1151,6 +1160,25 @@ describe('PlanBlock', () => {
         target: { kind: 'auto' },
       }),
     );
+  });
+
+  it('shows the farm proposal on a row with alternatives and applies it only on click', async () => {
+    vi.spyOn(api, 'getOrderPlan').mockResolvedValue(planWithAlternative);
+    vi.spyOn(api, 'getOrderForecast').mockResolvedValue({
+      ...EMPTY_FORECAST,
+      lines: [{ line_id: 10, now_eta: '2026-09-07T10:00:00Z', now_seconds: 7200, after_eta: null, after_seconds: null, unknown_prints: 0, unroutable_prints: 0,
+                rows: [{ plate_id: 100, proposed_split: { 100: 0, 400: 1 } }] }],
+    });
+    render(<PlanBlock order={order} canEdit />);
+    expect(await screen.findByTestId('plan-row-10-100-proposal')).toHaveTextContent('by the farm: 0 X1C · 1 P1S');
+    expect(screen.getByTestId('plan-line-10-ready')).toHaveTextContent(/ready ≈/);
+    // Opening the editor shows the default — every print on the row's own file — not the proposal.
+    await userEvent.click(screen.getByTestId('plan-row-10-100-split'));
+    expect(screen.getByTestId('plan-row-10-100-split-100')).toHaveValue(1);
+    expect(screen.getByTestId('plan-row-10-100-split-400')).toHaveValue(0);
+    await userEvent.click(screen.getByTestId('plan-row-10-100-apply-farm'));
+    expect(screen.getByTestId('plan-row-10-100-split-100')).toHaveValue(0);
+    expect(screen.getByTestId('plan-row-10-100-split-400')).toHaveValue(1);
   });
 
   it('keeps a row’s alternative out of the add-plate menu', async () => {

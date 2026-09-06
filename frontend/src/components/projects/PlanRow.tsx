@@ -25,6 +25,10 @@ interface PlanRowProps {
    *  Undefined means "all on the chosen file", which is what every row does
    *  until somebody says otherwise. */
   split: Record<number, number> | undefined;
+  /** The farm's own suggested split across this row's files, when it has one.
+   *  `null` (not sent, or the row has no alternatives) hides the proposal —
+   *  it never seeds `split` on its own; only the button below does that. */
+  proposal?: Record<number, number> | null;
   currency: string | null | undefined;
   showCost: boolean;
   canQueue: boolean;
@@ -86,6 +90,7 @@ export function PlanRow({
   count,
   chosen,
   split,
+  proposal,
   currency,
   showCost,
   canQueue,
@@ -293,6 +298,26 @@ export function PlanRow({
               onClick={() => setSplitting((open) => !open)}
             >
               {t('orders.plan.split.title')}
+            </Button>
+          )}
+          {hasAlternatives && proposal && (
+            <span className="text-xs text-bambu-gray" data-testid={`plan-row-${lineId}-${row.plate_id}-proposal`}>
+              {t('orders.plan.row.byFarm', {
+                split: options.map((o) => `${proposal[o.plate_id] ?? 0} ${o.printer_model ?? '?'}`).join(' · '),
+              })}
+            </span>
+          )}
+          {canQueue && hasAlternatives && proposal && (
+            <Button
+              size="sm"
+              variant="ghost"
+              data-testid={`plan-row-${lineId}-${row.plate_id}-apply-farm`}
+              onClick={() => {
+                onSplit({ ...proposal });
+                setSplitting(true);
+              }}
+            >
+              {t('orders.plan.row.applyFarmSplit')}
             </Button>
           )}
           {canPrint && (

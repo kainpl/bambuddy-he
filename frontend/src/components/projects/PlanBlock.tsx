@@ -74,6 +74,16 @@ export function PlanBlock({
   // fetches it; `formatMoney` covers the unresolved first paint.
   const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: api.getSettings, staleTime: 60_000 });
 
+  // The line ETA and the farm's proposed split. Keyed the same way `OrderPage`
+  // already queries it (`['order-forecast', id]`) — TanStack dedupes the two
+  // mounts, it is not a second fetch.
+  const forecast = useQuery({
+    queryKey: ['order-forecast', order.id],
+    queryFn: () => api.getOrderForecast(order.id),
+    enabled: active,
+    staleTime: 30_000,
+  });
+
   const [counts, setCounts] = useState<Record<number, Record<number, number>>>({});
   const [added, setAdded] = useState<Record<number, PlanRowData[]>>({});
   /**
@@ -402,6 +412,7 @@ export function PlanBlock({
                 key={line.line_id}
                 order={order}
                 line={line}
+                forecast={forecast.data?.lines.find((l) => l.line_id === line.line_id)}
                 counts={counts[line.line_id] ?? {}}
                 chosen={chosen[line.line_id] ?? {}}
                 split={split[line.line_id] ?? {}}
