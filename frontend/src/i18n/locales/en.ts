@@ -4791,6 +4791,8 @@ export default {
       remaining: 'Remaining',
       progress: 'Progress',
       due: 'Due',
+      readyAt: 'Ready',
+      machineHours: 'Machine h',
     },
     card: {
       lines_one: '{{count}} line',
@@ -4866,6 +4868,14 @@ export default {
       progress: 'Printed of ordered',
       printing: 'Printing',
       queued: 'Queued',
+      readyAt: 'Ready ≈',
+      machineHours: 'Machine h left',
+      afterAhead_one: 'after {{count}} more urgent order: {{when}}',
+      afterAhead_other: 'after {{count}} more urgent orders: {{when}}',
+      unknownPrints_one: '{{count}} print without an estimate',
+      unknownPrints_other: '{{count}} prints without an estimate',
+      unroutablePrints_one: '{{count}} print with no printer for its model',
+      unroutablePrints_other: '{{count}} prints with no printer for its model',
     },
     lines: {
       title: 'Lines',
@@ -4909,6 +4919,7 @@ export default {
       nothingOutstanding: 'Everything is printed or already queued.',
       truncated: 'The plan stopped early — this order needs more prints than one plan shows',
       outstanding: 'Outstanding:',
+      readyAt: 'ready ≈ {{when}}',
       row: {
         plate: 'Plate {{n}}',
         wholeFile: 'Whole file',
@@ -4923,6 +4934,8 @@ export default {
         atZero: 'Nothing to send at 0',
         decrease: 'Fewer',
         increase: 'More',
+        byFarm: 'by the farm: {{split}}',
+        applyFarmSplit: 'Split by the farm',
       },
       split: {
         title: 'Split across files',
@@ -8447,6 +8460,17 @@ export default {
     // Permissions
     noReadAccess: 'You do not have permission to view inventory forecasts.',
     noWriteAccess: 'You do not have permission to modify forecast settings.',
+  },
+  // Farm forecast (spec 2026-09-06) — the queue/order ETA simulation's own strings.
+  farmForecast: {
+    assumptionsTitle: 'Not counted in this estimate:',
+    assumptions: {
+      stagger: 'staggered start',
+      plate_clear: 'plate-clear confirmation',
+      drying: 'drying between prints',
+      prep: 'upload and preheat',
+    },
+    unavailable: 'No estimate',
   },
   // Cloud Link — pairing this farm with a BamDude portal.
   cloudLink: {

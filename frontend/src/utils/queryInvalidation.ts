@@ -48,6 +48,7 @@ export const ORDER_VIEW_KEYS = [
   'project', // an order page's own figures — the prefix, see above
   'project-archives', // the Prints grid
   'project-plan', // pass 3: what is still to print
+  'order-forecast', 'orders-forecast', // spec 2026-09-06: the ETA moves with the plan
   'customers', // the customer tiles are computed from these orders
   'customer', // and one customer's page with them — the prefix, see above
   // pass 7: the orders a print dialog offers, and how many prints each still

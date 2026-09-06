@@ -236,9 +236,6 @@ export function QueuePage() {
       {!isLoading && queues && queues.length > 0 && (
         <QueueStatsBar
           queues={queues}
-          pendingItems={allPendingItems}
-          printingItems={allPrintingItems}
-          stagedItems={unassignedAutoItems}
           unassignedCount={unassignedAutoItems?.length ?? 0}
         />
       )}

@@ -396,6 +396,7 @@ export function useWebSocket() {
           // Update queue data (status, current print)
           debouncedInvalidate('queues');
           queryClient.invalidateQueries({ queryKey: ['queue', message.printer_id] });
+          queryClient.invalidateQueries({ queryKey: ['queue-forecast'] });
         }
         break;
 
@@ -468,6 +469,7 @@ export function useWebSocket() {
         debouncedInvalidate('queues');
         if (message.printer_id !== undefined) {
           queryClient.invalidateQueries({ queryKey: ['queue', message.printer_id] });
+          queryClient.invalidateQueries({ queryKey: ['queue-forecast'] });
           // Calibration wizard's active-session list + bound session query
           // need to refetch immediately after a print-complete so the
           // running-step page picks up the lazy-reconciled status flip

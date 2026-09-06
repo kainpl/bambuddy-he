@@ -4839,6 +4839,8 @@ export default {
       remaining: 'Лишилось',
       progress: 'Прогрес',
       due: 'Дедлайн',
+      readyAt: 'Готово',
+      machineHours: 'Маш.-год',
     },
     card: {
       lines_one: '{{count}} позиція',
@@ -4916,6 +4918,20 @@ export default {
       progress: 'Надруковано із замовленого',
       printing: 'Друкується',
       queued: 'У черзі',
+      readyAt: 'Готово ≈',
+      machineHours: 'Маш.-год лишилось',
+      afterAhead_one: 'після {{count}} терміновішого: {{when}}',
+      afterAhead_few: 'після {{count}} терміновіших: {{when}}',
+      afterAhead_many: 'після {{count}} терміновіших: {{when}}',
+      afterAhead_other: 'після {{count}} терміновіших: {{when}}',
+      unknownPrints_one: '{{count}} друк без оцінки',
+      unknownPrints_few: '{{count}} друки без оцінки',
+      unknownPrints_many: '{{count}} друків без оцінки',
+      unknownPrints_other: '{{count}} друків без оцінки',
+      unroutablePrints_one: '{{count}} друк без принтера своєї моделі',
+      unroutablePrints_few: '{{count}} друки без принтера своєї моделі',
+      unroutablePrints_many: '{{count}} друків без принтера своєї моделі',
+      unroutablePrints_other: '{{count}} друків без принтера своєї моделі',
     },
     lines: {
       title: 'Позиції',
@@ -4959,6 +4975,7 @@ export default {
       nothingOutstanding: 'Усе надруковано або вже в черзі.',
       truncated: 'План зупинився раніше — це замовлення потребує більше друків, ніж показує один план',
       outstanding: 'Залишилось:',
+      readyAt: 'готово ≈ {{when}}',
       row: {
         plate: 'Пластина {{n}}',
         wholeFile: 'Увесь файл',
@@ -4975,6 +4992,8 @@ export default {
         atZero: 'При 0 нічого надсилати',
         decrease: 'Менше',
         increase: 'Більше',
+        byFarm: 'за фермою: {{split}}',
+        applyFarmSplit: 'Розподілити за фермою',
       },
       split: {
         title: 'Розділити між файлами',
@@ -8526,6 +8545,17 @@ export default {
     // Дозволи
     noReadAccess: 'У вас немає дозволу переглядати прогнози запасів.',
     noWriteAccess: 'У вас немає дозволу змінювати налаштування прогнозу.',
+  },
+  // Прогноз ферми (spec 2026-09-06) — рядки симуляції ETA черги/замовлень.
+  farmForecast: {
+    assumptionsTitle: 'Не враховано в цій оцінці:',
+    assumptions: {
+      stagger: 'стаггер-старт',
+      plate_clear: 'підтвердження очистки столу',
+      drying: 'сушка між друками',
+      prep: 'заливання й прогрів',
+    },
+    unavailable: 'Немає оцінки',
   },
   // Cloud Link — сполучення цієї ферми з порталом BamDude.
   cloudLink: {

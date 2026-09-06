@@ -97,6 +97,7 @@ describe('QueuePage', () => {
           ],
         }),
       ),
+      http.get('/api/v1/queue/forecast', () => HttpResponse.json({ free_at: '2026-09-06T12:00:00Z', free_seconds: 0 })),
     );
   });
 
@@ -206,6 +207,14 @@ describe('QueuePage', () => {
         // The empty-state hint text is keyed in i18n as autoQueue.emptyHint.
         expect(screen.getByText(/Drop a sliced file here/i)).toBeInTheDocument();
       });
+    });
+  });
+
+  describe('stats bar', () => {
+    it('shows the farm free-at estimate from the forecast endpoint', async () => {
+      server.use(http.get('/api/v1/queue/forecast', () => HttpResponse.json({ free_at: '2026-09-06T13:30:00Z', free_seconds: 5400 })));
+      render(<QueuePage />);
+      expect(await screen.findByText('1h 30m')).toBeInTheDocument();
     });
   });
 

@@ -4040,6 +4040,32 @@ export interface StaggerState {
   groups: StaggerGroup[];
 }
 
+// ---- farm forecast (spec 2026-09-06) ----
+
+export interface FarmForecast { free_at: string | null; free_seconds: number }
+export interface RowForecast { plate_id: number; proposed_split: Record<number, number> | null }
+export interface LineForecast {
+  line_id: number;
+  now_eta: string | null; now_seconds: number | null;
+  after_eta: string | null; after_seconds: number | null;
+  unknown_prints: number; unroutable_prints: number;
+  rows: RowForecast[];
+}
+export interface OrderForecast {
+  project_id: number;
+  now_eta: string | null; now_seconds: number | null;
+  after_eta: string | null; after_seconds: number | null;
+  /** Σ estimates of the plan's prints; null when no print has one; 0 when nothing is left to plan. */
+  machine_seconds: number | null;
+  unknown_prints: number; unroutable_prints: number;
+  /** Active orders ranked ahead (priority → due → age). */
+  ahead_count: number;
+  /** What the simulation does not model: `stagger` | `plate_clear` | `drying` | `prep`. */
+  assumptions: string[];
+}
+export interface OrderForecastDetail extends OrderForecast { lines: LineForecast[] }
+export interface ForecastBatch { farm: FarmForecast; orders: OrderForecast[] }
+
 export interface PrintQueueItemCreate {
   queue_id: number;  // Required - which printer's queue
   archive_id?: number | null;
@@ -8579,6 +8605,7 @@ export const api = {
   removeFromQueue: (id: number) =>
     request<{ message: string }>(`/queue/${id}`, { method: 'DELETE' }),
   getStaggerState: () => request<StaggerState>('/queue/stagger-state'),
+  getQueueForecast: () => request<FarmForecast>('/queue/forecast'),
   // Queue item commands
   reorderQueueItem: (id: number, direction: 'up' | 'down') =>
     request<{ moved: number; direction: string; block_size: number }>(
@@ -9870,6 +9897,8 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+  getOrdersForecast: (ids: number[]) => request<ForecastBatch>(`/projects/forecast?ids=${ids.join(',')}`),
+  getOrderForecast: (id: number) => request<OrderForecastDetail>(`/projects/${id}/forecast`),
 
   // Customers
   getCustomers: () => request<Customer[]>('/customers/'),
