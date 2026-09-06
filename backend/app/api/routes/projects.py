@@ -9,7 +9,7 @@ import logging
 import os
 import shutil
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import NamedTuple
 
@@ -34,6 +34,14 @@ from backend.app.models.project import Project
 from backend.app.models.project_line import ProjectLine, ProjectProcurement
 from backend.app.models.user import User
 from backend.app.schemas.auto_queue import AutoQueueItemCreate
+from backend.app.schemas.forecast import (
+    FarmForecastOut,
+    ForecastBatchOut,
+    LineForecastOut,
+    OrderForecastDetailOut,
+    OrderForecastOut,
+    RowForecastOut,
+)
 from backend.app.schemas.order_from_files import OrderFromFilesRequest
 from backend.app.schemas.project import (
     PROJECT_PRIORITIES,
@@ -66,7 +74,7 @@ from backend.app.schemas.project import (
     StockMovedOut,
     TimelineEvent,
 )
-from backend.app.services import order_from_files, part_stock, product_delete
+from backend.app.services import farm_forecast, order_from_files, part_stock, product_delete
 from backend.app.services.auto_queue_add import add_items_to_auto_queue
 from backend.app.services.order_metrics import (
     attribute,
@@ -408,6 +416,44 @@ async def create_project_from_files(
     except order_from_files.FilesNotLinked:
         raise HTTPException(status_code=400, detail="Every file must be linked to the product")
     return await _response(db, project.id)
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _order_forecast_fields(f: farm_forecast.OrderForecast) -> dict:
+    return {
+        "project_id": f.project_id,
+        "now_eta": f.now_eta,
+        "now_seconds": f.now_seconds,
+        "after_eta": f.after_eta,
+        "after_seconds": f.after_seconds,
+        "machine_seconds": f.machine_seconds,
+        "unknown_prints": f.unknown_prints,
+        "unroutable_prints": f.unroutable_prints,
+        "ahead_count": f.ahead_count,
+        "assumptions": list(farm_forecast.ASSUMPTIONS),
+    }
+
+
+@router.get("/forecast", response_model=ForecastBatchOut)
+async def get_orders_forecast(
+    ids: str | None = Query(None, description="Comma-separated order ids, at most 200"),
+    db: AsyncSession = Depends(get_db),
+    _: User | None = RequirePermission(Permission.PROJECTS_READ),
+):
+    """«Ready by» for a page of orders (spec 2026-09-06, Slice B). Advisory:
+    reads the database only, gates nothing. An unknown id is absent."""
+    parsed = list(dict.fromkeys(int(part) for part in (ids or "").split(",") if part.strip().isdigit()))
+    if not parsed or len(parsed) > 200:
+        raise HTTPException(status_code=400, detail="ids is required")
+    now = _utc_now()
+    farm, orders = await farm_forecast.forecast_projects(db, parsed, now)
+    return ForecastBatchOut(
+        farm=FarmForecastOut(free_at=now + timedelta(seconds=farm.free_seconds), free_seconds=farm.free_seconds),
+        orders=[OrderForecastOut(**_order_forecast_fields(orders[pid])) for pid in parsed if pid in orders],
+    )
 
 
 @router.get("/{project_id}", response_model=ProjectResponse)
@@ -1605,6 +1651,33 @@ async def get_order_plan(
     if plan is None:
         raise HTTPException(status_code=404, detail="Project not found")
     return _plan_response(plan)
+
+
+@router.get("/{project_id}/forecast", response_model=OrderForecastDetailOut)
+async def get_order_forecast(
+    project_id: int, db: AsyncSession = Depends(get_db), _: User | None = RequirePermission(Permission.PROJECTS_READ)
+):
+    """One order's «ready by», with its lines and the farm's proposed split per row."""
+    await _get_project(db, project_id)
+    now = _utc_now()
+    _farm, orders = await farm_forecast.forecast_projects(db, [project_id], now)
+    f = orders[project_id]
+    return OrderForecastDetailOut(
+        **_order_forecast_fields(f),
+        lines=[
+            LineForecastOut(
+                line_id=line.line_id,
+                now_eta=line.now_eta,
+                now_seconds=line.now_seconds,
+                after_eta=line.after_eta,
+                after_seconds=line.after_seconds,
+                unknown_prints=line.unknown_prints,
+                unroutable_prints=line.unroutable_prints,
+                rows=[RowForecastOut(plate_id=r.plate_id, proposed_split=r.proposed_split) for r in line.rows],
+            )
+            for line in f.lines
+        ],
+    )
 
 
 class _ResolvedPlate(NamedTuple):

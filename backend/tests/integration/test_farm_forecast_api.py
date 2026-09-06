@@ -194,3 +194,46 @@ async def test_a_running_print_without_an_estimate_is_counted_on_its_order(db_se
     assert head.order_id == mine and head.seconds is None
     _farm, out = await farm_forecast.forecast_projects(db_session, [mine], NOW)
     assert out[mine].unknown_prints == 1
+
+
+@pytest.mark.asyncio
+async def test_the_batch_route_answers_per_order_with_the_farm_header(committing_client, db_session, farm):
+    product = farm["product"]
+    o, _line = await _order(db_session, product.id, 2, name="R")
+    r = await committing_client.get(f"/api/v1/projects/forecast?ids={o},{o}")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["farm"]["free_seconds"] == 0 and body["farm"]["free_at"].endswith("Z")
+    (row,) = body["orders"]  # the duplicate id answers once
+    assert row["project_id"] == o and row["now_seconds"] == H and row["now_eta"].endswith("Z")
+    assert row["assumptions"] == ["stagger", "plate_clear", "drying", "prep"]
+    assert row["machine_seconds"] == 2 * H and row["unknown_prints"] == 0 and row["unroutable_prints"] == 0
+
+
+@pytest.mark.asyncio
+async def test_the_batch_route_refuses_without_ids_and_skips_unknown_ones(committing_client, farm):
+    r = await committing_client.get("/api/v1/projects/forecast")
+    assert r.status_code == 400 and r.json()["detail"] == "ids is required"
+    r = await committing_client.get("/api/v1/projects/forecast?ids=999999")
+    assert r.status_code == 200 and r.json()["orders"] == []
+
+
+@pytest.mark.asyncio
+async def test_the_order_route_carries_lines_and_the_proposed_split(committing_client, db_session, farm):
+    product = farm["product"]
+    o, line_id = await _order(db_session, product.id, 3, name="D")
+    body = (await committing_client.get(f"/api/v1/projects/{o}/forecast")).json()
+    (line,) = body["lines"]
+    assert line["line_id"] == line_id and line["now_seconds"] == H
+    (row,) = line["rows"]
+    assert sum(row["proposed_split"].values()) == 3
+    assert (await committing_client.get("/api/v1/projects/999999/forecast")).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_the_queue_route_matches_the_batch_farm_header(committing_client, db_session, farm):
+    p1, _p2, _x1 = farm["printers"]
+    db_session.add(PrintQueueItem(queue_id=p1.id, library_file_id=farm["files"][0].id, status="pending"))
+    await db_session.commit()
+    queue = (await committing_client.get("/api/v1/queue/forecast")).json()
+    assert queue["free_seconds"] == H and queue["free_at"].endswith("Z")

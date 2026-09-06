@@ -3,7 +3,7 @@
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -21,6 +21,7 @@ from backend.app.models.print_queue import PrintQueueItem
 from backend.app.models.printer_queue import PrinterQueue
 from backend.app.models.user import User
 from backend.app.schemas.calibration_mode import derive_mode, normalize_mode
+from backend.app.schemas.forecast import FarmForecastOut
 from backend.app.schemas.print_queue import (
     PrintQueueBatchCreate,
     PrintQueueBulkUpdate,
@@ -30,6 +31,7 @@ from backend.app.schemas.print_queue import (
     PrintQueueItemUpdate,
     PrintQueueReorder,
 )
+from backend.app.services import farm_forecast
 from backend.app.services.notification_service import notification_service
 from backend.app.services.queue_add import add_items_to_printer_queue
 from backend.app.services.queue_times import plate_metadata_cached
@@ -208,6 +210,17 @@ async def get_stagger_state(
     from backend.app.services.print_scheduler import scheduler as print_scheduler
 
     return await print_scheduler.get_stagger_state_snapshot(db)
+
+
+@router.get("/forecast", response_model=FarmForecastOut)
+async def get_queue_forecast(
+    db: AsyncSession = Depends(get_db), _: User | None = RequirePermission(Permission.QUEUE_READ)
+):
+    """When the last printer is free, given what the queues already hold — the
+    number the queue page's stats bar shows (spec 2026-09-06, Decision 5)."""
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    farm = farm_forecast.simulate_farm(await farm_forecast.load_snapshot(db, now))
+    return FarmForecastOut(free_at=now + timedelta(seconds=farm.free_seconds), free_seconds=farm.free_seconds)
 
 
 @router.get("/", response_model=list[PrintQueueItemResponse])

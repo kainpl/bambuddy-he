@@ -14,6 +14,7 @@ from datetime import date
 from pydantic import BaseModel
 
 from backend.app.schemas.archive import PaginationMeta
+from backend.app.schemas.print_queue import UTCDatetime
 
 
 class SkuForecastRowResponse(BaseModel):
@@ -114,3 +115,54 @@ class ForecastLogisticsRow(BaseModel):
     safety_stock_g: float | None
     stock_break_day: int | None
     stock_break_before_arrival: bool
+
+
+# ---------- farm forecast (spec 2026-09-06, Slice B) ----------
+#
+# A second, unrelated forecast: when the farm's machines and queues empty out,
+# not the inventory's SKUs. Kept in this module because the brief's routes
+# import it as ``backend.app.schemas.forecast`` — the name is shared, the
+# concerns are not; nothing below refers to anything above.
+
+
+class FarmForecastOut(BaseModel):
+    free_at: UTCDatetime
+    free_seconds: int
+
+
+class RowForecastOut(BaseModel):
+    plate_id: int
+    proposed_split: dict[int, int] | None = None
+
+
+class LineForecastOut(BaseModel):
+    line_id: int
+    now_eta: UTCDatetime
+    now_seconds: int | None
+    after_eta: UTCDatetime
+    after_seconds: int | None
+    unknown_prints: int
+    unroutable_prints: int
+    rows: list[RowForecastOut] = []
+
+
+class OrderForecastOut(BaseModel):
+    project_id: int
+    now_eta: UTCDatetime
+    now_seconds: int | None
+    after_eta: UTCDatetime
+    after_seconds: int | None
+    machine_seconds: int | None
+    unknown_prints: int
+    unroutable_prints: int
+    ahead_count: int
+    assumptions: list[str]
+
+
+class OrderForecastDetailOut(OrderForecastOut):
+    lines: list[LineForecastOut] = []
+
+
+class ForecastBatchOut(BaseModel):
+    farm: FarmForecastOut
+    orders: list[OrderForecastOut]
