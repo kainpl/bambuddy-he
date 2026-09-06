@@ -190,7 +190,7 @@ def _prints_for_plate(recipe: PlateRecipe, outstanding: dict[int, int]) -> int:
     return max(per_part, default=0)
 
 
-def _priority_rank(priority: str | None) -> int:
+def priority_rank(priority: str | None) -> int:
     """``PROJECT_PRIORITIES`` index — higher is more urgent.
 
     A word outside the vocabulary cannot claim precedence over one inside it, so
@@ -341,7 +341,7 @@ async def order_candidates(db: AsyncSession, file: LibraryFile, plate_index: int
             product_id=product_id,
             product_name=products[product_id].name,
             outstanding_prints=_prints_for_plate(recipes[product_id], outstanding_by_line.get(line.id) or {}),
-            priority=_priority_rank(project.priority),
+            priority=priority_rank(project.priority),
             deadline=project.due_date,
             created_at=project.created_at,
             line_material=line.material,

@@ -18,7 +18,19 @@ from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
-from backend.app.services.plan_engine import OrderPlan
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from backend.app.models.archive import PrintArchive
+from backend.app.models.auto_queue import AutoQueueItem
+from backend.app.models.print_queue import PrintQueueItem
+from backend.app.models.printer import Printer
+from backend.app.models.printer_queue import PrinterQueue
+from backend.app.models.project import Project
+from backend.app.services.order_filing import priority_rank
+from backend.app.services.plan_engine import OrderPlan, plan_for_orders
+from backend.app.services.queue_times import print_time_for_row
 from backend.app.utils.printer_models import normalize_model_name
 
 #: What the simulation does NOT model in this version; every surface shows it.
@@ -346,3 +358,116 @@ def forecast_orders(
             line.after_eta, line.after_seconds = after_line.now_eta, after_line.now_seconds
         out[order_id] = result
     return out
+
+
+# ---------- the loader ----------
+
+
+async def load_snapshot(db: AsyncSession, now: datetime) -> FarmSnapshot:
+    """What the farm already owes, from the database alone.
+
+    Machines = printers that are active and not archived, whose queue is
+    neither operator-paused nor in ``paused``/``error``. Running = the printing
+    archive's estimate minus what has elapsed (never negative; no ``started_at``
+    = the whole estimate). Queued = the queue's pending rows in position order,
+    timed by the reader the queue response uses. Staged = pending auto-queue
+    rows nobody has handed to a printer yet. ``PrinterQueue.id == printer_id``
+    is the invariant the queued-rows join leans on.
+    """
+    # Columns, not the ``Printer`` entity: hydrating the mapped object would
+    # fire its ``lazy="selectin"`` relationships (``location``, ``tags``) as a
+    # second, unwanted "FROM printers" round trip on every call.
+    printers = (
+        await db.execute(
+            select(Printer.id, Printer.model, PrinterQueue.status, PrinterQueue.is_paused)
+            .outerjoin(PrinterQueue, PrinterQueue.printer_id == Printer.id)
+            .where(Printer.is_active.is_(True), Printer.archived.is_(False))
+        )
+    ).all()
+    machines: dict[int, MachineState] = {}
+    for printer_id, model, queue_status, is_paused in printers:
+        if is_paused or queue_status in ("paused", "error"):
+            continue
+        machines[printer_id] = MachineState(printer_id=printer_id, model=model)
+    staged = await _staged(db)
+    if not machines:
+        return FarmSnapshot(printers=[], staged=staged)
+    running = (
+        await db.execute(
+            select(PrintArchive.printer_id, PrintArchive.print_time_seconds, PrintArchive.started_at).where(
+                PrintArchive.status == "printing",
+                PrintArchive.deleted_at.is_(None),
+                PrintArchive.printer_id.in_(list(machines)),
+            )
+        )
+    ).all()
+    for printer_id, estimate, started_at in running:
+        machine = machines.get(printer_id)
+        if machine is None or not estimate:
+            continue
+        elapsed = (now - started_at).total_seconds() if started_at else 0.0
+        machine.running_seconds = max(machine.running_seconds, max(0.0, estimate - elapsed))
+    rows = (
+        (
+            await db.execute(
+                select(PrintQueueItem)
+                .options(selectinload(PrintQueueItem.archive), selectinload(PrintQueueItem.library_file))
+                .where(PrintQueueItem.status == "pending", PrintQueueItem.queue_id.in_(list(machines)))
+                .order_by(PrintQueueItem.queue_id, PrintQueueItem.position, PrintQueueItem.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for item in rows:
+        machine = machines.get(item.queue_id)
+        if machine is None:
+            continue
+        seconds = print_time_for_row(archive=item.archive, library_file=item.library_file, plate_id=item.plate_id)
+        machine.queued.append(QueuedRow(order_id=item.project_id, seconds=seconds))
+    return FarmSnapshot(printers=list(machines.values()), staged=staged)
+
+
+async def _staged(db: AsyncSession) -> list[StagedJob]:
+    rows = (
+        await db.execute(
+            select(AutoQueueItem.project_id, AutoQueueItem.target_model, AutoQueueItem.print_time_seconds).where(
+                AutoQueueItem.status == "pending", AutoQueueItem.assigned_to_item_id.is_(None)
+            )
+        )
+    ).all()
+    return [StagedJob(order_id=pid, target_model=model, seconds=secs) for pid, model, secs in rows]
+
+
+async def rank_active_orders(db: AsyncSession) -> list[int]:
+    """Every active order, most urgent first — the candidates' rule: priority,
+    then due date (none last), then age, then id."""
+    rows = (
+        await db.execute(
+            select(Project.id, Project.priority, Project.due_date, Project.created_at).where(Project.status == "active")
+        )
+    ).all()
+    ranked = sorted(
+        rows,
+        key=lambda r: (-priority_rank(r[1]), r[2] is None, r[2] or datetime.min, r[3] or datetime.min, r[0]),
+    )
+    return [pid for pid, _priority, _due, _created in ranked]
+
+
+async def forecast_projects(
+    db: AsyncSession, project_ids: list[int], now: datetime
+) -> tuple[FarmForecast, dict[int, OrderForecast]]:
+    """The batch: one snapshot, the ranking, the plans of the targets and of
+    everything ranked ahead of any target, one simulation walk. An id that
+    names no order is absent from the answer."""
+    snapshot = await load_snapshot(db, now)
+    ranked = await rank_active_orders(db)
+    wanted = set(project_ids)
+    # An inactive target (completed / cancelled) is not in the ranking: it is
+    # forecast after every active order, with all of them ahead of it.
+    walk = ranked + [pid for pid in project_ids if pid not in ranked]
+    last_target = max((i for i, pid in enumerate(walk) if pid in wanted), default=-1)
+    walk = walk[: last_target + 1]
+    plans: dict[int, OrderPlan] = await plan_for_orders(db, walk) if walk else {}
+    targets = {pid for pid in wanted if pid in plans}
+    return simulate_farm(snapshot), forecast_orders(snapshot, plans, walk, targets, now)
