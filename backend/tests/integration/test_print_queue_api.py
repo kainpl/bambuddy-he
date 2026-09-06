@@ -692,7 +692,7 @@ class TestPrintQueueAPI:
 
         called: list[tuple] = []
         monkeypatch.setattr(
-            pq, "_plate_metadata_cached", lambda path, plate: called.append((path, plate)) or (None, 0.0, None)
+            pq, "plate_metadata_cached", lambda path, plate: called.append((path, plate)) or (None, 0.0, None)
         )
 
         _printer, queue = await printer_factory()

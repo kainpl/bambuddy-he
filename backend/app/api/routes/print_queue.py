@@ -3,13 +3,9 @@
 import json
 import logging
 import uuid
-import zipfile
-from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import Lock
 
-import defusedxml.ElementTree as ET
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, inspect as sa_inspect, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,104 +32,12 @@ from backend.app.schemas.print_queue import (
 )
 from backend.app.services.notification_service import notification_service
 from backend.app.services.queue_add import add_items_to_printer_queue
+from backend.app.services.queue_times import plate_metadata_cached
 from backend.app.utils.printer_models import is_gcode_compatible
-from backend.app.utils.threemf_tools import extract_bed_type_from_3mf, extract_filament_usage_from_3mf
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/queue", tags=["queue"])
-
-
-def _extract_print_time_from_3mf(file_path: Path, plate_id: int | None = None) -> int | None:
-    """Extract print time (prediction) from a 3MF file.
-
-    Args:
-        file_path: Path to the 3MF file
-        plate_id: Optional plate index to filter for (for multi-plate files)
-
-    Returns:
-        Print time in seconds, or None if not found
-    """
-    try:
-        with zipfile.ZipFile(file_path, "r") as zf:
-            if "Metadata/slice_info.config" not in zf.namelist():
-                return None
-
-            content = zf.read("Metadata/slice_info.config").decode()
-            root = ET.fromstring(content)
-
-            if plate_id is not None:
-                for plate_elem in root.findall(".//plate"):
-                    plate_index = None
-                    for meta in plate_elem.findall("metadata"):
-                        if meta.get("key") == "index":
-                            try:
-                                plate_index = int(meta.get("value", "0"))
-                            except ValueError:
-                                pass  # Skip plate with unparseable index
-                            break
-
-                    if plate_index == plate_id:
-                        for meta in plate_elem.findall("metadata"):
-                            if meta.get("key") == "prediction":
-                                try:
-                                    return int(meta.get("value", "0"))
-                                except ValueError:
-                                    return None
-                        break
-            else:
-                plate_elem = root.find(".//plate")
-                if plate_elem is not None:
-                    for meta in plate_elem.findall("metadata"):
-                        if meta.get("key") == "prediction":
-                            try:
-                                return int(meta.get("value", "0"))
-                            except ValueError:
-                                return None
-    except Exception as e:
-        logger.warning("Failed to extract print time from %s: %s", file_path, e)
-
-    return None
-
-
-# Per-plate 3MF metadata cache for queue listing (#2573). A queue poll enriches
-# every row, and each row previously opened + parsed its 3MF THREE times (print
-# time, filament usage, bed type). On a farm with a busy queue, several browsers
-# polling every few seconds re-parsed the same unchanged files constantly. Cache
-# the combined (print_time, filament_grams, bed_type) tuple keyed by file
-# revision — an unchanged file is parsed at most once; a replaced/edited file
-# (different mtime/size) re-parses automatically. LRU-bounded so it can't grow
-# without limit. Locked because FastAPI runs handlers across a thread pool.
-_PLATE_META_CACHE: "OrderedDict[tuple, tuple]" = OrderedDict()
-_PLATE_META_LOCK = Lock()
-_PLATE_META_MAX = 512
-
-
-def _plate_metadata_cached(file_path: Path, plate_id: int | None) -> tuple[int | None, float, str | None]:
-    """Return (print_time_seconds, filament_grams, bed_type) for a plate, cached
-    by file revision so queue polling parses each 3MF once instead of 3x (#2573)."""
-    try:
-        st = file_path.stat()
-    except OSError:
-        return None, 0.0, None
-    key = (str(file_path), plate_id, st.st_mtime_ns, st.st_size)
-    with _PLATE_META_LOCK:
-        hit = _PLATE_META_CACHE.get(key)
-        if hit is not None:
-            _PLATE_META_CACHE.move_to_end(key)
-            return hit
-
-    print_time = _extract_print_time_from_3mf(file_path, plate_id)
-    filament_grams = sum(f["used_g"] for f in extract_filament_usage_from_3mf(file_path, plate_id))
-    bed_type = extract_bed_type_from_3mf(file_path, plate_id)
-    result: tuple[int | None, float, str | None] = (print_time, filament_grams, bed_type)
-
-    with _PLATE_META_LOCK:
-        _PLATE_META_CACHE[key] = result
-        _PLATE_META_CACHE.move_to_end(key)
-        while len(_PLATE_META_CACHE) > _PLATE_META_MAX:
-            _PLATE_META_CACHE.popitem(last=False)
-    return result
 
 
 # The three tri-state calibration fields. Each has a legacy bool column
@@ -253,7 +157,7 @@ def _enrich_response(item: PrintQueueItem) -> PrintQueueItemResponse:
                 # "Failed to extract print time from /app/data: Is a directory"
                 # every time a browser polled the queue during that window.
                 if archive_path.is_file():
-                    plate_time, plate_weight, plate_bed = _plate_metadata_cached(archive_path, item.plate_id)
+                    plate_time, plate_weight, plate_bed = plate_metadata_cached(archive_path, item.plate_id)
                     if plate_time is not None:
                         response.print_time_seconds = plate_time
                     if plate_weight > 0:
@@ -283,7 +187,7 @@ def _enrich_response(item: PrintQueueItem) -> PrintQueueItemResponse:
             # Same guard as the archive branch above — a blank ``file_path``
             # resolves to a directory, not to nothing.
             if library_file_path.is_file():
-                plate_time, plate_weight, plate_bed = _plate_metadata_cached(library_file_path, item.plate_id)
+                plate_time, plate_weight, plate_bed = plate_metadata_cached(library_file_path, item.plate_id)
                 if plate_time is not None:
                     response.print_time_seconds = plate_time
                 if plate_weight > 0:
