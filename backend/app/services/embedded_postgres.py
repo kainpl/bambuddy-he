@@ -25,6 +25,7 @@ import asyncio
 import logging
 import os
 import platform
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -36,6 +37,18 @@ logger = logging.getLogger(__name__)
 PG_USER = "bamdude"
 PG_DATABASE = "bamdude"
 PG_HOST = "127.0.0.1"
+
+# Windows: every PostgreSQL tool runs on a console of its own, without a window.
+# A console delivers Ctrl+C to EVERY process attached to it, so a server that
+# shared BamDude's console took the operator's keypress at the same instant
+# uvicorn did: the postmaster began a fast shutdown and the checkpointer, hit
+# too, wrote the final checkpoint while backends were still being killed ("WAL
+# was shut down unexpectedly", "abnormal database system shutdown") — all before
+# the lifespan ever reached stop(). pg_ctl on Unix setsid()s the server away
+# from the terminal for exactly this reason. Reproduced 2026-09-07 with
+# GenerateConsoleCtrlEvent on a copy of the farm's data; the integration test
+# with the console probe keeps it that way.
+_CREATIONFLAGS = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
 # Written into the data directory and included from postgresql.conf, so our
 # settings survive PostgreSQL's own file being regenerated and are re-applied on
@@ -87,6 +100,7 @@ async def _run(*args: str, env: dict[str, str] | None = None, timeout: float = 1
             stdout=out_file,
             stderr=asyncio.subprocess.STDOUT,
             env=full_env,
+            creationflags=_CREATIONFLAGS,
         )
         try:
             code = await asyncio.wait_for(proc.wait(), timeout=timeout)

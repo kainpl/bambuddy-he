@@ -5,6 +5,7 @@ own seams (``_run``, ``is_running``, ``_wait_ready`` …). The one test that
 starts a real server lives in tests/integration/test_embedded_postgres_live.py.
 """
 
+import subprocess
 import sys
 from pathlib import Path
 
@@ -99,6 +100,29 @@ class TestRun:
         with pytest.raises(ep.EmbeddedPostgresError) as exc:
             await ep._run(sys.executable, "-c", "import time; time.sleep(30)", timeout=0.5)
         assert "timed out" in str(exc.value)
+
+    async def test_on_windows_no_tool_shares_bamdude_console(self, monkeypatch):
+        """A console delivers Ctrl+C to every process attached to it — the
+        server pg_ctl spawns included, which then shuts itself down (racing its
+        own checkpointer) before the lifespan reaches stop(). pg_ctl setsid()s
+        on Unix; on Windows the tools get a console of their own."""
+        seen = {}
+
+        class Proc:
+            async def wait(self):
+                return 0
+
+            def kill(self):
+                pass
+
+        async def fake_exec(*args, **kwargs):
+            seen.update(kwargs)
+            return Proc()
+
+        monkeypatch.setattr(ep.asyncio, "create_subprocess_exec", fake_exec)
+        await ep._run("pg_ctl", "start")
+        expected = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+        assert seen["creationflags"] == expected
 
 
 class TestStart:
