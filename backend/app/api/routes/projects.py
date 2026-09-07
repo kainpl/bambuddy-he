@@ -42,6 +42,7 @@ from backend.app.schemas.farm_forecast import (
     OrderForecastOut,
     RowForecastOut,
 )
+from backend.app.schemas.filament_needs import FarmNeedsOut, FarmRowOut, NeedRowOut, OrderNeedsOut
 from backend.app.schemas.order_from_files import OrderFromFilesRequest
 from backend.app.schemas.project import (
     PROJECT_PRIORITIES,
@@ -74,7 +75,7 @@ from backend.app.schemas.project import (
     StockMovedOut,
     TimelineEvent,
 )
-from backend.app.services import farm_forecast, order_from_files, part_stock, product_delete
+from backend.app.services import farm_forecast, filament_needs, order_from_files, part_stock, product_delete
 from backend.app.services.auto_queue_add import add_items_to_auto_queue
 from backend.app.services.order_metrics import (
     attribute,
@@ -473,6 +474,33 @@ async def get_orders_forecast(
             unknown_prints=farm.unknown_prints,
         ),
         orders=[OrderForecastOut(**_order_forecast_fields(orders[pid])) for pid in parsed if pid in orders],
+    )
+
+
+def _need_row_fields(r: filament_needs.NeedRow) -> dict:
+    return {
+        "material": r.material,
+        "colour": r.colour,
+        "need_g": r.need_g,
+        "have_g": r.have_g,
+        "have_type_g": r.have_type_g,
+        "short_g": r.short_g,
+        "unknown_prints": r.unknown_prints,
+    }
+
+
+@router.get("/filament", response_model=FarmNeedsOut)
+async def get_orders_filament(
+    db: AsyncSession = Depends(get_db), _: User | None = RequirePermission(Permission.PROJECTS_READ)
+):
+    """What every active order still needs, per material and colour, against the shelf."""
+    farm = await filament_needs.needs_of_farm(db)
+    return FarmNeedsOut(
+        rows=[FarmRowOut(**_need_row_fields(r), orders_count=r.orders_count) for r in farm.rows],
+        orders_count=farm.orders_count,
+        unknown_prints=farm.unknown_prints,
+        stock_unavailable=farm.stock_unavailable,
+        assumptions=list(filament_needs.ASSUMPTIONS),
     )
 
 
@@ -1697,6 +1725,21 @@ async def get_order_forecast(
             )
             for line in f.lines
         ],
+    )
+
+
+@router.get("/{project_id}/filament", response_model=OrderNeedsOut)
+async def get_order_filament(
+    project_id: int, db: AsyncSession = Depends(get_db), _: User | None = RequirePermission(Permission.PROJECTS_READ)
+):
+    await _get_project(db, project_id)
+    needs = (await filament_needs.needs_of_orders(db, [project_id]))[project_id]
+    return OrderNeedsOut(
+        project_id=project_id,
+        rows=[NeedRowOut(**_need_row_fields(r)) for r in needs.rows],
+        unknown_prints=needs.unknown_prints,
+        stock_unavailable=needs.stock_unavailable,
+        assumptions=list(filament_needs.ASSUMPTIONS),
     )
 
 

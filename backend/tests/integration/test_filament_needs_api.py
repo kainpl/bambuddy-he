@@ -190,3 +190,34 @@ async def test_the_farm_sums_active_orders_and_does_not_grow_with_them(db_sessio
     petg = {(r.material, r.colour): r for r in farm.rows}[("PETG", "black")]
     assert (petg.need_g, petg.orders_count, petg.have_g) == (40.0, 4, 800.0)
     assert len(four) <= len(one)
+
+
+@pytest.mark.asyncio
+async def test_the_order_route_answers_rows_and_assumptions(committing_client, db_session, shelf):
+    pid, _ = await _order(db_session, shelf["product"].id, 2, colour="black")
+    r = await committing_client.get(f"/api/v1/projects/{pid}/filament")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert (
+        body["project_id"] == pid and body["assumptions"] == ["slicer_estimate"] and body["stock_unavailable"] is False
+    )
+    petg = next(row for row in body["rows"] if row["material"] == "PETG")
+    assert (petg["colour"], petg["need_g"], petg["have_g"], petg["have_type_g"], petg["short_g"]) == (
+        "black",
+        20.0,
+        800.0,
+        1800.0,
+        0.0,
+    )
+    assert (await committing_client.get("/api/v1/projects/999999/filament")).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_the_farm_route_sums_active_orders(committing_client, db_session, shelf):
+    await _order(db_session, shelf["product"].id, 1, colour="black", name="A")
+    await _order(db_session, shelf["product"].id, 2, colour="black", name="B")
+    await _order(db_session, shelf["product"].id, 7, colour="black", status="cancelled", name="C")
+    body = (await committing_client.get("/api/v1/projects/filament")).json()
+    assert body["orders_count"] == 2 and body["assumptions"] == ["slicer_estimate"]
+    petg = next(row for row in body["rows"] if row["material"] == "PETG")
+    assert (petg["need_g"], petg["orders_count"]) == (30.0, 2)
