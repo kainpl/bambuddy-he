@@ -9,7 +9,8 @@ import { Button } from '../Button';
 import { PlanBlock } from '../projects/PlanBlock';
 import { useToast } from '../../contexts/ToastContext';
 import { useOrderDetail } from '../../hooks/useOrderDetail';
-import { invalidateOrderViews } from '../../utils/queryInvalidation';
+import { useForgetOnUnmount } from '../../hooks/useForgetOnUnmount';
+import { invalidateAfterDelete, invalidateOrderViews } from '../../utils/queryInvalidation';
 
 interface PlanFromFilesModalProps {
   fileIds: number[];
@@ -83,11 +84,19 @@ export function PlanFromFilesModal({ fileIds, onClose }: PlanFromFilesModalProps
   });
 
   const order = useOrderDetail(orderId);
+  const forgetOrder = useForgetOnUnmount(['project', orderId]);
 
   const cancel = useMutation({
     mutationFn: () => api.deleteOrder(orderId as number),
+    // ⚠️ The LISTS only, exactly as the order page does it. `invalidateOrderViews`
+    // marks the `project` prefix — and the plan and forecast — stale while this
+    // dialog is still mounted and watching all three, so TanStack refetched the
+    // order that was just deleted: three 404s and a «could not refresh» toast
+    // on the way out (seen live 2026-09-07). The order's own entry goes when the
+    // dialog UNMOUNTS (`useForgetOnUnmount`), never on the next line.
     onSuccess: () => {
-      invalidateOrderViews(queryClient);
+      invalidateAfterDelete(queryClient, 'order');
+      forgetOrder();
       onClose();
     },
     onError: (e: Error) => showToast(e.message, 'error'),
