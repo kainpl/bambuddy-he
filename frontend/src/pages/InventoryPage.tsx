@@ -697,9 +697,9 @@ const SORT_STATE_KEY = 'bamdude-inventory-sort';
  * It used to start with no sort state at all: the server applied its own
  * default ordering and no header carried an arrow, so the one question a
  * sorted table must answer — "sorted by what?" — had no answer on screen.
- * Newest spool first keeps what the list already showed, now visibly.
+ * By spool number, ascending (operator ruling 2026-09-08).
  */
-const DEFAULT_SORT: SortState = { column: 'id', direction: 'desc' };
+const DEFAULT_SORT: SortState = { column: 'id', direction: 'asc' };
 
 function loadSortState(): SortState {
   try {
