@@ -150,19 +150,22 @@ const COLUMN_CONFIG_KEY = 'bamdude-inventory-columns';
 // How many member ids a grouped row prints before it says "+N". The rest are
 // one chevron away; printing them all is what broke the grouped layout.
 const GROUP_ID_PREVIEW = 5;
-// Marks that the one-time colour-name enable in loadColumnConfig has run.
-const COLOR_NAME_DEFAULT_KEY = 'bamdude-inventory-color-name-default';
+// Marks that loadColumnConfig has applied the 2026-09-07 default change once.
+const COLUMN_DEFAULTS_APPLIED_KEY = 'bamdude-inventory-column-defaults-v2';
 
 const DEFAULT_COLUMNS: ColumnConfig[] = [
   { id: 'id', label: '#', visible: true },
   { id: 'display_name', label: 'Name', visible: true },
+  // Next to the name and visible: the lot is how the operator tells two
+  // otherwise identical spools apart, now that it no longer splits groups.
+  { id: 'lot', label: 'Lot', visible: true },
   { id: 'purchase_date', label: 'Date of purchase', visible: true },
   { id: 'added_time', label: 'Added', visible: false },
   { id: 'encode_time', label: 'Encoded', visible: false },
   { id: 'last_used_time', label: 'Last Used', visible: false },
   { id: 'rgba', label: 'Color', visible: true },
   { id: 'material', label: 'Material', visible: true },
-  { id: 'subtype', label: 'Subtype', visible: true },
+  { id: 'subtype', label: 'Subtype', visible: false },
   // On by default WITH the swatch: the two merge into one column (swatch +
   // name), which is the only colour column whose header may offer a sort — the
   // order is alphabetical by name, so the name has to be visible.
@@ -190,7 +193,6 @@ const DEFAULT_COLUMNS: ColumnConfig[] = [
   { id: 'cost_per_kg', label: 'Cost/kg', visible: false },
   { id: 'weight_check', label: 'Weight Check', visible: false },
   { id: 'filament_diameter', label: 'Diameter', visible: false },
-  { id: 'lot', label: 'Lot', visible: false },
 ];
 
 function loadColumnConfig(): ColumnConfig[] {
@@ -213,24 +215,33 @@ function loadColumnConfig(): ColumnConfig[] {
           result.splice(insertAt, 0, { ...def });
         }
       });
-      // One-time: switch the colour NAME on for installs that predate it being
-      // a default. A saved config wins over defaults forever, so without this
-      // an existing operator would keep a swatch-only colour column — and the
-      // swatch alone is no longer sortable (the sort is alphabetical by name,
-      // so the name must be on screen). They would silently lose colour
-      // sorting instead of gaining the name. Runs once, keyed separately; turn
-      // the column back off afterwards and it stays off.
+      // One-time: bring an existing config up to the 2026-09-07 defaults. A
+      // saved config wins over DEFAULT_COLUMNS forever, so without this an
+      // operator who has ever touched the column settings would see none of
+      // the change — and would silently LOSE colour sorting, since the swatch
+      // alone is no longer sortable (the order is alphabetical by name, so the
+      // name has to be on screen). Runs once; change any of it back afterwards
+      // and it stays changed.
       try {
-        if (!localStorage.getItem(COLOR_NAME_DEFAULT_KEY)) {
-          localStorage.setItem(COLOR_NAME_DEFAULT_KEY, '1');
+        if (!localStorage.getItem(COLUMN_DEFAULTS_APPLIED_KEY)) {
+          localStorage.setItem(COLUMN_DEFAULTS_APPLIED_KEY, '1');
           const colorName = result.find((c) => c.id === 'color_name');
-          if (colorName && !colorName.visible) {
-            colorName.visible = true;
-            saveColumnConfig(result);
+          if (colorName) colorName.visible = true;
+          const subtype = result.find((c) => c.id === 'subtype');
+          if (subtype) subtype.visible = false;
+          // Lot moves next to the name and comes on: it is how two otherwise
+          // identical spools are told apart now that it no longer splits groups.
+          const lotIdx = result.findIndex((c) => c.id === 'lot');
+          if (lotIdx !== -1) {
+            const [lot] = result.splice(lotIdx, 1);
+            lot.visible = true;
+            const nameIdx = result.findIndex((c) => c.id === 'display_name');
+            result.splice(nameIdx === -1 ? result.length : nameIdx + 1, 0, lot);
           }
+          saveColumnConfig(result);
         }
       } catch {
-        // Storage unavailable — the default below is already correct.
+        // Storage unavailable — the defaults below are already correct.
       }
       return result;
     }
@@ -680,12 +691,22 @@ const columnSortValues: Record<string, (spool: InventorySpool, assignmentMap: Re
 
 const SORT_STATE_KEY = 'bamdude-inventory-sort';
 
+/**
+ * The list's default order, spelled out rather than implied.
+ *
+ * It used to start with no sort state at all: the server applied its own
+ * default ordering and no header carried an arrow, so the one question a
+ * sorted table must answer — "sorted by what?" — had no answer on screen.
+ * Newest spool first keeps what the list already showed, now visibly.
+ */
+const DEFAULT_SORT: SortState = { column: 'id', direction: 'desc' };
+
 function loadSortState(): SortState {
   try {
     const stored = localStorage.getItem(SORT_STATE_KEY);
     if (stored) return JSON.parse(stored);
   } catch { /* ignore */ }
-  return null;
+  return DEFAULT_SORT;
 }
 
 function saveSortState(state: SortState) {
@@ -1861,8 +1882,10 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
     setSortState((prev) => {
       let next: SortState;
       if (prev?.column === colId) {
-        // Toggle direction, or clear on third click
-        next = prev.direction === 'asc' ? { column: colId, direction: 'desc' } : null;
+        // Toggle direction, and on the third click go back to the DEFAULT
+        // order rather than to no order at all: the table is always sorted by
+        // something, so leaving every header arrowless would just hide which.
+        next = prev.direction === 'asc' ? { column: colId, direction: 'desc' } : DEFAULT_SORT;
       } else {
         next = { column: colId, direction: 'asc' };
       }
@@ -2991,7 +3014,7 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
                       return (
                         <th
                           key={colId}
-                          className={`text-left py-3 px-4 text-xs font-medium uppercase tracking-wide select-none ${colId === 'remaining' ? 'min-w-[150px]' : ''} ${
+                          className={`text-center py-3 px-4 text-xs font-medium uppercase tracking-wide select-none ${colId === 'remaining' ? 'min-w-[150px]' : ''} ${
                             sortable ? 'cursor-pointer hover:text-bambu-green transition-colors' : ''
                           } ${isActive ? 'text-bambu-green' : 'text-bambu-gray'}`}
                           onClick={sortable ? () => handleSort(colId) : undefined}
