@@ -421,6 +421,10 @@ async def _local_sqlite_candidate(data_dir) -> Path | None:
     return None
 
 
+class SqliteImportError(RuntimeError):
+    """The one-time SQLite → PostgreSQL import failed; startup must not continue."""
+
+
 async def auto_migrate_sqlite_to_pg(engine, metadata) -> bool:
     """Auto-migrate local SQLite database to PostgreSQL on first PG start.
 
@@ -473,5 +477,14 @@ async def auto_migrate_sqlite_to_pg(engine, metadata) -> bool:
         return True
 
     except Exception as e:
+        # The import is one transaction: PostgreSQL is empty again and the
+        # SQLite file untouched. Stopping here is the only safe answer — if
+        # startup went on, the pending migrations would seed a *fresh* install
+        # into the empty PostgreSQL (default groups, catalogues, "setup
+        # required"), and the next start would try the import again on top of
+        # those seeds. Seen 2026-09-07 with a real database.
         logger.error("SQLite → PostgreSQL migration failed: %s", e)
-        return False
+        raise SqliteImportError(
+            f"Importing {sqlite_path.name} into PostgreSQL failed: {e}. PostgreSQL was left empty and "
+            f"{sqlite_path.name} is untouched. Fix the cause and start BamDude again."
+        ) from e

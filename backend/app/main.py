@@ -8283,6 +8283,14 @@ async def lifespan(app: FastAPI):
 
     install_proactor_reset_filter()
 
+    # DATABASE_URL=embedded: the bundled PostgreSQL must accept connections
+    # before init_db() opens the first one. The engine itself was created at
+    # import with a fixed localhost URL, so nothing else has to wait.
+    if app_settings.embedded_postgres:
+        from backend.app.services import embedded_postgres as _embedded_pg
+
+        await _embedded_pg.start()
+
     await init_db()
 
     # Warm the system language into process memory. Sync callers on hot paths
@@ -9215,14 +9223,25 @@ async def lifespan(app: FastAPI):
     _set_shared_makerworld_http_client_off(None)
     await _shared_makerworld_http_client.aclose()
 
-    # Checkpoint WAL and close all database connections
-    try:
-        async with engine.begin() as conn:
-            await conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
-        logging.info("WAL checkpoint completed")
-    except Exception as e:
-        logging.warning("WAL checkpoint failed: %s", e)
+    # Checkpoint WAL and close all database connections (SQLite only — the
+    # PRAGMA is not PostgreSQL and used to log a spurious warning there)
+    from backend.app.core.db_dialect import is_sqlite as _is_sqlite
+
+    if _is_sqlite():
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
+            logging.info("WAL checkpoint completed")
+        except Exception as e:
+            logging.warning("WAL checkpoint failed: %s", e)
     await engine.dispose()
+
+    # The bundled PostgreSQL stops last, after every connection is gone:
+    # pg_ctl stop -m fast, a clean shutdown with a checkpoint.
+    if app_settings.embedded_postgres:
+        from backend.app.services import embedded_postgres as _embedded_pg
+
+        await _embedded_pg.stop()
 
 
 app = FastAPI(
