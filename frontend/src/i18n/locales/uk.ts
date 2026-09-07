@@ -2574,7 +2574,7 @@ export default {
     staggerConcurrent: 'Одночасних запусків',
     staggerConcurrentDescription: 'Максимум принтерів, які можуть нагріватися одночасно',
     staggerInterval: 'Інтервал (хвилини)',
-    staggerIntervalDescription: 'Час очікування після звільнення слота перед наступним запуском',
+    staggerIntervalDescription: 'Час очікування після звільнення слота перед наступним запуском. 0 — без очікування, діє лише обмеження одночасних',
     staggerWaitForBed: 'Чекати нагріву столу',
     staggerWaitForBedDescription: 'Слот звільняється коли стіл досягає цільової температури (±1°C). Якщо вимкнено - слот звільняється одразу після старту друку.',
     staggerStrictForDirect: 'Строгий режим для прямого друку',

@@ -3594,13 +3594,23 @@ export function SettingsPage() {
                           {t('settings.staggerIntervalDescription')}
                         </p>
                       </div>
+                      {/* ⚠️ 0 is a real value here — cap the concurrent starts (and wait
+                          for the bed, if that is on) but add no delay on top. The old
+                          `parseInt(...) || 5` could never store it: 0 is falsy, so typing
+                          zero silently became five. */}
                       <input
                         type="number"
-                        min="1"
+                        min="0"
                         max="60"
                         step="1"
                         value={localSettings.stagger_interval_minutes ?? 5}
-                        onChange={(e) => updateSetting('stagger_interval_minutes', Math.max(1, parseInt(e.target.value) || 5))}
+                        onChange={(e) => {
+                          const parsed = parseInt(e.target.value, 10);
+                          updateSetting(
+                            'stagger_interval_minutes',
+                            Number.isNaN(parsed) ? 5 : Math.min(60, Math.max(0, parsed))
+                          );
+                        }}
                         className="w-20 px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none text-center"
                       />
                     </div>

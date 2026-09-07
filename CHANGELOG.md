@@ -82,6 +82,8 @@
 
 ### Fixed
 
+- **The staggered-start interval accepts 0.** Wanting the concurrent limit without any wait on top was not expressible: the field refused anything below one minute, and typing zero silently stored five. Zero now means what it reads as — printers are still capped, and still wait for the bed if that is switched on, but nothing is added after that.
+
 - **The statistics page no longer stalls the printers while it loads.** Archive statistics loaded every completed print as a full record — every column and its JSON blob — to read two flags and one number off each. On a farm with tens of thousands of prints that work happened on the same loop that talks to the printers, so opening the page held up every machine's MQTT for as long as it took. It now reads the three columns it actually uses.
 
 - **Indexes for the reads that were scanning or sorting whole tables.** The archive list sorted every matching row on each page instead of walking an index, hiding duplicates grouped over the whole table each time it was opened, the per-printer archive view never used the printer column at all, and the inventory page scanned the whole spool/K-profile link table on every open. Each index was chosen from a measured query plan before and after, on a copy of a real farm's database — the archive slowness a large farm reported is this. Fresh installs get the same indexes without migrating.

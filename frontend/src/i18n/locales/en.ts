@@ -2553,7 +2553,7 @@ export default {
     staggerConcurrent: 'Concurrent starts',
     staggerConcurrentDescription: 'Max printers that can be heating up at the same time',
     staggerInterval: 'Interval (minutes)',
-    staggerIntervalDescription: 'Wait time after a slot frees before allowing the next start',
+    staggerIntervalDescription: 'Wait time after a slot frees before allowing the next start. 0 = no wait, only the concurrent limit applies',
     staggerWaitForBed: 'Wait for bed to heat',
     staggerWaitForBedDescription: 'Slot frees when bed reaches target temperature (±1°C). When off, slot frees immediately after print starts.',
     staggerStrictForDirect: 'Strict mode for direct dispatch',
