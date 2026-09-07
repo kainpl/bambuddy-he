@@ -109,7 +109,7 @@ def test_rows_carry_short_and_sort_by_material_then_colour():
         {10: "black", 11: None},
         {100: [FilamentLine("PETG", 1000.0)], 200: [FilamentLine("ABS", 50.0)]},
     )
-    rows = rows_of(needs, stock_by_key(SPOOLS, needs.grams, lambda _hex: set()))
+    rows = rows_of(needs, stock_by_key(SPOOLS, needs.keys(), lambda _hex: set()))
     assert [(r.material, r.colour) for r in rows] == [("ABS", None), ("PETG", "black")]
     petg = rows[1]
     assert (petg.need_g, petg.have_g, petg.have_type_g, petg.short_g) == (1000.0, 800.0, 2050.0, 200.0)
@@ -129,3 +129,16 @@ def test_the_farm_sums_one_key_across_orders_and_counts_them():
     farm = farm_of({1: rows_of(a, stock), 2: rows_of(b, stock)}, unknown_prints=0, stock_unavailable=False)
     (row,) = farm.rows
     assert (row.need_g, row.have_g, row.orders_count) == (300.0, 800.0, 2) and farm.orders_count == 2
+
+
+def test_a_gramless_key_still_gets_its_real_shelf_when_stock_covers_needs_keys():
+    needs = need_of_plan(_plan([(10, 100, 2)]), {10: "black"}, {100: [FilamentLine("PETG", None)]})
+    assert needs.keys() == {NeedKey("PETG", "black")}
+    (row,) = rows_of(needs, stock_by_key(SPOOLS, needs.keys(), lambda _hex: set()))
+    assert (row.need_g, row.have_g, row.have_type_g, row.short_g, row.unknown_prints) == (0.0, 800.0, 2050.0, 0.0, 2)
+
+
+def test_a_key_the_stock_dict_does_not_carry_reads_as_an_unknown_shelf_not_zero():
+    needs = need_of_plan(_plan([(10, 100, 1)]), {10: None}, {100: [FilamentLine("PETG", 10.0)]})
+    (row,) = rows_of(needs, {})
+    assert (row.have_g, row.have_type_g, row.short_g) == (None, None, None)

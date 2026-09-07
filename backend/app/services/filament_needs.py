@@ -88,6 +88,10 @@ class Needs:
         out.unknown_prints += other.unknown_prints
         return out
 
+    def keys(self) -> set[NeedKey]:
+        """Every key a row will be made for — the grams AND the gramless-but-typed ones."""
+        return set(self.grams) | set(self.unknown_by_key)
+
 
 def need_of_plan(
     plan: OrderPlan | None, line_colours: dict[int, str | None], plate_filaments: dict[int, list[FilamentLine]]
@@ -104,6 +108,7 @@ def need_of_plan(
 
 
 def need_of_queue(rows: Iterable[QueuedNeed]) -> Needs:
+    """Σ count × grams per key over the queue rows; each row counts as 1 print."""
     needs = Needs()
     for row in rows:
         needs.add(row.filaments, row.line_colour, 1)
@@ -119,7 +124,7 @@ def _matches_colour(spool: SpoolStock, colour: str, names_of_hex: Callable[[str]
 def stock_by_key(
     spools: list[SpoolStock], keys: Iterable[NeedKey], names_of_hex: Callable[[str], set[str]]
 ) -> dict[NeedKey, tuple[float, float]]:
-    """``key → (have_g, have_type_g)``: the type total always, the colour figure when the key has one."""
+    """``key → (have_g, have_type_g)``: the type total always, the colour figure when the key has one. Pass ``needs.keys()`` to ensure coverage."""
     out: dict[NeedKey, tuple[float, float]] = {}
     for key in keys:
         of_type = [s for s in spools if s.material.strip().upper() == key.material]
@@ -145,13 +150,18 @@ class NeedRow:
 
 
 def rows_of(needs: Needs, stock: dict[NeedKey, tuple[float, float]] | None) -> list[NeedRow]:
-    keys = set(needs.grams) | set(needs.unknown_by_key)
+    """One row per key (grams and gramless-but-typed).
+
+    ``stock`` comes from ``stock_by_key(spools, needs.keys(), …)``;
+    a key it does not carry is reported as an unknown shelf (``None``),
+    never as zero — a caller that forgets a key sees dashes, not a silent 0.
+    """
     rows: list[NeedRow] = []
-    for key in sorted(keys, key=lambda k: (k.material, k.colour or "")):
+    for key in sorted(needs.keys(), key=lambda k: (k.material, k.colour or "")):
         need = round(needs.grams.get(key, 0.0), 1)
         have = have_type = short = None
-        if stock is not None:
-            have, have_type = stock.get(key, (0.0, 0.0))
+        if stock is not None and key in stock:
+            have, have_type = stock[key]
             have, have_type = round(have, 1), round(have_type, 1)
             short = round(max(0.0, need - have), 1)
         rows.append(NeedRow(key.material, key.colour, need, have, have_type, short, needs.unknown_by_key.get(key, 0)))
