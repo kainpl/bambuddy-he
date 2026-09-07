@@ -99,8 +99,10 @@ Name: "{group}\Uninstall BamDude"; Filename: "{uninstallexe}"
 Name: "{commondesktop}\BamDude"; Filename: "http://localhost:{#DefaultPort}"; IconFilename: "{app}\bamdude.ico"; Tasks: desktopicon
 
 [Run]
-; Register and start the Windows service
-Filename: "{app}\service\install-service.bat"; Parameters: """{app}"" ""{commonappdata}\BamDude"" {#DefaultPort}"; Flags: runhidden waituntilterminated; StatusMsg: "Registering BamDude service..."
+; Register and start the Windows service. The trailing arguments (database
+; backend + optional URL) are built by GetInstallServiceParams in [Code] from
+; the storage-chooser wizard page.
+Filename: "{app}\service\install-service.bat"; Parameters: "{code:GetInstallServiceParams}"; Flags: runhidden waituntilterminated; StatusMsg: "Registering BamDude service..."
 
 ; Open Windows Firewall on the dashboard port. We do this only if the
 ; user opted in via the firewallrule task — some environments manage
@@ -127,19 +129,124 @@ Type: filesandordirs; Name: "{app}"
 
 [Code]
 
-// Stop the BamDude service BEFORE the [Files] section copies anything,
-// so file locks on python.exe / .pyd / nssm.exe release in time for the
-// overwrite. Without this, upgrading over a running install fails with
-// "permission denied" on every file the service has open.
+// --- Storage backend chooser -------------------------------------------------
 //
-// On a fresh install {app}\bin\nssm.exe doesn't exist yet — FileExists
-// guards that path so the hook is a no-op for first-time installers.
-// The Sleep gives Windows a beat to finalize the python.exe unload
-// before the [Files] step starts grabbing exclusive handles.
+// One wizard page with four choices, mirroring the app's DATABASE_URL states:
+//   0 SQLite                              -> sqlite
+//   1 bundled PostgreSQL, own service     -> embedded-service
+//   2 bundled PostgreSQL, run by BamDude  -> embedded-child
+//   3 external PostgreSQL (URL)           -> external
+// The external URL is asked on a second page, shown only for choice 3.
+
+var
+  StoragePage: TInputOptionWizardPage;
+  UrlPage: TInputQueryWizardPage;
+  RemoveDataOnUninstall: Boolean;
+
+// Read the current backend from the installed BamDude service's environment
+// (NSSM keeps AppEnvironmentExtra as a REG_MULTI_SZ), so an upgrade defaults to
+// what is already in use instead of silently reverting to SQLite. Returns the
+// selected index, and the external URL through ExistingUrl.
+function DetectExistingChoice(var ExistingUrl: String): Integer;
+var
+  Env: String;
+begin
+  Result := 0;
+  ExistingUrl := '';
+  if RegQueryMultiStringValue(HKLM, 'SYSTEM\CurrentControlSet\Services\BamDude\Parameters',
+       'AppEnvironmentExtra', Env) then
+  begin
+    if Pos('EMBEDDED_PG_EXTERNAL_SERVICE=1', Env) > 0 then
+      Result := 1
+    else if Pos('DATABASE_URL=embedded', Env) > 0 then
+      Result := 2
+    else if Pos('DATABASE_URL=postgresql', Env) > 0 then
+    begin
+      Result := 3;
+      // pull the URL out of the DATABASE_URL=... line for the field default
+      ExistingUrl := Copy(Env, Pos('DATABASE_URL=postgresql', Env) + Length('DATABASE_URL='), 4096);
+      // Cut at the first separator, whichever form RegQueryMultiStringValue used.
+      if Pos(#0, ExistingUrl) > 0 then ExistingUrl := Copy(ExistingUrl, 1, Pos(#0, ExistingUrl) - 1);
+      if Pos(#13, ExistingUrl) > 0 then ExistingUrl := Copy(ExistingUrl, 1, Pos(#13, ExistingUrl) - 1);
+      if Pos(#10, ExistingUrl) > 0 then ExistingUrl := Copy(ExistingUrl, 1, Pos(#10, ExistingUrl) - 1);
+    end;
+  end;
+end;
+
+procedure InitializeWizard();
+var
+  ExistingUrl: String;
+begin
+  StoragePage := CreateInputOptionPage(wpSelectDir,
+    'Database', 'Where should BamDude keep its data?',
+    'SQLite needs nothing and is a fine choice for most farms. PostgreSQL suits large, busy farms.',
+    True, False);
+  StoragePage.Add('SQLite (a single file, no server - recommended)');
+  StoragePage.Add('Bundled PostgreSQL 18, as its own Windows service (most robust)');
+  StoragePage.Add('Bundled PostgreSQL 18, started and stopped by BamDude (simpler)');
+  StoragePage.Add('An external PostgreSQL server (enter its URL)');
+
+  UrlPage := CreateInputQueryPage(StoragePage.ID,
+    'External PostgreSQL', 'Connection URL',
+    'The database must already exist - BamDude creates the tables, not the database.');
+  UrlPage.Add('postgresql+asyncpg://user:password@host:5432/bamdude', False);
+
+  StoragePage.SelectedValueIndex := DetectExistingChoice(ExistingUrl);
+  if ExistingUrl <> '' then
+    UrlPage.Values[0] := ExistingUrl;
+end;
+
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  Result := False;
+  // The URL page only matters for the external choice (index 3).
+  if PageID = UrlPage.ID then
+    Result := StoragePage.SelectedValueIndex <> 3;
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+begin
+  Result := True;
+  if (CurPageID = UrlPage.ID) and (Trim(UrlPage.Values[0]) = '') then
+  begin
+    MsgBox('Please enter the PostgreSQL connection URL, or go back and choose SQLite.', mbError, MB_OK);
+    Result := False;
+  end;
+end;
+
+function GetDbMode(): String;
+begin
+  case StoragePage.SelectedValueIndex of
+    1: Result := 'embedded-service';
+    2: Result := 'embedded-child';
+    3: Result := 'external';
+  else
+    Result := 'sqlite';
+  end;
+end;
+
+// Full argument string for install-service.bat:
+//   "<app>" "<data root>" <port> <db mode> "<url>"
+function GetInstallServiceParams(Param: String): String;
+var
+  Url: String;
+begin
+  Url := '';
+  if StoragePage.SelectedValueIndex = 3 then
+    Url := Trim(UrlPage.Values[0]);
+  Result := '"' + ExpandConstant('{app}') + '" "' + ExpandConstant('{commonappdata}\BamDude') + '" ' +
+            '{#DefaultPort}' + ' ' + GetDbMode() + ' "' + Url + '"';
+end;
+
+// Stop the BamDude service (and the bundled PostgreSQL service, if any) BEFORE
+// the [Files] section copies anything, so file locks on python.exe / .pyd /
+// nssm.exe / postgres.exe release in time for the overwrite. Without this,
+// upgrading over a running install fails with "permission denied" on every
+// file a service has open.
 //
-// The install-service.bat in [Run] does `nssm remove ... confirm` plus
-// a fresh `nssm install`, so even if we leave the old service entry in
-// place here, the post-install step re-registers it cleanly.
+// On a fresh install {app}\bin\nssm.exe doesn't exist yet — FileExists guards
+// that path so the hook is a no-op for first-time installers. The Sleep gives
+// Windows a beat to finalize the unload before [Files] grabs exclusive handles.
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   ResultCode: Integer;
@@ -148,26 +255,47 @@ begin
   Result := '';
   NeedsRestart := False;
 
+  // Stop the bundled PostgreSQL service first (BamDude depends on it), then
+  // BamDude. Both are best-effort — a missing service just returns non-zero.
+  Exec(ExpandConstant('{cmd}'), '/c net stop BamDudePostgres', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
   NssmPath := ExpandConstant('{app}\bin\nssm.exe');
   if FileExists(NssmPath) then
   begin
     Log('Stopping BamDude service before file copy...');
     Exec(NssmPath, 'stop BamDude', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-    // ResultCode 0 == stopped; non-zero is fine too (already stopped /
-    // service not registered). The lock we care about is python.exe's,
-    // and it's released the moment the process exits.
     Sleep(1500);
   end;
 end;
 
-// Pre-install check: refuse to install if port 8000 is already in use by
-// something other than a previous BamDude install. This catches the
-// "I have something else on 8000" case early instead of after install.
 function InitializeSetup(): Boolean;
 begin
   Result := True;
-  // TODO: optional port-conflict check. Inno Setup doesn't have a
-  // native socket API; would need a tiny helper exe or a netstat parse.
-  // Defer to v1.1 — for v1, accept that conflicts surface at first
-  // service start and the user reads the log.
+  // Port-conflict check deferred: Inno has no native socket API, so a conflict
+  // on 8000 surfaces at first service start and the user reads the log.
+end;
+
+// --- Uninstall: optionally remove all data ----------------------------------
+
+function InitializeUninstall(): Boolean;
+begin
+  Result := True;
+  // Default is to KEEP data (database, archives, config). Ask explicitly.
+  RemoveDataOnUninstall :=
+    MsgBox('Also delete all BamDude data (database, print archives, settings) in'
+      + #13#10 + ExpandConstant('{commonappdata}\BamDude') + '?'
+      + #13#10#13#10 + 'Choose No to keep it for a future reinstall.',
+      mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  // The service-stop + deregister runs from [UninstallRun] before file removal.
+  // Delete the data tree only here, after everything is stopped, and only if
+  // the user asked for it.
+  if (CurUninstallStep = usPostUninstall) and RemoveDataOnUninstall then
+  begin
+    Log('Removing BamDude data directory at user request');
+    DelTree(ExpandConstant('{commonappdata}\BamDude'), True, True, True);
+  end;
 end;
