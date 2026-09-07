@@ -267,8 +267,12 @@ class Settings(BaseSettings):
             object.__setattr__(self, "embedded_pg_password_file", password_file)
             object.__setattr__(self, "embedded_pg_port", port)
             object.__setattr__(self, "database_url", _embedded_pg_url(self.data_dir, port))
-        elif not _external_db_url and raw.startswith("sqlite"):
-            # Our own SQLite default: follow data_dir now that it is absolute
+        elif not _external_db_url and (raw == "" or raw.startswith("sqlite")):
+            # Our own SQLite default: follow data_dir now that it is absolute.
+            # ``raw == ""`` covers an explicitly empty DATABASE_URL from the
+            # environment (a bare ``DATABASE_URL=`` in .env / a systemd or Docker
+            # env line) — pydantic pours that empty string into the field, and
+            # without this it stayed empty and the engine failed to parse it.
             db_path = self.data_dir / "bamdude.db"
             object.__setattr__(self, "database_url", f"sqlite+aiosqlite:///{db_path}")
 

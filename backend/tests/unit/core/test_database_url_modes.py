@@ -116,6 +116,16 @@ class TestSettingsResolveFromDotenvValues:
         assert s.embedded_pg_port > 1024
         assert (tmp_path / "postgres" / "port").read_text(encoding="utf-8").strip() == str(s.embedded_pg_port)
 
+    def test_an_empty_string_database_url_falls_back_to_sqlite(self, tmp_path, monkeypatch):
+        """A bare ``DATABASE_URL=`` (empty, not unset) in .env / a systemd or
+        Docker env line means SQLite — pydantic fills the field with "" and it
+        must not stay there and break the engine at import."""
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        s = config.Settings(_env_file=None, data_dir=tmp_path, database_url="")
+        assert s.embedded_postgres is False
+        assert s.database_url.startswith("sqlite+aiosqlite:///")
+        assert s.database_url.endswith("bamdude.db")
+
     def test_a_dotenv_postgres_url_stays_external(self, tmp_path, monkeypatch):
         monkeypatch.delenv("DATABASE_URL", raising=False)
         url = "postgresql+asyncpg://u:p@h:5432/db"

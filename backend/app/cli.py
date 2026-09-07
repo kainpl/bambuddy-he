@@ -9,6 +9,12 @@ utility, not a daily-driver surface. Commands:
   all admin users have been lost (forgotten credentials, mistaken deletions,
   etc.) and you still have file-system / container access.
 
+* ``init_embedded_pg`` - initialise the bundled PostgreSQL cluster (initdb +
+  our conf) WITHOUT starting it. Used by the Windows installer, which then
+  registers the server as its own service; it reuses the application's own
+  bootstrap so the flags and the configuration file have a single source of
+  truth. Requires ``DATABASE_URL=embedded`` in the environment.
+
 Existing non-admin users and all other data are left untouched.
 """
 
@@ -57,16 +63,47 @@ async def _reset_admin() -> int:
     return 0
 
 
+async def _init_embedded_pg() -> int:
+    """initdb + write our conf for the bundled server, but do not start it.
+
+    The Windows installer runs this, then registers the cluster as its own
+    service. Reuses services/embedded_postgres so initdb flags and the conf are
+    written by exactly the code the child-process path uses.
+    """
+    from backend.app.core.config import settings
+    from backend.app.services import embedded_postgres as ep
+
+    if not settings.embedded_postgres:
+        print("DATABASE_URL is not 'embedded' — nothing to initialise.", file=sys.stderr)
+        return 2
+
+    ep._refuse_other_major()
+    pgdata = settings.embedded_pg_data_dir
+    if pgdata is not None and (pgdata / "PG_VERSION").exists():
+        print(f"Embedded PostgreSQL cluster already present at {pgdata}; leaving it as is.")
+    else:
+        await ep._initdb()
+    ep._write_conf()
+    print(f"Embedded PostgreSQL initialised at {pgdata} (port {settings.embedded_pg_port}).")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m backend.app.cli", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("reset_admin", help="Clear setup flag so the next boot re-enters the setup flow.")
+    sub.add_parser(
+        "init_embedded_pg",
+        help="initdb + conf for the bundled PostgreSQL without starting it (Windows installer).",
+    )
 
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
     if args.command == "reset_admin":
         return asyncio.run(_reset_admin())
+    if args.command == "init_embedded_pg":
+        return asyncio.run(_init_embedded_pg())
     parser.error(f"Unknown command: {args.command}")
     return 1  # unreachable
 
