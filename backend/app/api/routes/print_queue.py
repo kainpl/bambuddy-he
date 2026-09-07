@@ -220,7 +220,11 @@ async def get_queue_forecast(
     number the queue page's stats bar shows (spec 2026-09-06, Decision 5)."""
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     farm = farm_forecast.simulate_farm(await farm_forecast.load_snapshot(db, now))
-    return FarmForecastOut(free_at=now + timedelta(seconds=farm.free_seconds), free_seconds=farm.free_seconds)
+    return FarmForecastOut(
+        free_at=now + timedelta(seconds=farm.free_seconds),
+        free_seconds=farm.free_seconds,
+        unknown_prints=farm.unknown_prints,
+    )
 
 
 @router.get("/", response_model=list[PrintQueueItemResponse])

@@ -61,6 +61,7 @@
   "Assignment not found": "Призначення не знайдено",
   "At least 2 archives required for comparison": "Для порівняння потрібно щонайменше 2 архіви",
   "At least one calibration option must be selected": "Потрібно вибрати щонайменше один параметр калібрування",
+  "at most 200 ids": "Не більше 200 ids",
   "Attachment file not found": "Файл вкладення не знайдено",
   "Attachment not found": "Вкладення не знайдено",
   "Audio must be .mp3, .wav, .m4a, .aac, or .ogg": "Аудіо має бути .mp3, .wav, .m4a, .aac або .ogg",

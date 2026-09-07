@@ -444,14 +444,34 @@ async def get_orders_forecast(
     _: User | None = RequirePermission(Permission.PROJECTS_READ),
 ):
     """«Ready by» for a page of orders (spec 2026-09-06, Slice B). Advisory:
-    reads the database only, gates nothing. An unknown id is absent."""
-    parsed = list(dict.fromkeys(int(part) for part in (ids or "").split(",") if part.strip().isdigit()))
-    if not parsed or len(parsed) > 200:
+    reads the database only, gates nothing. An unknown id is absent; a closed
+    one answers the empty forecast.
+
+    ``isdecimal`` rather than ``isdigit``: the latter accepts a superscript
+    «²», which ``int()`` then refuses with a 500. The upper bound is the
+    column's — an id past int32 is not an id, and asyncpg raises on it rather
+    than answering «no such order».
+    """
+    parsed: list[int] = []
+    for part in (ids or "").split(","):
+        part = part.strip()
+        if not part.isdecimal():
+            continue
+        value = int(part)
+        if 0 < value < 2**31 and value not in parsed:
+            parsed.append(value)
+    if not parsed:
         raise HTTPException(status_code=400, detail="ids is required")
+    if len(parsed) > 200:
+        raise HTTPException(status_code=400, detail="at most 200 ids")
     now = _utc_now()
     farm, orders = await farm_forecast.forecast_projects(db, parsed, now)
     return ForecastBatchOut(
-        farm=FarmForecastOut(free_at=now + timedelta(seconds=farm.free_seconds), free_seconds=farm.free_seconds),
+        farm=FarmForecastOut(
+            free_at=now + timedelta(seconds=farm.free_seconds),
+            free_seconds=farm.free_seconds,
+            unknown_prints=farm.unknown_prints,
+        ),
         orders=[OrderForecastOut(**_order_forecast_fields(orders[pid])) for pid in parsed if pid in orders],
     )
 

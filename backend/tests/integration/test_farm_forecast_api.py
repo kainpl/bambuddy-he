@@ -122,7 +122,10 @@ async def test_the_snapshot_reads_running_queued_and_staged_work(db_session, far
 
 
 @pytest.mark.asyncio
-async def test_archived_inactive_and_paused_printers_are_not_machines(db_session, farm, printer_factory):
+async def test_archived_printers_are_gone_and_parked_ones_owe_but_take_nothing(db_session, farm, printer_factory):
+    """Availability decides who may RECEIVE work; only archiving retires a
+    machine. A parked printer stays in the snapshot so what it already holds
+    keeps dating its orders (Decision 7)."""
     p1, p2, x1 = farm["printers"]
     gone = await printer_factory(name="gone", model="P1S", archived=True)
     off = await printer_factory(name="off", model="P1S", is_active=False)
@@ -130,7 +133,10 @@ async def test_archived_inactive_and_paused_printers_are_not_machines(db_session
     (await db_session.get(PrinterQueue, x1.id)).is_paused = True
     await db_session.commit()
     snap = await farm_forecast.load_snapshot(db_session, NOW)
-    assert sorted(m.printer_id for m in snap.printers) == sorted([p1.id, p2.id])
+    accepts = {m.printer_id: m.accepts_new_work for m in snap.printers}
+    assert gone.id not in accepts
+    assert accepts[off.id] is False and accepts[x1.id] is False
+    assert accepts[p1.id] is True and accepts[p2.id] is True
 
 
 @pytest.mark.asyncio
@@ -219,6 +225,34 @@ async def test_the_batch_route_refuses_without_ids_and_skips_unknown_ones(commit
 
 
 @pytest.mark.asyncio
+async def test_the_batch_route_refuses_malformed_ids_and_a_page_over_the_cap(committing_client, farm):
+    """Every id malformed is «no ids at all»; too many is its own refusal.
+
+    «²» is `isdigit` but not `isdecimal` — `int()` would raise on it and answer
+    500 — and an id past int32 is not an id either.
+    """
+    r = await committing_client.get("/api/v1/projects/forecast?ids=abc,-1,%C2%B2,99999999999")
+    assert r.status_code == 400 and r.json()["detail"] == "ids is required"
+    over = ",".join(str(i) for i in range(1, 202))
+    r = await committing_client.get(f"/api/v1/projects/forecast?ids={over}")
+    assert r.status_code == 400 and r.json()["detail"] == "at most 200 ids"
+
+
+@pytest.mark.asyncio
+async def test_a_closed_order_answers_an_empty_forecast(committing_client, db_session, farm):
+    """Closed = nothing is planned. The order still EXISTS, so it is in the
+    answer — with no dates rather than dropped, which would read as «unknown id»."""
+    done, _line = await _order(db_session, farm["product"].id, 3, name="C", status="completed")
+    body = (await committing_client.get(f"/api/v1/projects/forecast?ids={done}")).json()
+    (row,) = body["orders"]
+    assert row["project_id"] == done and row["now_eta"] is None and row["now_seconds"] is None
+    assert row["after_eta"] is None and row["machine_seconds"] == 0 and row["ahead_count"] == 0
+    one = await committing_client.get(f"/api/v1/projects/{done}/forecast")
+    assert one.status_code == 200
+    assert one.json()["now_eta"] is None and one.json()["machine_seconds"] == 0 and one.json()["lines"] == []
+
+
+@pytest.mark.asyncio
 async def test_the_order_route_carries_lines_and_the_proposed_split(committing_client, db_session, farm):
     product = farm["product"]
     o, line_id = await _order(db_session, product.id, 3, name="D")
@@ -234,6 +268,13 @@ async def test_the_order_route_carries_lines_and_the_proposed_split(committing_c
 async def test_the_queue_route_matches_the_batch_farm_header(committing_client, db_session, farm):
     p1, _p2, _x1 = farm["printers"]
     db_session.add(PrintQueueItem(queue_id=p1.id, library_file_id=farm["files"][0].id, status="pending"))
+    # A print running with no estimate yet — the 3MF has not been attached. It
+    # is the reason a farm can read «0m» while a printer is busy, so the header
+    # carries the count.
+    db_session.add(
+        PrintArchive(printer_id=p1.id, filename="r", file_path="", file_size=0, status="printing", started_at=NOW)
+    )
     await db_session.commit()
     queue = (await committing_client.get("/api/v1/queue/forecast")).json()
     assert queue["free_seconds"] == H and queue["free_at"].endswith("Z")
+    assert queue["unknown_prints"] == 1

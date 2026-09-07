@@ -60,6 +60,12 @@ class MachineState:
     model: str | None
     running_seconds: float = 0.0
     queued: list[QueuedRow] = field(default_factory=list)  # position order
+    #: May this machine RECEIVE new work? Availability never decides what a
+    #: machine OWES (Decision 7): a parked printer — inactive, operator-paused
+    #: or its queue in ``paused``/``error`` — still finishes what it holds, so
+    #: its rows still date their orders and still count in the farm's «free
+    #: at»; only the placement step skips it.
+    accepts_new_work: bool = True
 
 
 @dataclass
@@ -130,6 +136,10 @@ class OrderForecast:
 @dataclass
 class FarmForecast:
     free_seconds: int
+    #: Σ rows of the snapshot with no estimate — queued rows (the running head
+    #: among them) and staged auto-queue jobs, whatever order they belong to.
+    #: The queue tile says with it why «free at» reads what it reads.
+    unknown_prints: int = 0
 
 
 # ---------- the simulation ----------
@@ -140,6 +150,7 @@ class _Machine:
     printer_id: int
     key: str | None
     free_at: float
+    accepts_new_work: bool = True
 
 
 @dataclass
@@ -157,6 +168,9 @@ class _State:
     unroutable: Counter = field(default_factory=Counter)  # order_id → prints with no printer for their model
     line_unknown: Counter = field(default_factory=Counter)  # the same two, per line
     line_unroutable: Counter = field(default_factory=Counter)
+    #: The snapshot's own estimate-less rows, counted whether or not they name
+    #: an order — the farm header's counter, not any order's.
+    farm_unknown: int = 0
 
     def farm_finish(self) -> float:
         return max((m.free_at for m in self.machines), default=0.0)
@@ -168,19 +182,26 @@ def _bump(finish: dict[int, float], order_id: int | None, at: float) -> None:
 
 
 def _earliest(machines: list[_Machine], key: str | None) -> _Machine | None:
+    """The soonest-free machine of ``key`` that may take new work — a parked
+    printer owes what it holds but is never given more (Decision 7)."""
     if key is None:
         return None
-    candidates = [m for m in machines if m.key == key]
+    candidates = [m for m in machines if m.key == key and m.accepts_new_work]
     return min(candidates, key=lambda m: (m.free_at, m.printer_id)) if candidates else None
 
 
 def _initial_state(snapshot: FarmSnapshot) -> _State:
-    """What every printer already owes, then the staging area dealt out longest-first."""
+    """What every printer already owes, then the staging area dealt out longest-first.
+
+    Every machine of the snapshot is walked, parked ones included: what a
+    printer already holds finishes there whether or not it may take more.
+    """
     state = _State(machines=[])
     for machine in snapshot.printers:
         t = max(0.0, float(machine.running_seconds))
         for row in machine.queued:
             if row.seconds is None:
+                state.farm_unknown += 1
                 if row.order_id is not None:
                     state.unknown[row.order_id] += 1
                 continue
@@ -188,9 +209,17 @@ def _initial_state(snapshot: FarmSnapshot) -> _State:
                 continue
             t += row.seconds
             _bump(state.order_finish, row.order_id, t)
-        state.machines.append(_Machine(printer_id=machine.printer_id, key=model_key(machine.model), free_at=t))
+        state.machines.append(
+            _Machine(
+                printer_id=machine.printer_id,
+                key=model_key(machine.model),
+                free_at=t,
+                accepts_new_work=machine.accepts_new_work,
+            )
+        )
     for job in sorted(snapshot.staged, key=lambda j: -(j.seconds or 0)):
         if not job.seconds or job.seconds <= 0:
+            state.farm_unknown += 1
             if job.order_id is not None:
                 state.unknown[job.order_id] += 1
             continue
@@ -262,8 +291,10 @@ def machine_seconds_of(plan: OrderPlan | None) -> int | None:
 
 
 def simulate_farm(snapshot: FarmSnapshot) -> FarmForecast:
-    """When the last printer is free, given what the queues already hold."""
-    return FarmForecast(free_seconds=int(round(_initial_state(snapshot).farm_finish())))
+    """When the last printer is free, given what the queues already hold — and
+    how many of those rows carry no estimate, so a small number can say why."""
+    state = _initial_state(snapshot)
+    return FarmForecast(free_seconds=int(round(state.farm_finish())), unknown_prints=state.farm_unknown)
 
 
 def _eta(now: datetime, seconds: float | None) -> tuple[datetime | None, int | None]:
@@ -368,31 +399,36 @@ def forecast_orders(
 async def load_snapshot(db: AsyncSession, now: datetime) -> FarmSnapshot:
     """What the farm already owes, from the database alone.
 
-    Machines = printers that are active and not archived, whose queue is
-    neither operator-paused nor in ``paused``/``error``. Running = the HEAD of
-    the machine's queued work: the printing archive, timed by its remaining
-    seconds (estimate minus elapsed, never negative; no ``started_at`` = the
-    whole estimate), or ``None`` when it has no estimate yet. Queued = the
-    queue's pending rows in position order, timed by the reader the queue
-    response uses. Staged = pending auto-queue rows nobody has handed to a
-    printer yet. ``PrinterQueue.id == printer_id`` is the invariant the
-    queued-rows join leans on.
+    Machines = every printer that is not archived. Availability decides who may
+    RECEIVE work, never what a machine OWES (Decision 7): an inactive or paused
+    printer stays in the snapshot with ``accepts_new_work=False``, so its
+    running and queued rows still date their orders and still count in the
+    farm's «free at» — dropping it made that work vanish with no counter.
+    Running = the HEAD of the machine's queued work: the printing archive,
+    timed by its remaining seconds (estimate minus elapsed, never negative; no
+    ``started_at`` = the whole estimate), or ``None`` when it has no estimate
+    yet. Queued = the queue's pending rows in position order, timed by the
+    reader the queue response uses. Staged = pending auto-queue rows nobody has
+    handed to a printer yet. ``PrinterQueue.id == printer_id`` is the invariant
+    the queued-rows join leans on.
     """
     # Columns, not the ``Printer`` entity: hydrating the mapped object would
     # fire its ``lazy="selectin"`` relationships (``location``, ``tags``) as a
     # second, unwanted "FROM printers" round trip on every call.
     printers = (
         await db.execute(
-            select(Printer.id, Printer.model, PrinterQueue.status, PrinterQueue.is_paused)
+            select(Printer.id, Printer.model, Printer.is_active, PrinterQueue.status, PrinterQueue.is_paused)
             .outerjoin(PrinterQueue, PrinterQueue.printer_id == Printer.id)
-            .where(Printer.is_active.is_(True), Printer.archived.is_(False))
+            .where(Printer.archived.is_(False))
         )
     ).all()
     machines: dict[int, MachineState] = {}
-    for printer_id, model, queue_status, is_paused in printers:
-        if is_paused or queue_status in ("paused", "error"):
-            continue
-        machines[printer_id] = MachineState(printer_id=printer_id, model=model)
+    for printer_id, model, is_active, queue_status, is_paused in printers:
+        machines[printer_id] = MachineState(
+            printer_id=printer_id,
+            model=model,
+            accepts_new_work=bool(is_active) and not is_paused and queue_status not in ("paused", "error"),
+        )
     staged = await _staged(db)
     if not machines:
         return FarmSnapshot(printers=[], staged=staged)
@@ -468,20 +504,48 @@ async def rank_active_orders(db: AsyncSession) -> list[int]:
     return [pid for pid, _priority, _due, _created in ranked]
 
 
+def _empty_forecast(project_id: int) -> OrderForecast:
+    """A closed order's answer: it exists, and nothing about it is planned."""
+    return OrderForecast(
+        project_id=project_id,
+        now_eta=None,
+        now_seconds=None,
+        after_eta=None,
+        after_seconds=None,
+        machine_seconds=0,
+        unknown_prints=0,
+        unroutable_prints=0,
+        ahead_count=0,
+        lines=[],
+    )
+
+
 async def forecast_projects(
     db: AsyncSession, project_ids: list[int], now: datetime
 ) -> tuple[FarmForecast, dict[int, OrderForecast]]:
     """The batch: one snapshot, the ranking, the plans of the targets and of
-    everything ranked ahead of any target, one simulation walk. An id that
-    names no order is absent from the answer."""
+    everything ranked ahead of any target, one simulation walk.
+
+    A CLOSED order is never planned (Decision 9) — the product rule everywhere
+    else is «closed = nothing is planned». An inactive id that exists answers
+    the empty forecast, so neither route refuses it; an id that names no order
+    at all is absent from the answer.
+    """
     snapshot = await load_snapshot(db, now)
     ranked = await rank_active_orders(db)
-    wanted = set(project_ids)
-    # An inactive target (completed / cancelled) is not in the ranking: it is
-    # forecast after every active order, with all of them ahead of it.
-    walk = ranked + [pid for pid in project_ids if pid not in ranked]
-    last_target = max((i for i, pid in enumerate(walk) if pid in wanted), default=-1)
-    walk = walk[: last_target + 1]
+    wanted = list(dict.fromkeys(project_ids))
+    # Existence AND status in one statement: the walk needs to know which
+    # wanted ids are active, and the answer needs to know which of the rest
+    # exist at all.
+    status_rows = (
+        (await db.execute(select(Project.id, Project.status).where(Project.id.in_(wanted)))).all() if wanted else []
+    )
+    status_of: dict[int, str | None] = dict(status_rows)
+    active_targets = {pid for pid in wanted if status_of.get(pid) == "active"}
+    walk = ranked[: max((i for i, pid in enumerate(ranked) if pid in active_targets), default=-1) + 1]
     plans: dict[int, OrderPlan] = await plan_for_orders(db, walk) if walk else {}
-    targets = {pid for pid in wanted if pid in plans}
-    return simulate_farm(snapshot), forecast_orders(snapshot, plans, walk, targets, now)
+    out = forecast_orders(snapshot, plans, walk, {pid for pid in active_targets if pid in plans}, now)
+    for pid in wanted:
+        if pid not in out and pid in status_of:
+            out[pid] = _empty_forecast(pid)
+    return simulate_farm(snapshot), out

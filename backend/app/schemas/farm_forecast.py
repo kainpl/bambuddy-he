@@ -8,6 +8,9 @@ from backend.app.schemas.print_queue import UTCDatetime
 class FarmForecastOut(BaseModel):
     free_at: UTCDatetime
     free_seconds: int
+    #: Rows of the snapshot with no estimate — why «free at» can read zero
+    #: while printers are busy (ruling 2026-09-07, final review I2).
+    unknown_prints: int = 0
 
 
 class RowForecastOut(BaseModel):

@@ -21,8 +21,14 @@ NOW = datetime(2026, 9, 6, 12, 0, 0)
 H = 3600
 
 
-def _machine(pid, model="P1S", running=0, queued=()):
-    return MachineState(printer_id=pid, model=model, running_seconds=running, queued=[QueuedRow(*q) for q in queued])
+def _machine(pid, model="P1S", running=0, queued=(), accepts=True):
+    return MachineState(
+        printer_id=pid,
+        model=model,
+        running_seconds=running,
+        queued=[QueuedRow(*q) for q in queued],
+        accepts_new_work=accepts,
+    )
 
 
 def _plan(order_id, rows):
@@ -174,3 +180,40 @@ def test_an_overrun_print_advances_nothing_and_is_not_unknown():
     snap = FarmSnapshot(printers=[_machine(1, queued=[(7, 0), (7, H)])], staged=[])
     f = forecast_orders(snap, {}, [7], {7}, NOW)[7]
     assert f.unknown_prints == 0 and f.now_seconds == H
+
+
+def test_a_parked_printer_finishes_what_it_holds_and_takes_nothing_new():
+    """Availability decides who RECEIVES work, never what a machine OWES.
+
+    Printer 1 is parked (maintenance / a paused queue) with one of order 7's
+    hours already on it. That hour still dates the order and still counts in
+    the farm's «free at» — but all three of the order's new prints go to the
+    healthy printer 2 and run serially there (3 h); handing the parked machine
+    its share would read 2 h, promising a date no operator will meet.
+    """
+    printers = [_machine(1, accepts=False, queued=[(7, H)]), _machine(2)]
+    f = _one(FarmSnapshot(printers=printers, staged=[]), _plan(7, [(100, 3, H, "P1S", [])]))
+    assert f.now_seconds == 3 * H
+    # Nobody but the parked printer owes anything: its hour IS the farm's «free at».
+    assert simulate_farm(FarmSnapshot(printers=printers, staged=[])).free_seconds == H
+
+
+def test_the_farm_counts_its_estimate_less_rows():
+    """The queue tile's «why»: rows with no estimate, whoever they belong to."""
+    snap = FarmSnapshot(
+        printers=[_machine(1, queued=[(None, None)])],
+        staged=[StagedJob(order_id=None, target_model="P1S", seconds=None)],
+    )
+    assert simulate_farm(snap).unknown_prints == 2
+
+
+def test_a_row_whose_own_model_is_absent_routes_to_its_alternative():
+    """One P1S in the farm and a row sliced for an X1C: the alternative carries
+    the whole row — nothing is unroutable, and the split says so."""
+    f = _one(
+        FarmSnapshot(printers=[_machine(1, "P1S")], staged=[]),
+        _plan(7, [(100, 2, H, "X1C", [(200, "P1S", H)])]),
+    )
+    assert f.unroutable_prints == 0
+    assert f.lines[0].rows[0].proposed_split == {100: 0, 200: 2}
+    assert f.now_seconds == 2 * H
