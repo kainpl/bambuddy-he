@@ -112,17 +112,20 @@ def _ensure_embedded_password(password_file: Path) -> str:
     return token
 
 
-def _embedded_pg_port_for(data_dir: Path) -> int:
+def _embedded_pg_port_for(data_dir: Path, pinned: int | None = None) -> int:
     """The bundled server's port: pinned by EMBEDDED_PG_PORT, else chosen once.
 
-    Without the env var, the first start takes a free port and remembers it in
+    Without the variable, the first start takes a free port and remembers it in
     ``DATA_DIR/postgres/port`` so it stays put across restarts — an advanced
     user finds it there next to the password file and connects with any client.
-    Setting EMBEDDED_PG_PORT pins a known port (6432, say) for the same purpose.
+    Setting EMBEDDED_PG_PORT pins a known port (6432, say) for the same purpose;
+    ``pinned`` is that value when it came through .env rather than the process.
     """
-    pinned = (os.environ.get("EMBEDDED_PG_PORT") or "").strip()
     if pinned:
         return int(pinned)
+    from_env = (os.environ.get("EMBEDDED_PG_PORT") or "").strip()
+    if from_env:
+        return int(from_env)
     port_file = data_dir / "postgres" / "port"
     if port_file.exists():
         return int(port_file.read_text(encoding="utf-8").strip())
@@ -239,14 +242,22 @@ class Settings(BaseSettings):
         # Recalculate paths derived from data_dir
         object.__setattr__(self, "base_dir", self.data_dir)
         object.__setattr__(self, "archive_dir", self.data_dir / "archive")
-        # Recalculate database_url only for SQLite (don't overwrite external DATABASE_URL)
-        if _embedded_db:
+        # DATABASE_URL reaches us two ways: from the process environment, classified
+        # at import above, or from .env, which pydantic pours into the field only
+        # now — as the raw word "embedded" or a URL. Resolve from the field's final
+        # value so both routes end in the same place.
+        raw = (self.database_url or "").strip()
+        embedded = self.embedded_postgres or classify_database_url(raw)[0]
+        if embedded:
             pgdata, password_file = _embedded_pg_paths(self.data_dir)
+            port = _embedded_pg_port_for(self.data_dir, pinned=self.embedded_pg_port or None)
+            object.__setattr__(self, "embedded_postgres", True)
             object.__setattr__(self, "embedded_pg_data_dir", pgdata)
             object.__setattr__(self, "embedded_pg_password_file", password_file)
-            object.__setattr__(self, "embedded_pg_port", _embedded_pg_port_for(self.data_dir))
-            object.__setattr__(self, "database_url", _embedded_pg_url(self.data_dir, self.embedded_pg_port))
-        elif not _external_db_url:
+            object.__setattr__(self, "embedded_pg_port", port)
+            object.__setattr__(self, "database_url", _embedded_pg_url(self.data_dir, port))
+        elif not _external_db_url and raw.startswith("sqlite"):
+            # Our own SQLite default: follow data_dir now that it is absolute
             db_path = self.data_dir / "bamdude.db"
             object.__setattr__(self, "database_url", f"sqlite+aiosqlite:///{db_path}")
 

@@ -86,3 +86,43 @@ class TestEmbeddedPort:
         assert config._embedded_pg_port_for(tmp_path) == 55555
         monkeypatch.setenv("EMBEDDED_PG_PORT", "6432")
         assert config._embedded_pg_port_for(tmp_path) == 6432
+
+
+class TestSettingsResolveFromDotenvValues:
+    """pydantic fills the fields from .env only at construction, after the
+    import-time classification ran on the process environment — so the raw
+    word "embedded" (and EMBEDDED_PG_PORT) must be resolved in post-init too.
+    The real farm .env carried exactly that."""
+
+    def test_raw_embedded_from_dotenv_resolves_to_the_bundled_server(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("EMBEDDED_PG_PORT", raising=False)
+        monkeypatch.setattr(config, "_embedded_pg_major", lambda: "18")
+        s = config.Settings(_env_file=None, data_dir=tmp_path, database_url="embedded", embedded_pg_port=6432)
+        assert s.embedded_postgres is True
+        assert s.embedded_pg_port == 6432
+        assert s.embedded_pg_data_dir == tmp_path / "postgres" / "18"
+        assert s.embedded_pg_password_file.exists()
+        assert s.database_url.startswith("postgresql+asyncpg://bamdude:") and s.database_url.endswith(
+            "@127.0.0.1:6432/bamdude"
+        )
+
+    def test_raw_embedded_without_a_port_chooses_and_remembers_one(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("EMBEDDED_PG_PORT", raising=False)
+        monkeypatch.setattr(config, "_embedded_pg_major", lambda: "18")
+        s = config.Settings(_env_file=None, data_dir=tmp_path, database_url="embedded", embedded_pg_port=0)
+        assert s.embedded_postgres is True
+        assert s.embedded_pg_port > 1024
+        assert (tmp_path / "postgres" / "port").read_text(encoding="utf-8").strip() == str(s.embedded_pg_port)
+
+    def test_a_dotenv_postgres_url_stays_external(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        url = "postgresql+asyncpg://u:p@h:5432/db"
+        s = config.Settings(_env_file=None, data_dir=tmp_path, database_url=url)
+        assert s.embedded_postgres is False and s.database_url == url
+
+    def test_garbage_in_dotenv_is_refused_at_construction(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        with pytest.raises(RuntimeError):
+            config.Settings(_env_file=None, data_dir=tmp_path, database_url="mysql://x")
