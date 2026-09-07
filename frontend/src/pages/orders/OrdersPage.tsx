@@ -11,6 +11,7 @@ import { ProjectsTabs } from '../../components/projects/ProjectsTabs';
 import { OrderCard } from '../../components/projects/OrderCard';
 import { OrdersTable } from '../../components/projects/OrdersTable';
 import { OrderModal } from '../../components/projects/OrderModal';
+import { FilamentStrip } from '../../components/projects/FilamentStrip';
 import { ConfirmModal } from '../../components/ConfirmModal';
 import { Button } from '../../components/Button';
 import { invalidateAfterDelete, invalidateOrderViews } from '../../utils/queryInvalidation';
@@ -143,6 +144,8 @@ export function OrdersPage() {
     enabled: view === 'table' && forecastIds.length > 0,
     staleTime: 30_000,
   });
+  // The farm-wide filament strip over the list — every active order, not just the visible tab/filter.
+  const filamentQuery = useQuery({ queryKey: ['orders-filament'], queryFn: api.getOrdersFilament, staleTime: 30_000 });
   // `undefined` while loading — every cell reads «…». A FAILED fetch is its
   // own state, passed down as `forecastError`: mapping it to `{}` here made
   // every row read «No estimate», which means «the farm could not place this
@@ -289,6 +292,8 @@ export function OrdersPage() {
           ))}
         </div>
       </div>
+
+      {filamentQuery.data && <FilamentStrip farm={filamentQuery.data} />}
 
       {!isLoading && visible.length === 0 && <p className="text-bambu-gray text-sm">{t(`orders.list.empty.${tab}`)}</p>}
 

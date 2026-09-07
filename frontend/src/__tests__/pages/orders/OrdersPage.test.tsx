@@ -9,12 +9,15 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render } from '../../utils';
 import { api } from '../../../api/client';
+import type { FarmNeeds } from '../../../api/client';
 import { OrdersPage } from '../../../pages/orders/OrdersPage';
 
 const rows = [
   { id: 1, name: 'A', status: 'active', customer_id: 1, customer_name: 'ACME', ordered: 2, printed: 1, from_stock_units: 0, progress: 0.5, lines_count: 1, priority: 'normal', line_products: [] },
   { id: 2, name: 'B', status: 'completed', customer_id: null, customer_name: null, ordered: 1, printed: 1, from_stock_units: 0, progress: 1, lines_count: 1, priority: 'normal', line_products: [] },
 ];
+
+const EMPTY_FARM: FarmNeeds = { rows: [], orders_count: 0, unknown_prints: 0, stock_unavailable: false, assumptions: ['slicer_estimate'] };
 
 afterEach(() => {
   window.history.pushState({}, '', '/');
@@ -24,6 +27,7 @@ describe('OrdersPage', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.spyOn(api, 'getCustomers').mockResolvedValue([{ id: 1, name: 'ACME', figures: {} }] as never);
+    vi.spyOn(api, 'getOrdersFilament').mockResolvedValue(EMPTY_FARM);
   });
   it('asks the server for the active tab by default and counts every tab from the full list', async () => {
     const get = vi.spyOn(api, 'getOrders').mockResolvedValue(rows as never);
@@ -103,5 +107,30 @@ describe('OrdersPage', () => {
     fireEvent.click(await screen.findByRole('button', { name: /^confirm$/i }));
 
     await waitFor(() => expect(client.getQueryState(['project', 1])).toBeUndefined());
+  });
+
+  it('shows a chip per material the active orders need, amber when the shelf is short', async () => {
+    vi.spyOn(api, 'getOrdersFilament').mockResolvedValue({
+      ...EMPTY_FARM, orders_count: 3,
+      rows: [
+        { material: 'PETG', colour: 'black', need_g: 3200, have_g: 1100, have_type_g: 4200, short_g: 2100, unknown_prints: 0, orders_count: 2 },
+        { material: 'PLA', colour: null, need_g: 400, have_g: 900, have_type_g: 900, short_g: 0, unknown_prints: 0, orders_count: 1 },
+      ],
+    });
+    render(<OrdersPage />);
+    const chip = await screen.findByTestId('filament-strip-PETG-black');
+    expect(chip).toHaveTextContent('PETG · black 3.2kg / 1.1kg');
+    expect(chip).toHaveAttribute('data-short', 'true');
+    expect(chip).toHaveAttribute('title', '2 orders');
+    expect(screen.getByTestId('filament-strip-PLA')).toHaveAttribute('data-short', 'false');
+  });
+
+  it('collapses to one line when nothing is short, and hides with no rows', async () => {
+    vi.spyOn(api, 'getOrdersFilament').mockResolvedValue({
+      ...EMPTY_FARM, orders_count: 1,
+      rows: [{ material: 'PLA', colour: null, need_g: 400, have_g: 900, have_type_g: 900, short_g: 0, unknown_prints: 0, orders_count: 1 }],
+    });
+    render(<OrdersPage />);
+    expect(await screen.findByText('Filament: everything is on the shelf')).toBeInTheDocument();
   });
 });
