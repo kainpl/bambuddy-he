@@ -150,28 +150,12 @@ def unzip(zip_path: Path, dest: Path) -> None:
         zf.extractall(dest)
 
 
-def stage_embedded_python(reuse: bool = False) -> Path:
-    """Download and configure the embedded Python distribution.
+def configure_python_path(target: Path) -> None:
+    """Pin sys.path for the embedded distribution via its ``._pth`` file.
 
-    ``reuse`` keeps an already-staged tree instead of re-extracting it. Without
-    it, ``--skip-pip`` was a trap: this function wiped the tree every run, so
-    skipping the install left a Python holding nothing but pip and setuptools —
-    and the installer compiled and shipped with no application dependencies at
-    all, silently.
+    Applied on every build, including one that reuses an already-staged tree —
+    otherwise a newly added path entry would silently miss the reused payload.
     """
-    target = STAGING / "python"
-    if reuse and (target / "python.exe").exists():
-        log(f"reusing already-staged Python at {target}")
-        return target
-    if target.exists():
-        shutil.rmtree(target)
-
-    zip_path = download(
-        PYTHON_EMBED_URL,
-        DOWNLOADS / f"python-{PYTHON_VERSION}-embed-amd64.zip",
-    )
-    unzip(zip_path, target)
-
     # Edit pythonXY._pth to allow site-packages. The embedded distribution
     # ships with `import site` commented out — uncomment it so pip-installed
     # packages in Lib\site-packages are importable.
@@ -185,7 +169,42 @@ def stage_embedded_python(reuse: bool = False) -> Path:
     # doesn't include this path by default even with `import site` enabled.
     if "Lib\\site-packages" not in content and "Lib/site-packages" not in content:
         content = content.rstrip() + "\nLib\\site-packages\n"
+    # And the application tree itself, so `backend` is importable. A ._pth file
+    # pins sys.path exactly: the working directory is NOT added and PYTHONPATH is
+    # ignored, so `python -m backend.app.cli ...` failed with "No module named
+    # backend" on every install — which broke the documented reset_admin recovery
+    # and, once the installer started calling the CLI, the PostgreSQL service
+    # setup. The service only worked because uvicorn inserts the working
+    # directory itself. Entries are relative to this file: python\ -> ..\app.
+    if "..\\app" not in content:
+        content = content.rstrip() + "\n..\\app\n"
     pth.write_text(content)
+
+
+def stage_embedded_python(reuse: bool = False) -> Path:
+    """Download and configure the embedded Python distribution.
+
+    ``reuse`` keeps an already-staged tree instead of re-extracting it. Without
+    it, ``--skip-pip`` was a trap: this function wiped the tree every run, so
+    skipping the install left a Python holding nothing but pip and setuptools —
+    and the installer compiled and shipped with no application dependencies at
+    all, silently.
+    """
+    target = STAGING / "python"
+    if reuse and (target / "python.exe").exists():
+        log(f"reusing already-staged Python at {target}")
+        configure_python_path(target)
+        return target
+    if target.exists():
+        shutil.rmtree(target)
+
+    zip_path = download(
+        PYTHON_EMBED_URL,
+        DOWNLOADS / f"python-{PYTHON_VERSION}-embed-amd64.zip",
+    )
+    unzip(zip_path, target)
+
+    configure_python_path(target)
 
     # Bootstrap pip
     get_pip = download(GET_PIP_URL, DOWNLOADS / "get-pip.py")

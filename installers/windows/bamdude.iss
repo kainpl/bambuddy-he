@@ -1,4 +1,4 @@
-; BamDude Windows Installer — Inno Setup script
+﻿; BamDude Windows Installer — Inno Setup script
 ;
 ; Builds a self-contained installer that lays down:
 ;   - embedded Python 3.12 + pre-installed venv
@@ -49,11 +49,14 @@ ArchitecturesInstallIn64BitMode=x64compatible
 ; Admin required: we register a Windows service and write to ProgramData
 PrivilegesRequired=admin
 PrivilegesRequiredOverridesAllowed=
-; BamDude branding — bamdude.ico is the brand pack's app-icon.ico (16/32/48/
-; 64/128/256, dark tile), copied from bamdude.top/public/brand/; regenerate
-; from the pack, never edit here. Lives next to this .iss so the
-; SourcePath-relative reference works during compile, and the [Files] entry
-; stages it into {app} for Add/Remove Programs.
+; BamDude branding — bamdude.ico is the brand pack's favicon.ico (16/32/48/
+; 64/128/256, dark bars on transparent), copied from bamdude.top/public/brand/;
+; regenerate from the pack, never edit here. The dark-bars variant, not the
+; dark-tile app-icon.ico: this icon is shown on light surfaces (Explorer, the
+; Programs list, the wizard), where the tile's own dark ground swallowed the
+; mark. Lives next to this .iss so the SourcePath-relative reference works
+; during compile, and the [Files] entry stages it into {app} for Add/Remove
+; Programs.
 SetupIconFile=bamdude.ico
 UninstallDisplayIcon={app}\bamdude.ico
 ; Don't allow installing to a network drive — service won't start cleanly
@@ -64,11 +67,63 @@ CloseApplications=no
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
-Name: "german"; MessagesFile: "compiler:Languages\German.isl"
+Name: "ukrainian"; MessagesFile: "compiler:Languages\Ukrainian.isl"
+
+; Every string the wizard shows that is ours rather than Inno's. Keep both
+; languages in step — a key present in only one falls back to the other
+; language's text, which reads like a bug to the user.
+[CustomMessages]
+english.TaskDesktopIcon=Create a desktop shortcut
+english.TaskGroupShortcuts=Additional shortcuts:
+english.TaskFirewall=Add Windows Firewall rule for BamDude (port {#DefaultPort})
+english.TaskGroupNetwork=Network:
+english.IconDashboard=Open BamDude Dashboard
+english.IconLogs=BamDude Logs
+english.IconUninstall=Uninstall BamDude
+english.StatusRegisterService=Registering BamDude service...
+english.StatusFirewall=Adding firewall rule...
+english.DbPageCaption=Database
+english.DbPageDescription=Where should BamDude keep its data?
+english.DbPageSubCaption=SQLite needs nothing and is a fine choice for most farms. PostgreSQL suits large, busy farms.
+english.DbOptSqlite=SQLite (a single file, no server - recommended)
+english.DbOptEmbeddedService=Bundled PostgreSQL 18, as its own Windows service (most robust)
+english.DbOptEmbeddedChild=Bundled PostgreSQL 18, started and stopped by BamDude (simpler)
+english.DbOptExternal=An external PostgreSQL server (enter its URL)
+english.UrlPageCaption=External PostgreSQL
+english.UrlPageDescription=Connection URL
+english.UrlPageSubCaption=The database must already exist - BamDude creates the tables, not the database.
+english.UrlPrompt=postgresql+asyncpg://user:password@host:5432/bamdude
+english.UrlRequired=Please enter the PostgreSQL connection URL, or go back and choose SQLite.
+english.UninstallDeleteData=Also delete all BamDude data (database, print archives, settings) in%n%1?%n%nChoose No to keep it for a future reinstall.
+english.ServiceSetupFailed=BamDude was installed, but its Windows service could not be registered, so nothing is running yet.%n%nThe setup log is at:%n%1%n%nOpen it to see what failed, then re-run this installer.
+
+ukrainian.TaskDesktopIcon=Створити ярлик на робочому столі
+ukrainian.TaskGroupShortcuts=Додаткові ярлики:
+ukrainian.TaskFirewall=Додати правило брандмауера Windows для BamDude (порт {#DefaultPort})
+ukrainian.TaskGroupNetwork=Мережа:
+ukrainian.IconDashboard=Відкрити панель BamDude
+ukrainian.IconLogs=Журнали BamDude
+ukrainian.IconUninstall=Видалити BamDude
+ukrainian.StatusRegisterService=Реєстрація служби BamDude...
+ukrainian.StatusFirewall=Додавання правила брандмауера...
+ukrainian.DbPageCaption=База даних
+ukrainian.DbPageDescription=Де BamDude має зберігати дані?
+ukrainian.DbPageSubCaption=SQLite не потребує нічого і підходить більшості ферм. PostgreSQL — для великих завантажених ферм.
+ukrainian.DbOptSqlite=SQLite (один файл, без сервера — рекомендовано)
+ukrainian.DbOptEmbeddedService=Вбудований PostgreSQL 18 окремою службою Windows (найнадійніше)
+ukrainian.DbOptEmbeddedChild=Вбудований PostgreSQL 18 під керуванням BamDude (простіше)
+ukrainian.DbOptExternal=Зовнішній сервер PostgreSQL (вкажіть URL)
+ukrainian.UrlPageCaption=Зовнішній PostgreSQL
+ukrainian.UrlPageDescription=URL підключення
+ukrainian.UrlPageSubCaption=База вже має існувати — BamDude створює таблиці, а не базу.
+ukrainian.UrlPrompt=postgresql+asyncpg://user:password@host:5432/bamdude
+ukrainian.UrlRequired=Введіть URL підключення до PostgreSQL або поверніться назад і оберіть SQLite.
+ukrainian.UninstallDeleteData=Також видалити всі дані BamDude (база, архіви друку, налаштування) у%n%1?%n%nОберіть «Ні», щоб зберегти їх для наступного встановлення.
+ukrainian.ServiceSetupFailed=BamDude встановлено, але службу Windows зареєструвати не вдалося, тож зараз нічого не запущено.%n%nЖурнал встановлення:%n%1%n%nВідкрийте його, щоб побачити причину, потім запустіть інсталятор ще раз.
 
 [Tasks]
-Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
-Name: "firewallrule"; Description: "Add Windows Firewall rule for BamDude (port {#DefaultPort})"; GroupDescription: "Network:"
+Name: "desktopicon"; Description: "{cm:TaskDesktopIcon}"; GroupDescription: "{cm:TaskGroupShortcuts}"; Flags: unchecked
+Name: "firewallrule"; Description: "{cm:TaskFirewall}"; GroupDescription: "{cm:TaskGroupNetwork}"
 
 [Files]
 ; Embedded Python (entire tree)
@@ -93,24 +148,24 @@ Name: "{commonappdata}\BamDude\data"; Permissions: users-modify
 Name: "{commonappdata}\BamDude\logs"; Permissions: users-modify
 
 [Icons]
-Name: "{group}\Open BamDude Dashboard"; Filename: "http://localhost:{#DefaultPort}"; IconFilename: "{app}\bamdude.ico"
-Name: "{group}\BamDude Logs"; Filename: "{commonappdata}\BamDude\logs"
-Name: "{group}\Uninstall BamDude"; Filename: "{uninstallexe}"
+Name: "{group}\{cm:IconDashboard}"; Filename: "http://localhost:{#DefaultPort}"; IconFilename: "{app}\bamdude.ico"
+Name: "{group}\{cm:IconLogs}"; Filename: "{commonappdata}\BamDude\logs"
+Name: "{group}\{cm:IconUninstall}"; Filename: "{uninstallexe}"
 Name: "{commondesktop}\BamDude"; Filename: "http://localhost:{#DefaultPort}"; IconFilename: "{app}\bamdude.ico"; Tasks: desktopicon
 
 [Run]
 ; Register and start the Windows service. The trailing arguments (database
 ; backend + optional URL) are built by GetInstallServiceParams in [Code] from
 ; the storage-chooser wizard page.
-Filename: "{app}\service\install-service.bat"; Parameters: "{code:GetInstallServiceParams}"; Flags: runhidden waituntilterminated; StatusMsg: "Registering BamDude service..."
+Filename: "{app}\service\install-service.bat"; Parameters: "{code:GetInstallServiceParams}"; Flags: runhidden waituntilterminated; StatusMsg: "{cm:StatusRegisterService}"
 
 ; Open Windows Firewall on the dashboard port. We do this only if the
 ; user opted in via the firewallrule task — some environments manage
 ; firewall centrally and prefer to handle this themselves.
-Filename: "netsh.exe"; Parameters: "advfirewall firewall add rule name=""BamDude Dashboard"" dir=in action=allow protocol=TCP localport={#DefaultPort}"; Flags: runhidden waituntilterminated; Tasks: firewallrule; StatusMsg: "Adding firewall rule..."
+Filename: "netsh.exe"; Parameters: "advfirewall firewall add rule name=""BamDude Dashboard"" dir=in action=allow protocol=TCP localport={#DefaultPort}"; Flags: runhidden waituntilterminated; Tasks: firewallrule; StatusMsg: "{cm:StatusFirewall}"
 
 ; Open the dashboard in the user's default browser at the end of install
-Filename: "http://localhost:{#DefaultPort}"; Flags: shellexec postinstall nowait skipifsilent; Description: "Open BamDude Dashboard"
+Filename: "http://localhost:{#DefaultPort}"; Flags: shellexec postinstall nowait skipifsilent; Description: "{cm:IconDashboard}"
 
 [UninstallRun]
 ; Stop + deregister the service before file removal. RunOnceId makes the
@@ -178,18 +233,18 @@ var
   ExistingUrl: String;
 begin
   StoragePage := CreateInputOptionPage(wpSelectDir,
-    'Database', 'Where should BamDude keep its data?',
-    'SQLite needs nothing and is a fine choice for most farms. PostgreSQL suits large, busy farms.',
+    CustomMessage('DbPageCaption'), CustomMessage('DbPageDescription'),
+    CustomMessage('DbPageSubCaption'),
     True, False);
-  StoragePage.Add('SQLite (a single file, no server - recommended)');
-  StoragePage.Add('Bundled PostgreSQL 18, as its own Windows service (most robust)');
-  StoragePage.Add('Bundled PostgreSQL 18, started and stopped by BamDude (simpler)');
-  StoragePage.Add('An external PostgreSQL server (enter its URL)');
+  StoragePage.Add(CustomMessage('DbOptSqlite'));
+  StoragePage.Add(CustomMessage('DbOptEmbeddedService'));
+  StoragePage.Add(CustomMessage('DbOptEmbeddedChild'));
+  StoragePage.Add(CustomMessage('DbOptExternal'));
 
   UrlPage := CreateInputQueryPage(StoragePage.ID,
-    'External PostgreSQL', 'Connection URL',
-    'The database must already exist - BamDude creates the tables, not the database.');
-  UrlPage.Add('postgresql+asyncpg://user:password@host:5432/bamdude', False);
+    CustomMessage('UrlPageCaption'), CustomMessage('UrlPageDescription'),
+    CustomMessage('UrlPageSubCaption'));
+  UrlPage.Add(CustomMessage('UrlPrompt'), False);
 
   StoragePage.SelectedValueIndex := DetectExistingChoice(ExistingUrl);
   if ExistingUrl <> '' then
@@ -209,7 +264,7 @@ begin
   Result := True;
   if (CurPageID = UrlPage.ID) and (Trim(UrlPage.Values[0]) = '') then
   begin
-    MsgBox('Please enter the PostgreSQL connection URL, or go back and choose SQLite.', mbError, MB_OK);
+    MsgBox(CustomMessage('UrlRequired'), mbError, MB_OK);
     Result := False;
   end;
 end;
@@ -268,6 +323,27 @@ begin
   end;
 end;
 
+// install-service.bat runs hidden and Inno does not abort on a non-zero [Run]
+// exit code, so a failed service registration used to leave the user with a
+// finished-looking install, no service, an empty data directory and no message
+// at all. Check for the service and point at the log if it is not there.
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  ResultCode: Integer;
+  Ok: Boolean;
+  LogPath: String;
+begin
+  if CurStep <> ssPostInstall then
+    Exit;
+  // A line may not START with '[' anywhere in the script — the parser reads
+  // that as a section tag, even inside [Code] — so the message argument is
+  // bound to a variable first rather than written as an inline array.
+  LogPath := ExpandConstant('{commonappdata}\BamDude\logs\install-service.log');
+  Ok := Exec(ExpandConstant('{sys}\sc.exe'), 'query BamDude', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  if (not Ok) or (ResultCode <> 0) then
+    MsgBox(FmtMessage(CustomMessage('ServiceSetupFailed'), [LogPath]), mbError, MB_OK);
+end;
+
 function InitializeSetup(): Boolean;
 begin
   Result := True;
@@ -282,9 +358,7 @@ begin
   Result := True;
   // Default is to KEEP data (database, archives, config). Ask explicitly.
   RemoveDataOnUninstall :=
-    MsgBox('Also delete all BamDude data (database, print archives, settings) in'
-      + #13#10 + ExpandConstant('{commonappdata}\BamDude') + '?'
-      + #13#10#13#10 + 'Choose No to keep it for a future reinstall.',
+    MsgBox(FmtMessage(CustomMessage('UninstallDeleteData'), [ExpandConstant('{commonappdata}\BamDude')]),
       mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES;
 end;
 

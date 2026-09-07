@@ -52,6 +52,21 @@ if /I "%DB_MODE%"=="embedded-service" set "DB_ENV="DATABASE_URL=embedded" "EMBED
 if /I "%DB_MODE%"=="embedded-child"   set "DB_ENV="DATABASE_URL=embedded" "EMBEDDED_PG_PORT=%PG_PORT%""
 if /I "%DB_MODE%"=="external"         set "DB_ENV="DATABASE_URL=!DB_URL!""
 
+REM Everything below runs through a log. Inno starts this script hidden and does
+REM not stop on a non-zero exit, so without a log a failure here is completely
+REM invisible: no service, no message, an empty data directory and a browser
+REM pointed at nothing.
+if not exist "%LOG_DIR%" mkdir "%LOG_DIR%" 2>nul
+set "SETUP_LOG=%LOG_DIR%\install-service.log"
+echo ---- %DATE% %TIME% install-service %DB_MODE% ---->> "%SETUP_LOG%"
+call :main >> "%SETUP_LOG%" 2>&1
+set "MAIN_RC=!errorlevel!"
+if not "!MAIN_RC!"=="0" echo [install-service] FAILED with code !MAIN_RC! - see "%SETUP_LOG%"
+endlocal & exit /b %MAIN_RC%
+
+REM ===========================================================================
+:main
+
 REM ---------------------------------------------------------------------------
 REM  embedded-service: initialise the cluster and register it as its own service
 REM ---------------------------------------------------------------------------
@@ -107,7 +122,6 @@ if errorlevel 1 (
 )
 
 echo [install-service] BamDude service registered and started on port %PORT% (database: %DB_MODE%)
-endlocal
 exit /b 0
 
 REM ===========================================================================
@@ -122,11 +136,20 @@ REM the data directory untouched.
 net stop %PG_SERVICE% 2>nul
 sc delete %PG_SERVICE% 2>nul
 
-REM Locate the PostgreSQL binaries inside the embedded Python's wheel.
+REM Locate the PostgreSQL binaries inside the embedded Python's wheel. Written
+REM through a temp file rather than a for/f backtick block, whose nested quoting
+REM around an interpreter path with spaces is a known way to get an empty result.
 set "PGBIN="
-for /f "usebackq delims=" %%i in (`"%PYTHON%" -c "from embedded_postgres._commands import POSTGRES_BIN_PATH; print(POSTGRES_BIN_PATH)"`) do set "PGBIN=%%i"
+set "PGBIN_TMP=%TEMP%\bamdude_pgbin.txt"
+"%PYTHON%" -c "from embedded_postgres._commands import POSTGRES_BIN_PATH; print(POSTGRES_BIN_PATH)" > "%PGBIN_TMP%"
+if exist "%PGBIN_TMP%" set /p PGBIN=<"%PGBIN_TMP%"
+del "%PGBIN_TMP%" 2>nul
 if not defined PGBIN (
     echo [install-service] could not locate the embedded PostgreSQL binaries
+    exit /b 1
+)
+if not exist "%PGBIN%\pg_ctl.exe" (
+    echo [install-service] pg_ctl.exe not found at "%PGBIN%"
     exit /b 1
 )
 
