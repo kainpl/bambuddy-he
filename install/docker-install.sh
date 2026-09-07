@@ -39,6 +39,9 @@ INSTALL_PATH=""
 PORT=""
 BIND_ADDRESS=""
 TIMEZONE=""
+DB_MODE=""             # sqlite | embedded | sidecar | external
+DATABASE_URL_VALUE=""  # external URL when DB_MODE=external
+PG_PASSWORD=""         # generated for the sidecar
 BUILD_FROM_SOURCE="false"
 NON_INTERACTIVE="false"
 OS_TYPE=""
@@ -139,6 +142,8 @@ show_help() {
     echo "  --port PORT        Port to expose (default: 8000)"
     echo "  --bind ADDRESS     Bind address: 0.0.0.0 (network) or 127.0.0.1 (local only)"
     echo "  --tz TIMEZONE      Timezone (default: system timezone or UTC)"
+    echo "  --db BACKEND       Database: sqlite (default) | embedded | sidecar | external"
+    echo "  --database-url URL External database URL (implies --db external)"
     echo "  --build            Build from source instead of using pre-built image"
     echo "  --yes, -y          Non-interactive mode, accept defaults"
     echo "  --redirect-990     (Deprecated, no longer needed)"
@@ -284,6 +289,11 @@ download_compose_file() {
         # Just download the compose file
         curl -fsSL -o docker-compose.yml \
             https://raw.githubusercontent.com/kainpl/bamdude/main/docker-compose.yml
+        # The PostgreSQL sidecar needs its override file too.
+        if [[ "$DB_MODE" == "sidecar" ]]; then
+            curl -fsSL -o docker-compose.postgres.yml \
+                https://raw.githubusercontent.com/kainpl/bamdude/main/docker-compose.postgres.yml
+        fi
     fi
 
     log_success "docker-compose.yml ready"
@@ -302,6 +312,39 @@ PORT=$PORT
 # Timezone
 TZ=$TIMEZONE
 EOF
+
+    case "$DB_MODE" in
+        embedded)
+            cat >> .env << 'EOF'
+
+# Bundled PostgreSQL 18, run by BamDude inside the container. Its data lives in
+# the bamdude_data volume under postgres/. Imported from SQLite on first start.
+DATABASE_URL=embedded
+EOF
+            ;;
+        external)
+            cat >> .env << EOF
+
+# External PostgreSQL server.
+DATABASE_URL=$DATABASE_URL_VALUE
+EOF
+            ;;
+        sidecar)
+            # A host-network BamDude (Linux) reaches the published loopback port;
+            # on Docker Desktop it uses the Compose service name instead.
+            local pg_host="127.0.0.1:5433"
+            [[ "$OS_TYPE" == "macos" ]] && pg_host="postgres:5432"
+            cat >> .env << EOF
+
+# PostgreSQL in its own container (docker-compose.postgres.yml).
+COMPOSE_FILE=docker-compose.yml:docker-compose.postgres.yml
+POSTGRES_USER=bamdude
+POSTGRES_PASSWORD=$PG_PASSWORD
+POSTGRES_DB=bamdude
+DATABASE_URL=postgresql+asyncpg://bamdude:$PG_PASSWORD@$pg_host/bamdude
+EOF
+            ;;
+    esac
 
     log_success "Environment file created"
 }
@@ -384,6 +427,15 @@ parse_args() {
                 TIMEZONE="$2"
                 shift 2
                 ;;
+            --db)
+                DB_MODE="$2"
+                shift 2
+                ;;
+            --database-url)
+                DATABASE_URL_VALUE="$2"
+                DB_MODE="external"
+                shift 2
+                ;;
             --build)
                 BUILD_FROM_SOURCE="true"
                 shift
@@ -429,6 +481,68 @@ configure_iptables_redirect() {
     fi
 }
 
+# A URL-safe random password (hex, no characters that need escaping in a
+# DATABASE_URL or a compose env value).
+gen_password() {
+    if command -v openssl &>/dev/null; then
+        openssl rand -hex 24
+    else
+        head -c 48 /dev/urandom | od -An -tx1 | tr -d ' \n' | cut -c1-48
+    fi
+}
+
+gather_db_config() {
+    if [[ -n "$DB_MODE" ]]; then
+        case "$DB_MODE" in
+            sqlite|embedded|sidecar|external) ;;
+            postgres|postgresql) DB_MODE="external" ;;
+            *) log_error "Unknown --db backend '$DB_MODE' (use sqlite|embedded|sidecar|external)"; exit 1 ;;
+        esac
+    else
+        DB_MODE="sqlite"
+    fi
+
+    if [[ "$NON_INTERACTIVE" != "true" ]]; then
+        echo ""
+        echo "Database backend:"
+        echo "  1) SQLite    - zero setup, one file; great for most farms (default)"
+        echo "  2) embedded  - the bundled PostgreSQL 18 run inside the BamDude container"
+        echo "  3) separate  - PostgreSQL in its own container (official image, own volume)"
+        echo "  4) external  - a PostgreSQL server you already run (enter its URL)"
+        local default_choice=1
+        [[ "$DB_MODE" == "embedded" ]] && default_choice=2
+        [[ "$DB_MODE" == "sidecar" ]] && default_choice=3
+        [[ "$DB_MODE" == "external" ]] && default_choice=4
+        local choice
+        prompt "Choose 1, 2, 3 or 4" "$default_choice" choice
+        case "$choice" in
+            1|sqlite)   DB_MODE="sqlite" ;;
+            2|embedded) DB_MODE="embedded" ;;
+            3|sidecar|separate) DB_MODE="sidecar" ;;
+            4|external) DB_MODE="external" ;;
+            *) log_warn "Unrecognised choice '$choice', keeping $DB_MODE" ;;
+        esac
+    fi
+
+    if [[ "$DB_MODE" == "external" ]] && [[ -z "$DATABASE_URL_VALUE" ]]; then
+        if [[ "$NON_INTERACTIVE" == "true" ]]; then
+            log_error "--db external needs --database-url (e.g. postgresql+asyncpg://user:pass@host:5432/bamdude)"
+            exit 1
+        fi
+        echo ""
+        echo "Enter the SQLAlchemy URL of your PostgreSQL (the database must already exist):"
+        echo "  postgresql+asyncpg://user:password@host:5432/bamdude"
+        echo "  (with the default host networking, use the host's real address, not 'postgres')"
+        while [[ -z "$DATABASE_URL_VALUE" ]]; do
+            prompt "Database URL" "" DATABASE_URL_VALUE
+        done
+    fi
+
+    if [[ "$DB_MODE" == "sidecar" ]]; then
+        PG_PASSWORD="$(gen_password)"
+    fi
+}
+
 gather_config() {
     echo ""
     echo -e "${BOLD}Installation Configuration${NC}"
@@ -456,6 +570,9 @@ gather_config() {
     detect_timezone
     prompt "Timezone" "$TIMEZONE" TIMEZONE
 
+    # Database backend
+    gather_db_config
+
     # Build from source?
     if [[ "$BUILD_FROM_SOURCE" != "true" ]] && [[ "$NON_INTERACTIVE" != "true" ]]; then
         if prompt_yes_no "Build from source? (No = use pre-built image)" "n"; then
@@ -471,6 +588,12 @@ gather_config() {
     echo -e "  Port:          ${GREEN}$PORT${NC}"
     echo -e "  Bind address:  ${GREEN}$BIND_ADDRESS${NC}"
     echo -e "  Timezone:      ${GREEN}$TIMEZONE${NC}"
+    case "$DB_MODE" in
+        embedded) echo -e "  Database:      ${GREEN}bundled PostgreSQL (in the container)${NC}" ;;
+        sidecar)  echo -e "  Database:      ${GREEN}PostgreSQL (separate container)${NC}" ;;
+        external) echo -e "  Database:      ${GREEN}external PostgreSQL${NC}" ;;
+        *)        echo -e "  Database:      ${GREEN}SQLite${NC}" ;;
+    esac
     echo -e "  Build source:  ${GREEN}$BUILD_FROM_SOURCE${NC}"
     echo -e "  Redirect 990:  ${GREEN}$REDIRECT_990${NC}"
     echo ""
