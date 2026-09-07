@@ -13,11 +13,27 @@ without grams is an unknown print OF ITS KEY. Zero grams is an answer.
 
 from __future__ import annotations
 
+import logging
 from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
-from backend.app.services.plan_engine import OrderPlan
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from backend.app.api.routes.settings import get_setting
+from backend.app.models.color_catalog import ColorCatalogEntry
+from backend.app.models.library import LibraryFile
+from backend.app.models.print_queue import PrintQueueItem
+from backend.app.models.product import ProductPlate
+from backend.app.models.project import Project
+from backend.app.models.project_line import ProjectLine
+from backend.app.models.spool import Spool
+from backend.app.services.plan_engine import OrderPlan, plan_for_orders
+from backend.app.services.product_composition import plate_filaments
+from backend.app.services.queue_times import filaments_for_row
+from backend.app.services.spoolman import get_spoolman_client
 
 ASSUMPTIONS: tuple[str, ...] = ("slicer_estimate",)
 
@@ -206,3 +222,164 @@ def farm_of(per_order: dict[int, list[NeedRow]], *, unknown_prints: int, stock_u
         row.short_g = None if row.have_g is None else round(max(0.0, row.need_g - row.have_g), 1)
     ordered = sorted(acc.values(), key=lambda k: (k.material, k.colour or ""))
     return FarmNeeds(ordered, len(per_order), unknown_prints, stock_unavailable)
+
+
+# ---------- the loader ----------
+
+logger = logging.getLogger(__name__)
+
+
+def _grams(value) -> float | None:
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def _lines_of(raw: list[dict] | None) -> list[FilamentLine] | None:
+    if not raw:
+        return None
+    return [
+        FilamentLine(material=(f.get("type") or None), grams=_grams(f.get("used_g")))
+        for f in raw
+        if isinstance(f, dict)
+    ]
+
+
+def _spoolman_colour_name(name: str | None, material: str) -> str | None:
+    """Spoolman's ``Filament`` has no colour field of its own — the name is the only
+    carrier, conventionally ``"<material> <colour>"`` (e.g. ``"PETG Black"``). Strip the
+    material prefix so the remainder matches a line colour the way a local spool's plain
+    ``color_name`` does. Mirrors ``services/spoolman.py::_filament_subtype_part`` /
+    ``api/routes/_spoolman_helpers.py::_map_spoolman_spool``'s read-side derivation."""
+    s = (name or "").strip()
+    if material and s.upper().startswith(material.upper() + " "):
+        s = s[len(material) + 1 :].strip()
+    return s or None
+
+
+async def line_colours_of(db: AsyncSession, project_ids: list[int]) -> dict[int, str | None]:
+    if not project_ids:
+        return {}
+    rows = (
+        await db.execute(select(ProjectLine.id, ProjectLine.color).where(ProjectLine.project_id.in_(project_ids)))
+    ).all()
+    return dict(rows)
+
+
+async def plate_filaments_of(db: AsyncSession, plate_ids: set[int]) -> dict[int, list[FilamentLine]]:
+    if not plate_ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(ProductPlate.id, ProductPlate.plate_index, LibraryFile.file_metadata)
+            .join(LibraryFile, LibraryFile.id == ProductPlate.library_file_id)
+            .where(ProductPlate.id.in_(list(plate_ids)))
+        )
+    ).all()
+    return {pid: (_lines_of(plate_filaments(meta, index)) or []) for pid, index, meta in rows}
+
+
+async def queued_needs_of(
+    db: AsyncSession, project_ids: list[int], line_colours: dict[int, str | None]
+) -> dict[int, list[QueuedNeed]]:
+    if not project_ids:
+        return {}
+    items = (
+        (
+            await db.execute(
+                select(PrintQueueItem)
+                .options(selectinload(PrintQueueItem.archive), selectinload(PrintQueueItem.library_file))
+                .where(PrintQueueItem.status == "pending", PrintQueueItem.project_id.in_(project_ids))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    out: dict[int, list[QueuedNeed]] = {}
+    for item in items:
+        raw = filaments_for_row(archive=item.archive, library_file=item.library_file, plate_id=item.plate_id)
+        colour = line_colours.get(item.project_line_id) if item.project_line_id else None
+        out.setdefault(item.project_id, []).append(QueuedNeed(colour, _lines_of(raw)))
+    return out
+
+
+async def load_stock(db: AsyncSession) -> tuple[list[SpoolStock], bool]:
+    """Live spools of the active backend; ``(spools, unavailable)`` — a dead Spoolman is reported, never raised."""
+    if ((await get_setting(db, "spoolman_enabled")) or "").lower() == "true":
+        client = await get_spoolman_client()
+        if client is None:
+            return [], True
+        try:
+            raw = await client.get_all_spools()
+        except Exception as exc:  # noqa: BLE001 — the shelf is optional; the need is still shown
+            logger.warning("filament needs: Spoolman did not answer: %s", exc)
+            return [], True
+        spools: list[SpoolStock] = []
+        for s in raw or []:
+            if not isinstance(s, dict) or s.get("archived"):
+                continue
+            fil = s.get("filament") or {}
+            material = (fil.get("material") or "").strip().upper()
+            if not material:
+                continue
+            hex_colour = (fil.get("color_hex") or "").replace("#", "").lower()[:6] or None
+            colour_name = _spoolman_colour_name(fil.get("name"), material)
+            spools.append(
+                SpoolStock(material, colour_name, hex_colour, max(0.0, float(s.get("remaining_weight") or 0.0)))
+            )
+        return spools, False
+    rows = (await db.execute(select(Spool).where(Spool.archived_at.is_(None)))).scalars().all()
+    return [
+        SpoolStock(
+            (spool.material or "").strip().upper(),
+            spool.color_name,
+            ((spool.rgba or "").replace("#", "").lower()[:6] or None),
+            max(0.0, float(spool.label_weight or 0) - float(spool.weight_used or 0.0)),
+        )
+        for spool in rows
+        if spool.material
+    ], False
+
+
+async def names_of_hex_loader(db: AsyncSession) -> Callable[[str], set[str]]:
+    rows = (await db.execute(select(ColorCatalogEntry.hex_color, ColorCatalogEntry.color_name))).all()
+    table: dict[str, set[str]] = {}
+    for hex_colour, name in rows:
+        key = (hex_colour or "").replace("#", "").lower()[:6]
+        if key and name:
+            table.setdefault(key, set()).add(name.strip().casefold())
+    return lambda h: table.get((h or "").replace("#", "").lower()[:6], set())
+
+
+async def needs_of_orders(db: AsyncSession, project_ids: list[int]) -> dict[int, OrderNeeds]:
+    """Per order: the plan's need + the pending queue's need, against the shelf. An unknown id is absent."""
+    if not project_ids:
+        return {}
+    status_of = dict((await db.execute(select(Project.id, Project.status).where(Project.id.in_(project_ids)))).all())
+    active = [pid for pid in project_ids if status_of.get(pid) == "active"]
+    plans = await plan_for_orders(db, active) if active else {}
+    plate_ids = {row.plate_id for plan in plans.values() for line in plan.lines for row in line.rows}
+    line_colours = await line_colours_of(db, active)
+    filaments = await plate_filaments_of(db, plate_ids)
+    queued = await queued_needs_of(db, active, line_colours)
+    spools, unavailable = await load_stock(db)
+    names_of_hex = await names_of_hex_loader(db)
+    out: dict[int, OrderNeeds] = {}
+    for pid in project_ids:
+        if pid not in status_of:
+            continue
+        if pid not in active:
+            out[pid] = OrderNeeds(pid, [], 0, unavailable)
+            continue
+        needs = need_of_plan(plans.get(pid), line_colours, filaments).merge(need_of_queue(queued.get(pid, [])))
+        stock = None if unavailable else stock_by_key(spools, needs.keys(), names_of_hex)
+        out[pid] = OrderNeeds(pid, rows_of(needs, stock), needs.unknown_prints, unavailable)
+    return out
+
+
+async def needs_of_farm(db: AsyncSession) -> FarmNeeds:
+    active = [pid for (pid,) in (await db.execute(select(Project.id).where(Project.status == "active"))).all()]
+    per_order = await needs_of_orders(db, active)
+    return farm_of(
+        {pid: o.rows for pid, o in per_order.items()},
+        unknown_prints=sum(o.unknown_prints for o in per_order.values()),
+        stock_unavailable=any(o.stock_unavailable for o in per_order.values()),
+    )
