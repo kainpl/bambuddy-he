@@ -139,7 +139,13 @@ Source: "build\staging\app\*"; DestDir: "{app}\app"; Flags: recursesubdirs ignor
 ; NSSM, ffmpeg, ffprobe
 Source: "build\staging\bin\*"; DestDir: "{app}\bin"; Flags: recursesubdirs ignoreversion
 ; Service install/uninstall scripts
-Source: "build\staging\service\*"; DestDir: "{app}\service"; Flags: recursesubdirs ignoreversion
+; ⚠️ Straight from the source tree, NOT from build\staging. Everything else in
+; this section is generated and has to come from staging, but these two .bat
+; files are checked-in sources — and staging them meant ISCC packaged whatever
+; copy the last build.py run happened to leave there. Editing a script and
+; recompiling with ISCC alone then shipped the OLD one, silently: exactly how a
+; fixed uninstaller went out still carrying the bug it fixed.
+Source: "service\*"; DestDir: "{app}\service"; Flags: recursesubdirs ignoreversion
 ; Version stamp
 Source: "build\staging\VERSION"; DestDir: "{app}"; Flags: ignoreversion
 ; App icon — used by UninstallDisplayIcon (Add/Remove Programs) and the

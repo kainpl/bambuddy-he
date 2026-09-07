@@ -417,15 +417,6 @@ def stage_ffmpeg() -> None:
         shutil.copy(ffprobe, target / "ffprobe.exe")
 
 
-def stage_service_scripts() -> None:
-    """Copy the service install/uninstall .bat files into staging."""
-    service_src = INSTALLER_DIR / "service"
-    service_dst = STAGING / "service"
-    if service_dst.exists():
-        shutil.rmtree(service_dst)
-    shutil.copytree(service_src, service_dst)
-
-
 def _read_app_version() -> str:
     """Read APP_VERSION from backend/app/core/config.py (the canonical
     source used by every other BamDude surface — FastAPI OpenAPI title,
@@ -546,7 +537,6 @@ def main() -> int:
     stage_backend(frontend_dist)
     stage_nssm()
     stage_ffmpeg()
-    stage_service_scripts()
     write_version_file()
 
     log("")
