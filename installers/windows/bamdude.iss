@@ -49,14 +49,24 @@ ArchitecturesInstallIn64BitMode=x64compatible
 ; Admin required: we register a Windows service and write to ProgramData
 PrivilegesRequired=admin
 PrivilegesRequiredOverridesAllowed=
-; BamDude branding — bamdude.ico is the brand pack's favicon.ico (16/32/48/
-; 64/128/256, dark bars on transparent), copied from bamdude.top/public/brand/;
-; regenerate from the pack, never edit here. The dark-bars variant, not the
-; dark-tile app-icon.ico: this icon is shown on light surfaces (Explorer, the
-; Programs list, the wizard), where the tile's own dark ground swallowed the
-; mark. Lives next to this .iss so the SourcePath-relative reference works
-; during compile, and the [Files] entry stages it into {app} for Add/Remove
-; Programs.
+; BamDude branding — the dark TILE at every size, so the mark stays readable on
+; light surfaces (Explorer, the Programs list, the setup .exe) and dark ones
+; alike. The transparent dark-bars favicon.ico was tried and rejected: it reads
+; as a bare glyph.
+;
+; ⚠️ NOT a straight copy of the brand pack's app-icon.ico — that file carries
+; the tile only at 64/128/256 and drops it at 16/32/48, so small views showed
+; bare bars while large ones showed the tile. Regenerate from the pack's tile
+; PNG instead, which is consistent at every size:
+;
+;   python -c "from PIL import Image; s=Image.open('png/icon-tile-512.png').convert('RGBA'); \
+;     z=[16,32,48,64,128,256]; f=[s.resize((n,n), Image.LANCZOS) for n in z]; \
+;     f[-1].save('bamdude.ico', format='ICO', sizes=[(n,n) for n in z], append_images=f[:-1])"
+;
+; ⚠️ One file feeds SetupIconFile, UninstallDisplayIcon and every shortcut, so
+; changing it changes all of them together. Lives next to this .iss so the
+; SourcePath-relative reference works during compile, and the [Files] entry
+; stages it into {app} for Add/Remove Programs.
 SetupIconFile=bamdude.ico
 UninstallDisplayIcon={app}\bamdude.ico
 ; Don't allow installing to a network drive — service won't start cleanly
