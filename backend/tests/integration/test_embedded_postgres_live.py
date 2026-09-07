@@ -1,0 +1,80 @@
+"""The bundled PostgreSQL really starts, answers and stops.
+
+Uses the embedded-postgres wheel from the environment, a temporary data
+directory and a free port; nothing touches the developer's DATA_DIR. Skipped
+when the wheel is not installed.
+"""
+
+import socket
+
+import pytest
+
+from backend.app.core.config import settings
+from backend.app.services import embedded_postgres as ep
+
+pytest.importorskip("embedded_postgres")
+
+pytestmark = [pytest.mark.integration, pytest.mark.slow]
+
+
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+@pytest.fixture
+def live_settings(tmp_path, monkeypatch):
+    pgdata = tmp_path / "postgres" / ep.bundled_major()
+    password_file = tmp_path / "postgres" / "password"
+    password_file.parent.mkdir(parents=True)
+    password_file.write_text("live-test-password\n", encoding="utf-8")
+    monkeypatch.setattr(settings, "embedded_postgres", True)
+    monkeypatch.setattr(settings, "embedded_pg_data_dir", pgdata)
+    monkeypatch.setattr(settings, "embedded_pg_password_file", password_file)
+    monkeypatch.setattr(settings, "embedded_pg_port", _free_port())
+    monkeypatch.setattr(settings, "embedded_pg_max_connections", 120)
+    return pgdata
+
+
+async def test_initdb_start_query_stop(live_settings):
+    pgdata = live_settings
+    try:
+        await ep.start()
+        assert (pgdata / "PG_VERSION").read_text(encoding="utf-8").strip() == ep.bundled_major()
+        assert await ep.is_running()
+        assert ep._running_port() == settings.embedded_pg_port
+
+        version = await ep._psql("select version()", database=ep.PG_DATABASE)
+        assert f"PostgreSQL {ep.bundled_major()}." in version
+        assert await ep._psql("select extname from pg_extension where extname = 'pg_stat_statements'") == ""
+        assert (
+            await ep._psql(
+                "select extname from pg_extension where extname = 'pg_stat_statements'", database=ep.PG_DATABASE
+            )
+            == "pg_stat_statements"
+        )
+        # Unicode-aware case mapping from the builtin C.UTF-8 provider. Spelled
+        # with SQL Unicode escapes: a Cyrillic literal on psql's command line
+        # goes through the Windows console code page and arrives as "????".
+        assert (
+            await ep._psql(
+                r"select lower(U&'\041F\0415\0422\0413') = U&'\043F\0435\0442\0433'", database=ep.PG_DATABASE
+            )
+            == "t"
+        )
+
+        # a second start() finds the running server and reuses it
+        await ep.start()
+        assert await ep.is_running()
+    finally:
+        await ep.stop()
+    assert not await ep.is_running()
+
+
+async def test_start_refuses_a_data_directory_of_another_major(live_settings, monkeypatch):
+    pgdata = live_settings
+    pgdata.mkdir(parents=True)
+    (pgdata / "PG_VERSION").write_text("9\n", encoding="utf-8")
+    with pytest.raises(ep.EmbeddedPostgresError):
+        await ep.start()

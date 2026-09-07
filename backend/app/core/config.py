@@ -54,14 +54,29 @@ def _get_database_path() -> Path:
 #   postgresql+asyncpg://…   → an external PostgreSQL server
 # Anything else is refused here, at import, with a readable message — a bad
 # value used to surface only as a connection error at first use.
-_database_url_env = (os.environ.get("DATABASE_URL") or "").strip()
-_embedded_db = _database_url_env.lower() in ("embedded", "embedded://")
-_external_db_url = None if _embedded_db else (_database_url_env or None)
-if _external_db_url and not _external_db_url.startswith(("postgresql", "sqlite")):
-    raise RuntimeError(
-        "DATABASE_URL must be empty (SQLite), 'embedded' (bundled PostgreSQL) or a "
-        f"postgresql+asyncpg:// URL; got a value starting with {_external_db_url.split(':', 1)[0]!r}"
-    )
+
+
+def classify_database_url(raw: str | None) -> tuple[bool, str | None]:
+    """Read DATABASE_URL into (embedded, external_url).
+
+    ``(False, None)`` = SQLite, ``(True, None)`` = the bundled PostgreSQL,
+    ``(False, url)`` = an external server. Anything else raises here so a typo
+    is a startup error with a readable message, not a connection error later.
+    """
+    value = (raw or "").strip()
+    if value.lower() in ("embedded", "embedded://"):
+        return True, None
+    if not value:
+        return False, None
+    if not value.startswith(("postgresql", "sqlite")):
+        raise RuntimeError(
+            "DATABASE_URL must be empty (SQLite), 'embedded' (bundled PostgreSQL) or a "
+            f"postgresql+asyncpg:// URL; got a value starting with {value.split(':', 1)[0]!r}"
+        )
+    return False, value
+
+
+_embedded_db, _external_db_url = classify_database_url(os.environ.get("DATABASE_URL"))
 
 # Determine database path - only used for SQLite
 _db_path = _get_database_path() if not (_external_db_url or _embedded_db) else None
