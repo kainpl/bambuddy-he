@@ -158,11 +158,12 @@ def _write_conf() -> None:
                 "unix_socket_directories = ''",
                 f"max_connections = {max_connections}",
                 "shared_preload_libraries = 'pg_stat_statements'",
-                # No timezone settings on purpose: the 18.6.1 wheel ships no
-                # share/timezone database, so PostgreSQL only knows GMT there
-                # ("invalid value for parameter TimeZone: UTC" and the server
-                # refuses to start). Every timestamp BamDude stores is naive
-                # UTC anyway. Restore once the wheel carries the tz database.
+                # BamDude stores naive UTC; the server's own clock functions
+                # (now(), log stamps) should agree. Needs the timezone database
+                # the wheel ships since 18.6.2 (the Windows 18.6.0/18.6.1 wheels
+                # had none and refused this line).
+                "timezone = 'UTC'",
+                "log_timezone = 'UTC'",
                 "log_min_messages = warning",
                 "",
             ]

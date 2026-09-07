@@ -47,8 +47,8 @@ class TestConf:
         assert "unix_socket_directories = ''" in conf
         assert "shared_preload_libraries = 'pg_stat_statements'" in conf
         assert "max_connections = 120" in conf
-        # the 18.6.1 wheel had no timezone database on Windows — never set one here
-        assert "timezone" not in conf
+        # the server's clock agrees with the naive-UTC timestamps BamDude stores
+        assert "timezone = 'UTC'" in conf and "log_timezone = 'UTC'" in conf
 
     def test_conf_never_goes_below_the_pool_plus_margin(self, embedded, monkeypatch):
         embedded.mkdir(parents=True)
