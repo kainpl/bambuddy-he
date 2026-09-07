@@ -23,6 +23,7 @@ import type {
   SpoolListItem,
 } from '../api/client';
 import { invalidateForecastQueries } from '../utils/inventoryQueries';
+import { invalidateSpoolViews } from '../utils/queryInvalidation';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 import { LoadingBlock } from './LoadingBlock';
@@ -1407,7 +1408,7 @@ function ShoppingListPanel({
     // state over a half-applied change.
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['shopping-list'] });
-      queryClient.invalidateQueries({ queryKey: ['spools'] });
+      invalidateSpoolViews(queryClient);
       queryClient.invalidateQueries({ queryKey: ['inventory-spools'] });
       // Receiving spools moves the stock the forecast is computed over.
       invalidateForecastQueries(queryClient);

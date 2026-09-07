@@ -49,6 +49,7 @@ export const ORDER_VIEW_KEYS = [
   'project-archives', // the Prints grid
   'project-plan', // pass 3: what is still to print
   'order-forecast', 'orders-forecast', // spec 2026-09-06: the ETA moves with the plan
+  'order-filament', 'orders-filament', // spec 2026-09-07: the need moves with the plan
   'customers', // the customer tiles are computed from these orders
   'customer', // and one customer's page with them — the prefix, see above
   // pass 7: the orders a print dialog offers, and how many prints each still
@@ -87,6 +88,13 @@ export function invalidateQueueViews(qc: QueryClient): void {
   qc.invalidateQueries({ queryKey: ['queues'] });
   qc.invalidateQueries({ queryKey: ['queue'] });
   qc.invalidateQueries({ queryKey: ['queue-forecast'] });
+}
+
+/** A spool was written, used or synced: the shelf moved, and with it every «need vs shelf» figure. */
+export function invalidateSpoolViews(qc: QueryClient): void {
+  qc.invalidateQueries({ queryKey: ['spools'] });
+  qc.invalidateQueries({ queryKey: ['order-filament'] });
+  qc.invalidateQueries({ queryKey: ['orders-filament'] });
 }
 
 /** What the caller touched. Read for call-site legibility today; see below. */

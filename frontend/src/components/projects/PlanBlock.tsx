@@ -9,6 +9,7 @@ import { useToast } from '../../contexts/ToastContext';
 import { formatMoney } from '../../utils/currency';
 import { formatDuration } from '../../utils/date';
 import { Button } from '../Button';
+import { FilamentNeeds } from './FilamentNeeds';
 import { PlanLine } from './PlanLine';
 import { MAX_PER_PLATE } from './PlanRow';
 import { projectPlan, rowDistribution, splitIsOff, type ChosenByRow, type SplitByRow } from './planMath';
@@ -80,6 +81,14 @@ export function PlanBlock({
   const forecast = useQuery({
     queryKey: ['order-forecast', order.id],
     queryFn: () => api.getOrderForecast(order.id),
+    enabled: active,
+    staleTime: 30_000,
+  });
+
+  // The filament this plan still needs against what is on the shelf.
+  const filament = useQuery({
+    queryKey: ['order-filament', order.id],
+    queryFn: () => api.getOrderFilament(order.id),
     enabled: active,
     staleTime: 30_000,
   });
@@ -490,6 +499,8 @@ export function PlanBlock({
               </Button>
             )}
           </div>
+
+          {filament.data && <FilamentNeeds needs={filament.data} />}
         </>
       )}
     </section>

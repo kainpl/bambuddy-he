@@ -16,7 +16,7 @@
  * second function rather than a flag on the first.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { QueryClient } from '@tanstack/react-query';
 import {
   ORDER_VIEW_KEYS,
@@ -24,6 +24,7 @@ import {
   invalidateOrderCandidates,
   invalidateOrderViews,
   invalidateQueueViews,
+  invalidateSpoolViews,
 } from '../../utils/queryInvalidation';
 
 /** A query only has a state once something has put it in the cache. */
@@ -116,6 +117,9 @@ describe('invalidateOrderViews', () => {
       // spec 2026-09-06: the ETA is read off the plan, so it moves with it.
       'order-forecast',
       'orders-forecast',
+      // spec 2026-09-07: the need moves with the plan
+      'order-filament',
+      'orders-filament',
       'customers',
       'customer',
       'order-candidates',
@@ -143,6 +147,15 @@ describe('invalidateQueueViews', () => {
     expect(stale(qc, ['queue-forecast'])).toBe(true);
     // Not an order mutation — the order views are none of its business.
     expect(stale(qc, ['projects'])).toBe(false);
+  });
+});
+
+describe('invalidateSpoolViews', () => {
+  it('invalidateSpoolViews marks the spools and both filament-needs views stale', () => {
+    const qc = new QueryClient();
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+    invalidateSpoolViews(qc);
+    expect(spy.mock.calls.map((c) => c[0]?.queryKey)).toEqual([['spools'], ['order-filament'], ['orders-filament']]);
   });
 });
 

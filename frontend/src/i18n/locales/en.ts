@@ -4877,6 +4877,19 @@ export default {
       unroutablePrints_one: '{{count}} print with no printer for its model',
       unroutablePrints_other: '{{count}} prints with no printer for its model',
     },
+    filament: {
+      title: 'Filament',
+      need: 'need',
+      shelf: 'on the shelf',
+      ofType: '{{amount}} of {{material}} in total',
+      short: 'short {{amount}}',
+      allCovered: 'Filament: everything is on the shelf',
+      stockUnavailable: 'The shelf could not be read',
+      unknownPrints_one: '{{count}} print without grams',
+      unknownPrints_other: '{{count}} prints without grams',
+      ordersCount_one: '{{count}} order',
+      ordersCount_other: '{{count}} orders',
+    },
     lines: {
       title: 'Lines',
       product: 'Product',
@@ -8469,6 +8482,7 @@ export default {
       plate_clear: 'plate-clear confirmation',
       drying: 'drying between prints',
       prep: 'upload and preheat',
+      slicer_estimate: 'slicer estimate, not the archive\'s actual usage',
     },
     unavailable: 'No estimate',
     // A failed or refused fetch — NOT «No estimate», which means the farm could place nothing.

@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Loader2, Check, X, RefreshCw, Link2, Link2Off, Database, ChevronDown, Info, AlertTriangle, Package, ExternalLink } from 'lucide-react';
 import { api, ApiError } from '../api/client';
 import type { SpoolmanSyncResult, Printer } from '../api/client';
+import { invalidateSpoolViews } from '../utils/queryInvalidation';
 import { Card, CardContent, CardHeader } from './Card';
 import { Button } from './Button';
 import { ConfirmModal } from './ConfirmModal';
@@ -160,7 +161,7 @@ export function SpoolmanSettings() {
   const amsSyncMutation = useMutation({
     mutationFn: api.syncWeightsFromAms,
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ['spools'] });
+      invalidateSpoolViews(queryClient);
       queryClient.invalidateQueries({ queryKey: ['inventory-spools'] });
       showToast(t('settings.amsSyncSuccess', { synced: data.synced, skipped: data.skipped }), 'success');
       setShowAmsSyncConfirm(false);

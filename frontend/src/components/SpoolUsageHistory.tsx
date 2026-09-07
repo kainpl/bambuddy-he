@@ -6,6 +6,7 @@ import type { SpoolUsageRecord } from '../api/client';
 import { Button } from './Button';
 import { useToast } from '../contexts/ToastContext';
 import { formatDateTime, type DateFormat, type TimeFormat } from '../utils/date';
+import { invalidateSpoolViews } from '../utils/queryInvalidation';
 
 interface SpoolUsageHistoryProps {
   spoolId: number;
@@ -54,7 +55,7 @@ export function SpoolUsageHistory({ spoolId }: SpoolUsageHistoryProps) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['spool-usage', spoolId] });
       // Clear-all returns each row's weight to the spool, so refresh the list too.
-      queryClient.invalidateQueries({ queryKey: ['spools'] });
+      invalidateSpoolViews(queryClient);
       showToast(t('inventory.historyCleared'), 'success');
     },
   });
@@ -65,7 +66,7 @@ export function SpoolUsageHistory({ spoolId }: SpoolUsageHistoryProps) {
     mutationFn: (usageId: number) => api.deleteSpoolUsageRecord(spoolId, usageId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['spool-usage', spoolId] });
-      queryClient.invalidateQueries({ queryKey: ['spools'] });
+      invalidateSpoolViews(queryClient);
       showToast(t('inventory.usageRecordDeleted'), 'success');
     },
   });

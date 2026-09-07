@@ -21,6 +21,7 @@ import { api } from '../../../api/client';
 import type {
   Order,
   OrderForecastDetail,
+  OrderNeeds,
   OrderPlan,
   PlanAlternative,
   PlanRow as PlanRowData,
@@ -290,6 +291,10 @@ const EMPTY_FORECAST: OrderForecastDetail = {
   unknown_prints: 0, unroutable_prints: 0, ahead_count: 0, assumptions: [], lines: [],
 };
 
+/** No filament need reported yet — the shape every test gets unless it asks
+ *  for a specific need-vs-shelf response. */
+const EMPTY_NEEDS: OrderNeeds = { project_id: order.id, rows: [], unknown_prints: 0, stock_unavailable: false, assumptions: ['slicer_estimate'] };
+
 describe('PlanBlock', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -305,6 +310,7 @@ describe('PlanBlock', () => {
     // asks nothing — the query is gated — and this mock covers both.
     vi.spyOn(api, 'getPrinters').mockResolvedValue(farm);
     vi.spyOn(api, 'getOrderForecast').mockResolvedValue(EMPTY_FORECAST);
+    vi.spyOn(api, 'getOrderFilament').mockResolvedValue(EMPTY_NEEDS);
   });
 
   it('renders the recommended plates of every line', async () => {
@@ -1259,5 +1265,43 @@ describe('PlanBlock', () => {
     render(<PlanBlock order={order} canEdit variant="dialog" onEnqueued={onEnqueued} />);
     await userEvent.click(await screen.findByTestId('plan-enqueue-all'));
     await waitFor(() => expect(onEnqueued).toHaveBeenCalledTimes(1));
+  });
+
+  // ---- filament needs (spec 2026-09-07) ----
+
+  it('shows the filament the plan needs against the shelf, with the shortage in amber', async () => {
+    vi.spyOn(api, 'getOrderFilament').mockResolvedValue({
+      ...EMPTY_NEEDS,
+      unknown_prints: 1,
+      rows: [
+        { material: 'PETG', colour: 'black', need_g: 3200, have_g: 1100, have_type_g: 4200, short_g: 2100, unknown_prints: 0 },
+        { material: 'PLA', colour: null, need_g: 400, have_g: 900, have_type_g: 900, short_g: 0, unknown_prints: 1 },
+      ],
+    });
+    render(<PlanBlock order={order} canEdit />);
+    const petg = await screen.findByTestId('filament-need-PETG-black');
+    expect(petg).toHaveTextContent('PETG · black');
+    expect(petg).toHaveTextContent('3.2kg');
+    expect(petg).toHaveTextContent('1.1kg');
+    expect(petg).toHaveTextContent('4.2kg of PETG in total');
+    expect(petg).toHaveTextContent('short 2.1kg');
+    expect(petg).toHaveAttribute('data-short', 'true');
+    const pla = screen.getByTestId('filament-need-PLA');
+    expect(pla).toHaveTextContent('PLA');
+    expect(pla).not.toHaveTextContent('in total');
+    expect(pla).toHaveAttribute('data-short', 'false');
+    expect(screen.getByText('1 print without grams')).toBeInTheDocument();
+    expect(screen.getByLabelText(/slicer estimate/)).toBeInTheDocument();
+  });
+
+  it('says so when the shelf could not be read', async () => {
+    vi.spyOn(api, 'getOrderFilament').mockResolvedValue({
+      ...EMPTY_NEEDS, stock_unavailable: true,
+      rows: [{ material: 'PETG', colour: null, need_g: 500, have_g: null, have_type_g: null, short_g: null, unknown_prints: 0 }],
+    });
+    render(<PlanBlock order={order} canEdit />);
+    const row = await screen.findByTestId('filament-need-PETG');
+    expect(row).toHaveTextContent('500g');
+    expect(screen.getByTitle('The shelf could not be read')).toBeInTheDocument();
   });
 });

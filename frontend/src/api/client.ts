@@ -4071,6 +4071,18 @@ export interface OrderForecast {
 export interface OrderForecastDetail extends OrderForecast { lines: LineForecast[] }
 export interface ForecastBatch { farm: FarmForecast; orders: OrderForecast[] }
 
+// ---- filament needs (spec 2026-09-07) ----
+export interface NeedRow {
+  material: string;
+  colour: string | null;
+  need_g: number;
+  have_g: number | null; have_type_g: number | null; short_g: number | null;
+  unknown_prints: number;
+}
+export interface FarmRow extends NeedRow { orders_count: number }
+export interface OrderNeeds { project_id: number; rows: NeedRow[]; unknown_prints: number; stock_unavailable: boolean; assumptions: string[] }
+export interface FarmNeeds { rows: FarmRow[]; orders_count: number; unknown_prints: number; stock_unavailable: boolean; assumptions: string[] }
+
 export interface PrintQueueItemCreate {
   queue_id: number;  // Required - which printer's queue
   archive_id?: number | null;
@@ -9920,6 +9932,8 @@ export const api = {
     return { farm: pages[0].farm, orders: pages.flatMap((p) => p.orders) };
   },
   getOrderForecast: (id: number) => request<OrderForecastDetail>(`/projects/${id}/forecast`),
+  getOrderFilament: (id: number) => request<OrderNeeds>(`/projects/${id}/filament`),
+  getOrdersFilament: () => request<FarmNeeds>('/projects/filament'),
 
   // Customers
   getCustomers: () => request<Customer[]>('/customers/'),

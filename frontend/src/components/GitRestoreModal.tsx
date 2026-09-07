@@ -23,6 +23,7 @@ import {
   type GitRestoreParams,
   type GitRestoreResponse,
 } from '../api/client';
+import { invalidateSpoolViews } from '../utils/queryInvalidation';
 import type { TFunction } from 'i18next';
 
 interface GitRestoreModalProps {
@@ -169,7 +170,7 @@ export function GitRestoreModal({ onClose }: GitRestoreModalProps) {
         // straight back over the restore, so this modal skipped it and pinned
         // the cache instead. That page now reconciles a moved server snapshot
         // field by field, so the restore no longer needs an exception.
-        queryClient.invalidateQueries({ queryKey: ['spools'] });
+        invalidateSpoolViews(queryClient);
         queryClient.invalidateQueries({ queryKey: ['archives'] });
         queryClient.invalidateQueries({ queryKey: ['settings'] });
       }
