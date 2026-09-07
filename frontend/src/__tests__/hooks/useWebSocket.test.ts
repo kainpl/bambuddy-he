@@ -10,6 +10,7 @@ import { renderHook, waitFor, act } from '@testing-library/react';
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ToastProvider } from '../../contexts/ToastContext';
+import { ORDER_VIEW_KEYS } from '../../utils/queryInvalidation';
 
 // Track WebSocket instances created during tests
 let wsInstances: MockWebSocket[] = [];
@@ -394,7 +395,9 @@ describe('useWebSocket hook', () => {
     // its Prints section stays empty": it was, until the page was re-entered.
     it('refreshes the project views on archive_created', async () => {
       vi.useFakeTimers();
-      const { useWebSocket } = await import('../../hooks/useWebSocket');
+      const { useWebSocket, INVALIDATION_DEBOUNCE_MS, INVALIDATION_STAGGER_MS } = await import(
+        '../../hooks/useWebSocket'
+      );
 
       const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
@@ -415,9 +418,16 @@ describe('useWebSocket hook', () => {
         });
       });
 
-      // 3000ms debounce + 500ms stagger per key; seven keys here.
+      // The burst is `debounce + one stagger per key`, and the keys are
+      // `ORDER_VIEW_KEYS` plus `project-timeline`. ⚠️ DERIVED, never a
+      // literal: the list grows, and the day `order-filament` /
+      // `orders-filament` joined it a hard-coded 10 s window fell 500 ms short
+      // of the last key and this test went red for no defect at all.
+      const keyCount = ORDER_VIEW_KEYS.length + 1; // + 'project-timeline'
       await act(async () => {
-        vi.advanceTimersByTime(10000);
+        vi.advanceTimersByTime(
+          INVALIDATION_DEBOUNCE_MS + keyCount * INVALIDATION_STAGGER_MS + INVALIDATION_STAGGER_MS,
+        );
       });
 
       for (const key of [

@@ -17,7 +17,7 @@ export function FilamentStrip({ farm }: { farm: FarmNeeds }) {
       <span className="text-bambu-gray">{t('orders.filament.title')} <ForecastHint forecast={farm} /></span>
       {farm.rows.map((row) => {
         const short = row.short_g != null && row.short_g > 0;
-        const id = needTestId(row.material, row.colour).replace('filament-need-', 'filament-strip-');
+        const id = needTestId(row.material, row.colour, 'filament-strip-');
         return (
           <span key={id} data-testid={id} data-short={String(short)} title={t('orders.filament.ordersCount', { count: row.orders_count })}
                 className={`rounded-full border px-2 py-0.5 tabular-nums ${short ? 'border-amber-400 text-amber-300' : 'border-bambu-dark-tertiary text-white'}`}>

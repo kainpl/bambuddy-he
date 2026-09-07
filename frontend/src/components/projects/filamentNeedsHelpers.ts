@@ -6,7 +6,11 @@
  * satisfies the `react-refresh/only-export-components` ESLint rule — the same
  * split already used by `filamentSwatchHelpers.ts` / `plateDialogLayout.ts` /
  * `staggerGroupIds.ts` (spec 2026-09-07).
+ *
+ * The `prefix` is a PARAMETER because the strip's ids are the table's under
+ * another name: rebuilding one from the other with `.replace()` made the
+ * shape depend on a substring that also occurs inside a material name.
  */
-export function needTestId(material: string, colour: string | null): string {
-  return colour ? `filament-need-${material}-${colour}` : `filament-need-${material}`;
+export function needTestId(material: string, colour: string | null, prefix = 'filament-need-'): string {
+  return colour ? `${prefix}${material}-${colour}` : `${prefix}${material}`;
 }

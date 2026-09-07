@@ -1294,6 +1294,21 @@ describe('PlanBlock', () => {
     expect(screen.getByLabelText(/slicer estimate/)).toBeInTheDocument();
   });
 
+  it('still shows the filament table when the plan has nothing outstanding', async () => {
+    // ⚠️ The need is the plan's remainder PLUS the pending queue rows, so an
+    // empty plan is precisely when the whole figure lives in the queue — and
+    // the table used to sit inside the «nothing outstanding» else-branch,
+    // hiding exactly then (final review I2).
+    vi.spyOn(api, 'getOrderPlan').mockResolvedValue({ ...plan, lines: [] });
+    vi.spyOn(api, 'getOrderFilament').mockResolvedValue({
+      ...EMPTY_NEEDS,
+      rows: [{ material: 'PETG', colour: null, need_g: 500, have_g: 900, have_type_g: 900, short_g: 0, unknown_prints: 0 }],
+    });
+    render(<PlanBlock order={order} canEdit />);
+    expect(await screen.findByTestId('plan-empty')).toBeInTheDocument();
+    expect(await screen.findByTestId('filament-need-PETG')).toHaveTextContent('500g');
+  });
+
   it('says so when the shelf could not be read', async () => {
     vi.spyOn(api, 'getOrderFilament').mockResolvedValue({
       ...EMPTY_NEEDS, stock_unavailable: true,

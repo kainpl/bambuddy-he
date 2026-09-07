@@ -81,6 +81,21 @@ describe('invalidateSpoolAndLocationQueries', () => {
     expect(invalidated(qc, ['inventory-spools', 'stats'])).toBe(false);
   });
 
+  it('marks the two «need vs shelf» views stale as well — this page writes spools too', async () => {
+    // ⚠️ The finding: the audit that wired every `['spools']` site to
+    // `invalidateSpoolViews` walked straight past this page, whose spool keys
+    // are its own (`inventory-spools` / `spoolman-inventory-spools`). So the
+    // order pages' filament figures kept their pre-edit numbers after a spool
+    // was edited on the INVENTORY page, of all places (final review I3).
+    const qc = primed();
+    qc.setQueryData(['order-filament', 7], { rows: [] });
+    qc.setQueryData(['orders-filament'], { rows: [] });
+    await invalidateSpoolAndLocationQueries(qc, ['inventory-spools']);
+
+    expect(invalidated(qc, ['order-filament', 7])).toBe(true);
+    expect(invalidated(qc, ['orders-filament'])).toBe(true);
+  });
+
   it('carries the Spoolman-mode spool key through unchanged', async () => {
     const qc = primed();
     qc.setQueryData(['spoolman-inventory-spools'], []);

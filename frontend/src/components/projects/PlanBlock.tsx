@@ -499,10 +499,16 @@ export function PlanBlock({
               </Button>
             )}
           </div>
-
-          {filament.data && <FilamentNeeds needs={filament.data} />}
         </>
       )}
+
+      {/* ⚠️ OUTSIDE the ternary above, deliberately. The need is the plan's
+          remainder PLUS the order's pending queue rows, so «nothing
+          outstanding» is exactly the state in which the whole need lives in
+          the queue — and that was the state the table hid itself in (final
+          review I2). The query is already gated on the order being active,
+          which is the only gate this has. */}
+      {filament.data && <FilamentNeeds needs={filament.data} />}
     </section>
   );
 }

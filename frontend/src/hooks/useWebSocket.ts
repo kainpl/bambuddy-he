@@ -14,6 +14,21 @@ import { ORDER_VIEW_KEYS } from '../utils/queryInvalidation';
 // as terminal so we don't respawn the /auth/ws-token loop.
 const WS_CLOSE_UNAUTHORIZED = 4401;
 
+/**
+ * How long invalidations are coalesced before any of them fires, and how far
+ * apart they then go out — the anti-freeze pair described at
+ * `debouncedInvalidate` below.
+ *
+ * ⚠️ **Named and exported so a test can DERIVE its window rather than guess
+ * one.** The whole burst lasts `debounce + keys × stagger`, and the key count
+ * is `ORDER_VIEW_KEYS` (a list that grows) plus `project-timeline`. A test
+ * that hard-codes the total silently stops covering the last keys the day one
+ * is added — which is exactly what happened when `order-filament` /
+ * `orders-filament` joined the list (spec 2026-09-07).
+ */
+export const INVALIDATION_DEBOUNCE_MS = 3000;
+export const INVALIDATION_STAGGER_MS = 500;
+
 interface WebSocketMessage {
   type: string;
   printer_id?: number;
@@ -322,9 +337,9 @@ export function useWebSocket() {
         setTimeout(() => {
           queryClient.invalidateQueries({ queryKey: [key] });
         }, delay);
-        delay += 500; // 500ms between each invalidation
+        delay += INVALIDATION_STAGGER_MS;
       });
-    }, 3000);
+    }, INVALIDATION_DEBOUNCE_MS);
   }, [queryClient]);
 
   /**

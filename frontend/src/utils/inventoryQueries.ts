@@ -1,4 +1,5 @@
 import type { QueryClient } from '@tanstack/react-query';
+import { invalidateSpoolViews } from './queryInvalidation';
 
 /** React Query key for GET /inventory/locations (catalog + spool counts). */
 export const inventoryLocationsQueryKey = ['inventory-locations'] as const;
@@ -37,11 +38,20 @@ export function invalidateForecastQueries(queryClient: QueryClient) {
  * the bulk toolbar) renders while the Forecast tab is open — so a spool
  * mutation that skipped this left the panel asserting pre-mutation numbers
  * for the whole sitting, healing only on a window refocus past `staleTime`.
+ *
+ * ⚠️ **This page's spool keys are its OWN** — `inventory-spools` /
+ * `spoolman-inventory-spools`, never `['spools']` — so the audit that wired
+ * every `['spools']` site to `invalidateSpoolViews` walked past every spool
+ * mutation on the Inventory page (final review I3). The order pages' «need vs
+ * shelf» figures kept their pre-edit numbers after a spool was edited HERE, of
+ * all places. The shelf views are named through the one helper that owns them,
+ * so this file never gets its own copy of that list.
  */
 export function invalidateSpoolAndLocationQueries(
   queryClient: QueryClient,
   spoolsQueryKey: readonly string[],
 ) {
+  invalidateSpoolViews(queryClient);
   return Promise.all([
     queryClient.invalidateQueries({ queryKey: [...spoolsQueryKey] }),
     invalidateInventoryLocations(queryClient),

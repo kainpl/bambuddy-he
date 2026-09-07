@@ -125,6 +125,21 @@ describe('OrdersPage', () => {
     expect(screen.getByTestId('filament-strip-PLA')).toHaveAttribute('data-short', 'false');
   });
 
+  it('shows chips with a dash for the shelf when it could not be read', async () => {
+    // ⚠️ `stock_unavailable` with NOTHING short is the third state, and it is
+    // not the collapsed line: «everything is on the shelf» would be a claim
+    // the server explicitly refused to make (triage, final review).
+    vi.spyOn(api, 'getOrdersFilament').mockResolvedValue({
+      ...EMPTY_FARM, orders_count: 1, stock_unavailable: true,
+      rows: [{ material: 'PETG', colour: null, need_g: 500, have_g: null, have_type_g: null, short_g: null, unknown_prints: 0, orders_count: 1 }],
+    });
+    render(<OrdersPage />);
+    const chip = await screen.findByTestId('filament-strip-PETG');
+    expect(chip).toHaveTextContent('/ —');
+    expect(chip).toHaveAttribute('data-short', 'false');
+    expect(screen.queryByTestId('filament-strip-covered')).not.toBeInTheDocument();
+  });
+
   it('collapses to one line when nothing is short, and hides with no rows', async () => {
     vi.spyOn(api, 'getOrdersFilament').mockResolvedValue({
       ...EMPTY_FARM, orders_count: 1,
