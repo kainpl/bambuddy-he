@@ -19,6 +19,7 @@ import defusedxml.ElementTree as ET
 from backend.app.core.config import settings
 from backend.app.models.archive import PrintArchive
 from backend.app.models.library import LibraryFile
+from backend.app.services.product_composition import plate_filaments
 from backend.app.utils.threemf_tools import extract_bed_type_from_3mf, extract_filament_usage_from_3mf
 
 logger = logging.getLogger(__name__)
@@ -146,4 +147,24 @@ def print_time_for_row(
                 if plate_time is not None:
                     seconds = plate_time
         return int(seconds) if isinstance(seconds, (int, float)) else None
+    return None
+
+
+def filaments_for_row(
+    *, archive: PrintArchive | None, library_file: LibraryFile | None, plate_id: int | None
+) -> list[dict] | None:
+    """The slicer's filaments (type, colour, ``used_g``) of a queue row's plate.
+
+    Library rows read the metadata already on the row — plate ``plate_id``, or
+    the whole file when the row names none. Archive rows read the 3MF on disk;
+    an archive without its file answers ``None``, never a guess.
+    """
+    if archive is not None and archive.deleted_at is None:
+        path = settings.base_dir / archive.file_path
+        if archive.file_path and path.is_file():
+            return extract_filament_usage_from_3mf(path, plate_id) or None
+        return None
+    if library_file is not None:
+        filaments = plate_filaments(library_file.file_metadata, plate_id or 0)
+        return filaments or None
     return None
