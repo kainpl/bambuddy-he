@@ -150,9 +150,19 @@ def unzip(zip_path: Path, dest: Path) -> None:
         zf.extractall(dest)
 
 
-def stage_embedded_python() -> Path:
-    """Download and configure the embedded Python distribution."""
+def stage_embedded_python(reuse: bool = False) -> Path:
+    """Download and configure the embedded Python distribution.
+
+    ``reuse`` keeps an already-staged tree instead of re-extracting it. Without
+    it, ``--skip-pip`` was a trap: this function wiped the tree every run, so
+    skipping the install left a Python holding nothing but pip and setuptools —
+    and the installer compiled and shipped with no application dependencies at
+    all, silently.
+    """
     target = STAGING / "python"
+    if reuse and (target / "python.exe").exists():
+        log(f"reusing already-staged Python at {target}")
+        return target
     if target.exists():
         shutil.rmtree(target)
 
@@ -254,6 +264,41 @@ def install_requirements(python_dir: Path) -> None:
         ],
         check=True,
     )
+
+
+def verify_requirements(python_dir: Path) -> None:
+    """Refuse to build a payload whose interpreter has no application packages.
+
+    A staged Python missing its dependencies still compiles into a perfectly
+    valid-looking installer that dies on the target machine at first import, so
+    this runs on every build, not only after a pip install.
+    """
+    py = python_dir / "python.exe"
+    names = ["fastapi", "sqlalchemy", "aiogram", "uvicorn", "asyncpg", "embedded-postgres"]
+    script = (
+        "import sys\n"
+        "from importlib.metadata import version, PackageNotFoundError\n"
+        "missing = []\n"
+        "for name in sys.argv[1:]:\n"
+        "    try:\n"
+        "        version(name)\n"
+        "    except PackageNotFoundError:\n"
+        "        missing.append(name)\n"
+        "print(','.join(missing))\n"
+    )
+    result = subprocess.run([str(py), "-c", script, *names], capture_output=True, text=True, check=True)
+    missing = [name for name in result.stdout.strip().split(",") if name]
+    if missing:
+        raise RuntimeError(
+            f"staged Python is missing {', '.join(missing)} — the installer would ship without them. "
+            "Re-run without --skip-pip."
+        )
+    # The bundled PostgreSQL is binaries, not just an importable module.
+    pg_bin = python_dir / "Lib" / "site-packages" / "embedded_postgres" / "pginstall" / "bin"
+    for exe in ("postgres.exe", "initdb.exe", "pg_ctl.exe"):
+        if not (pg_bin / exe).exists():
+            raise RuntimeError(f"bundled PostgreSQL is incomplete: {pg_bin / exe} is missing")
+    log(f"verified staged Python: {len(names)} key packages + PostgreSQL binaries present")
 
 
 def build_frontend() -> Path:
@@ -463,15 +508,19 @@ def main() -> int:
     DOWNLOADS.mkdir(parents=True, exist_ok=True)
     STAGING.mkdir(parents=True, exist_ok=True)
 
-    python_dir = stage_embedded_python()
+    python_dir = stage_embedded_python(reuse=args.skip_pip)
     stage_vcruntime(python_dir)
     if not args.skip_pip:
         install_requirements(python_dir)
+    verify_requirements(python_dir)
 
     if args.skip_frontend:
-        frontend_dist = REPO_ROOT / "frontend" / "dist"
+        # Vite writes to <repo>/static (outDir: '../static'), never frontend/dist —
+        # see build_frontend(). This branch used to look at frontend/dist and so
+        # refused every --skip-frontend run.
+        frontend_dist = REPO_ROOT / "static"
         if not frontend_dist.exists():
-            raise RuntimeError("--skip-frontend given but frontend/dist/ doesn't exist")
+            raise RuntimeError("--skip-frontend given but static/ doesn't exist — run `npm run build` in frontend/")
     else:
         frontend_dist = build_frontend()
 
