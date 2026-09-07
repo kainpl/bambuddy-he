@@ -1,0 +1,131 @@
+"""The filament-needs core on in-memory rows — pure, no session.
+
+Need per (material, line colour) from plan rows and pending queue rows; shelf
+per key from a spool list; the type total always beside a colour figure.
+"""
+
+from backend.app.services.filament_needs import (
+    FilamentLine,
+    NeedKey,
+    QueuedNeed,
+    SpoolStock,
+    farm_of,
+    key_of,
+    need_of_plan,
+    need_of_queue,
+    rows_of,
+    stock_by_key,
+)
+from backend.app.services.plan_engine import LinePlan, OrderPlan, PlanRow
+
+
+def _plan(rows):
+    """``rows`` = (line_id, plate_id, count)."""
+    lines: dict[int, LinePlan] = {}
+    for line_id, plate_id, count in rows:
+        line = lines.setdefault(line_id, LinePlan(line_id=line_id, product_id=1, material=None))
+        line.rows.append(
+            PlanRow(plate_id=plate_id, library_file_id=plate_id, plate_index=0, filename=f"f{plate_id}", count=count)
+        )
+    return OrderPlan(lines=list(lines.values()))
+
+
+def test_the_key_normalises_material_and_colour():
+    assert key_of("petg", " Чорний ") == NeedKey("PETG", "чорний")
+    assert key_of("PLA", None) == NeedKey("PLA", None)
+    assert key_of("PLA", "   ") == NeedKey("PLA", None)
+    assert key_of(None, "black") is None
+
+
+def test_one_row_one_filament():
+    needs = need_of_plan(_plan([(10, 100, 3)]), {10: "black"}, {100: [FilamentLine("PETG", 12.5)]})
+    assert needs.grams == {NeedKey("PETG", "black"): 37.5} and needs.unknown_prints == 0
+
+
+def test_two_filaments_of_two_types_make_two_keys():
+    needs = need_of_plan(
+        _plan([(10, 100, 2)]), {10: None}, {100: [FilamentLine("PETG", 10.0), FilamentLine("PLA", 2.0)]}
+    )
+    assert needs.grams == {NeedKey("PETG", None): 20.0, NeedKey("PLA", None): 4.0}
+
+
+def test_unknown_grams_are_counted_per_key_and_a_plate_without_filaments_per_order():
+    plate_filaments = {100: [FilamentLine("PETG", None)], 200: [], 300: [FilamentLine(None, 5.0)]}
+    needs = need_of_plan(_plan([(10, 100, 2), (10, 200, 3), (10, 300, 1)]), {10: None}, plate_filaments)
+    assert needs.unknown_by_key == {NeedKey("PETG", None): 2}
+    assert needs.unknown_prints == 4  # 3 without filaments + 1 untyped
+    assert needs.grams == {}
+
+
+def test_zero_grams_is_an_answer():
+    needs = need_of_plan(_plan([(10, 100, 2)]), {10: None}, {100: [FilamentLine("PETG", 0.0)]})
+    assert needs.grams == {NeedKey("PETG", None): 0.0} and needs.unknown_prints == 0
+
+
+def test_queue_rows_add_their_own_need():
+    needs = need_of_queue([QueuedNeed("black", [FilamentLine("PETG", 8.0)]), QueuedNeed(None, None)])
+    assert needs.grams == {NeedKey("PETG", "black"): 8.0} and needs.unknown_prints == 1
+
+
+def test_merge_sums_keys_and_counters():
+    a = need_of_plan(_plan([(10, 100, 1)]), {10: None}, {100: [FilamentLine("PETG", 5.0)]})
+    b = need_of_queue([QueuedNeed(None, [FilamentLine("PETG", 7.0)]), QueuedNeed(None, None)])
+    m = a.merge(b)
+    assert m.grams == {NeedKey("PETG", None): 12.0} and m.unknown_prints == 1
+
+
+SPOOLS = [
+    SpoolStock("PETG", "Black", "000000", 800.0),
+    SpoolStock("PETG", "Jade White", "ffffff", 950.0),
+    SpoolStock("PETG", None, "111111", 300.0),
+    SpoolStock("PLA", "Black", None, 400.0),
+]
+
+
+def test_the_colour_narrows_the_shelf_and_the_type_total_rides_beside():
+    have = stock_by_key(SPOOLS, [NeedKey("PETG", "black")], lambda _hex: set())
+    assert have[NeedKey("PETG", "black")] == (800.0, 2050.0)
+
+
+def test_without_a_colour_have_equals_the_type_total():
+    have = stock_by_key(SPOOLS, [NeedKey("PETG", None)], lambda _hex: set())
+    assert have[NeedKey("PETG", None)] == (2050.0, 2050.0)
+
+
+def test_a_nameless_spool_matches_through_the_catalogue_by_hex():
+    names = {"111111": {"black"}}
+    have = stock_by_key(SPOOLS, [NeedKey("PETG", "black")], lambda h: names.get(h, set()))
+    assert have[NeedKey("PETG", "black")] == (1100.0, 2050.0)
+
+
+def test_a_colour_nobody_has_reads_zero_not_missing():
+    have = stock_by_key(SPOOLS, [NeedKey("PLA", "red")], lambda _hex: set())
+    assert have[NeedKey("PLA", "red")] == (0.0, 400.0)
+
+
+def test_rows_carry_short_and_sort_by_material_then_colour():
+    needs = need_of_plan(
+        _plan([(10, 100, 1), (11, 200, 1)]),
+        {10: "black", 11: None},
+        {100: [FilamentLine("PETG", 1000.0)], 200: [FilamentLine("ABS", 50.0)]},
+    )
+    rows = rows_of(needs, stock_by_key(SPOOLS, needs.grams, lambda _hex: set()))
+    assert [(r.material, r.colour) for r in rows] == [("ABS", None), ("PETG", "black")]
+    petg = rows[1]
+    assert (petg.need_g, petg.have_g, petg.have_type_g, petg.short_g) == (1000.0, 800.0, 2050.0, 200.0)
+    assert rows[0].short_g == 50.0  # nothing on the shelf → short by the whole need
+
+
+def test_rows_without_a_shelf_leave_the_shelf_figures_none():
+    needs = need_of_plan(_plan([(10, 100, 1)]), {10: None}, {100: [FilamentLine("PETG", 10.0)]})
+    (row,) = rows_of(needs, None)
+    assert (row.need_g, row.have_g, row.have_type_g, row.short_g) == (10.0, None, None, None)
+
+
+def test_the_farm_sums_one_key_across_orders_and_counts_them():
+    a = need_of_plan(_plan([(10, 100, 1)]), {10: "black"}, {100: [FilamentLine("PETG", 100.0)]})
+    b = need_of_plan(_plan([(20, 100, 2)]), {20: "black"}, {100: [FilamentLine("PETG", 100.0)]})
+    stock = stock_by_key(SPOOLS, [NeedKey("PETG", "black")], lambda _hex: set())
+    farm = farm_of({1: rows_of(a, stock), 2: rows_of(b, stock)}, unknown_prints=0, stock_unavailable=False)
+    (row,) = farm.rows
+    assert (row.need_g, row.have_g, row.orders_count) == (300.0, 800.0, 2) and farm.orders_count == 2
