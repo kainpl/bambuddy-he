@@ -255,12 +255,33 @@ def _refuse_other_major() -> None:
         )
 
 
+async def _ensure_db_and_extension() -> None:
+    await _ensure_database()
+    await _psql("CREATE EXTENSION IF NOT EXISTS pg_stat_statements", database=PG_DATABASE)
+
+
 async def start() -> None:
     """Initialise if needed, start unless already running, make sure the database exists."""
     if not settings.embedded_postgres:
         return
     pgdata = _pgdata()
     _refuse_other_major()
+
+    if settings.embedded_pg_external_service:
+        # The server runs as its own OS service (the Windows installer's
+        # BamDudePostgres, ordered before us by the SCM through DependOnService).
+        # We do not own its lifecycle: no initdb, no conf, no start, no stop —
+        # only wait for it and make sure our database and extension exist.
+        await _wait_ready()
+        await _ensure_db_and_extension()
+        logger.info(
+            "Embedded PostgreSQL: using the externally-managed service on %s:%s (db %s)",
+            PG_HOST,
+            settings.embedded_pg_port,
+            PG_DATABASE,
+        )
+        return
+
     fresh = not (pgdata / "PG_VERSION").exists()
     if fresh:
         await _initdb()
@@ -284,8 +305,7 @@ async def start() -> None:
     else:
         await _start_server(pgdata)
     await _wait_ready()
-    await _ensure_database()
-    await _psql("CREATE EXTENSION IF NOT EXISTS pg_stat_statements", database=PG_DATABASE)
+    await _ensure_db_and_extension()
     logger.info(
         "Embedded PostgreSQL: ready (%s). Other clients: psql -h %s -p %s -U %s -d %s, password in %s",
         platform.machine(),
@@ -335,6 +355,10 @@ async def _start_server(pgdata: Path) -> None:
 async def stop() -> None:
     """Clean shutdown with a checkpoint. Never ``immediate``."""
     if not settings.embedded_postgres:
+        return
+    if settings.embedded_pg_external_service:
+        # The SCM owns the BamDudePostgres service; stopping it here would fight
+        # the service manager and leave it in a confused state.
         return
     if not await is_running():
         return

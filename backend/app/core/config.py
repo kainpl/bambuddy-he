@@ -179,6 +179,17 @@ class Settings(BaseSettings):
     embedded_pg_password_file: Path | None = _embedded_pg_paths(_data_dir)[1] if _embedded_db else None
     # max_connections of the bundled server; the pool (20 + 80) plus a margin.
     embedded_pg_max_connections: int = int(os.environ.get("EMBEDDED_PG_MAX_CONNECTIONS") or "120")
+    # The bundled server is registered as its own OS service (the Windows
+    # installer's BamDudePostgres, run by the SCM) rather than started as a child
+    # of this process. BamDude then only connects — it never runs initdb, writes
+    # the conf, starts or stops the server. Set by the installer in the service
+    # environment; unset everywhere else (child-process lifecycle, the default).
+    embedded_pg_external_service: bool = (os.environ.get("EMBEDDED_PG_EXTERNAL_SERVICE") or "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
 
     # Database connection-pool sizing. ``None`` = use the built-in, dialect-aware
     # default (PostgreSQL: pool_size 20 + max_overflow 80 + pre-ping + recycle

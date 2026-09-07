@@ -234,6 +234,52 @@ class TestStart:
         assert touched == []
 
 
+class TestExternalService:
+    """EMBEDDED_PG_EXTERNAL_SERVICE: the server is its own OS service (the
+    Windows installer's BamDudePostgres). BamDude connects but never owns the
+    lifecycle — no initdb, no conf, no start, no stop."""
+
+    async def test_start_connects_and_ensures_db_but_never_touches_lifecycle(self, embedded, monkeypatch):
+        monkeypatch.setattr(settings, "embedded_pg_external_service", True)
+        order = []
+
+        async def ready():
+            order.append("ready")
+
+        async def ensure_db():
+            order.append("createdb")
+
+        async def psql(sql, database="postgres"):
+            order.append(f"psql:{sql[:6]}")
+            return ""
+
+        def boom(*a, **k):
+            raise AssertionError("lifecycle tool must not run in external-service mode")
+
+        monkeypatch.setattr(ep, "_wait_ready", ready)
+        monkeypatch.setattr(ep, "_ensure_database", ensure_db)
+        monkeypatch.setattr(ep, "_psql", psql)
+        monkeypatch.setattr(ep, "_initdb", boom)
+        monkeypatch.setattr(ep, "_start_server", boom)
+        monkeypatch.setattr(ep, "stop", boom)
+        monkeypatch.setattr(ep, "_write_conf", boom)
+        monkeypatch.setattr(ep, "bundled_major", lambda: "18")
+        await ep.start()
+        assert order == ["ready", "createdb", "psql:CREATE"]
+        # no conf was written for a server we don't own
+        assert not (embedded / "bamdude.conf").exists()
+
+    async def test_stop_is_a_no_op(self, embedded, monkeypatch):
+        monkeypatch.setattr(settings, "embedded_pg_external_service", True)
+
+        def boom(*a, **k):
+            raise AssertionError("stop must not run pg_ctl in external-service mode")
+
+        monkeypatch.setattr(ep, "is_running", boom)
+        monkeypatch.setattr(ep, "_run", boom)
+        await ep.stop()
+
+
 class TestStop:
     async def test_not_running_is_a_no_op(self, embedded, monkeypatch):
         calls = []
