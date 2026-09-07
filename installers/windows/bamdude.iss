@@ -54,14 +54,10 @@ PrivilegesRequiredOverridesAllowed=
 ; alike. The transparent dark-bars favicon.ico was tried and rejected: it reads
 ; as a bare glyph.
 ;
-; ⚠️ NOT a straight copy of the brand pack's app-icon.ico — that file carries
-; the tile only at 64/128/256 and drops it at 16/32/48, so small views showed
-; bare bars while large ones showed the tile. Regenerate from the pack's tile
-; PNG instead, which is consistent at every size:
-;
-;   python -c "from PIL import Image; s=Image.open('png/icon-tile-512.png').convert('RGBA'); \
-;     z=[16,32,48,64,128,256]; f=[s.resize((n,n), Image.LANCZOS) for n in z]; \
-;     f[-1].save('bamdude.ico', format='ICO', sizes=[(n,n) for n in z], append_images=f[:-1])"
+; ⚠️ Copied from the brand pack's app-icon-tile.ico, NOT app-icon.ico — the
+; latter carries the tile only at 64/128/256 and drops it at 16/32/48, so small
+; views showed a bare glyph while large ones showed the tile. Regenerate from
+; the pack, never edit here; see the pack's README for how the variant is built.
 ;
 ; ⚠️ One file feeds SetupIconFile, UninstallDisplayIcon and every shortcut, so
 ; changing it changes all of them together. Lives next to this .iss so the
