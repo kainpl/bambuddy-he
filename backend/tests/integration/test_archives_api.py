@@ -3,6 +3,8 @@
 Tests the full request/response cycle for /api/v1/archives/ endpoints.
 """
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from httpx import AsyncClient
 
@@ -304,6 +306,46 @@ class TestArchivesAPI:
         # Check for actual stats fields
         assert "total_prints" in result
         assert "successful_prints" in result
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_accuracy_ignores_synthetic_closures(
+        self, async_client: AsyncClient, archive_factory, printer_factory
+    ):
+        """A print closed by the startup sweep or the stale-cleanup has a
+        completed_at derived FROM the slicer estimate, so its accuracy is 100%
+        by construction (#2592). Counting it would drag the fleet average
+        toward a number nobody measured.
+
+        Pinned because the stats query stopped hydrating whole archives and now
+        reads three columns — the skip is exactly the logic a columnar rewrite
+        can drop silently, and nothing else covered it.
+        """
+        printer = await printer_factory()
+        started = datetime(2026, 9, 1, 10, 0, tzinfo=timezone.utc)
+        # accuracy = estimate / actual * 100, recomputed on flush — so the
+        # numbers are built from the timestamps rather than asserted onto them.
+        measured = {
+            "status": "completed",
+            "print_time_seconds": 1800,  # estimate half of the two-hour actual
+            "started_at": started,
+            "completed_at": started + timedelta(hours=1),
+        }  # -> 50.0
+        synthetic = {
+            "status": "completed",
+            "print_time_seconds": 3600,  # estimate == actual, the 100% artefact
+            "started_at": started,
+            "completed_at": started + timedelta(hours=1),
+        }
+        await archive_factory(printer.id, **measured)
+        await archive_factory(printer.id, **synthetic, extra_data={"recovered_by_startup_sweep": True})
+        await archive_factory(printer.id, **synthetic, extra_data={"recovered_by_cleanup": True})
+
+        result = (await async_client.get("/api/v1/archives/stats")).json()
+
+        # Only the measured print counts — not (50 + 100 + 100) / 3.
+        assert result["average_time_accuracy"] == 50.0
+        assert result["time_accuracy_by_printer"] == {str(printer.id): 50.0}
 
 
 class TestArchivesSlimAPI:

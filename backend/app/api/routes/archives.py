@@ -1109,39 +1109,47 @@ async def get_archive_stats(
     prints_by_printer = {str(k): v for k, v in printer_result.all()}
 
     # Time accuracy statistics
-    # Get all completed archives with both estimated and actual times
-    accuracy_result = await db.execute(
-        select(PrintArchive)
-        .where(PrintArchive.status == "completed", *base_conditions)
-        .where(PrintArchive.print_time_seconds.isnot(None))
-        .where(PrintArchive.started_at.isnot(None))
-        .where(PrintArchive.completed_at.isnot(None))
-    )
-    archives_with_times = list(accuracy_result.scalars().all())
+    # Completed prints that carry both an estimate and a measured time.
+    #
+    # ⚠️ THREE COLUMNS, never `select(PrintArchive)`. This used to hydrate whole
+    # ORM entities — every column, the JSON blob, the identity map — for tens of
+    # thousands of rows, to read two flags and a float off each. That hydration
+    # runs on the event loop, so opening the stats page stalled every printer's
+    # MQTT for as long as it took. `time_accuracy IS NOT NULL` moved into the
+    # WHERE for the same reason: those rows were fetched and then skipped.
+    accuracy_rows = (
+        await db.execute(
+            select(PrintArchive.printer_id, PrintArchive.time_accuracy, PrintArchive.extra_data)
+            .where(PrintArchive.status == "completed", *base_conditions)
+            .where(PrintArchive.print_time_seconds.isnot(None))
+            .where(PrintArchive.started_at.isnot(None))
+            .where(PrintArchive.completed_at.isnot(None))
+            .where(PrintArchive.time_accuracy.isnot(None))
+        )
+    ).all()
 
     average_accuracy = None
     accuracy_by_printer: dict[str, float] = {}
 
-    if archives_with_times:
+    if accuracy_rows:
         accuracies = []
         printer_accuracies: dict[str, list[float]] = {}
 
-        for archive in archives_with_times:
+        for printer_id, time_accuracy, extra_data in accuracy_rows:
             # Skip synthetic closures. Their completed_at is derived FROM the
             # slicer estimate (reconcile / stale-cleanup), so time_accuracy is
             # 100% by construction and would drag the fleet average toward a
             # number nobody measured (#2592).
-            extra = archive.extra_data or {}
+            extra = extra_data or {}
             if extra.get("recovered_by_startup_sweep") or extra.get("recovered_by_cleanup"):
                 continue
-            if archive.time_accuracy is not None:
-                accuracies.append(archive.time_accuracy)
+            accuracies.append(time_accuracy)
 
-                # Group by printer
-                printer_key = str(archive.printer_id) if archive.printer_id else "unknown"
-                if printer_key not in printer_accuracies:
-                    printer_accuracies[printer_key] = []
-                printer_accuracies[printer_key].append(archive.time_accuracy)
+            # Group by printer
+            printer_key = str(printer_id) if printer_id else "unknown"
+            if printer_key not in printer_accuracies:
+                printer_accuracies[printer_key] = []
+            printer_accuracies[printer_key].append(time_accuracy)
 
         if accuracies:
             average_accuracy = round(sum(accuracies) / len(accuracies), 1)
