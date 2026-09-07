@@ -472,6 +472,72 @@ class TestLocationSort:
         assert [s.id for s in rows].count(spool.id) == 1
 
 
+class TestSortNeverChangesTheResultSet:
+    """A sort orders rows. It must never decide WHICH rows there are.
+
+    Reported from the field (0.5.5): filtering by material+brand+colour and
+    then sorting by location made records disappear. The location sort is the
+    only one that adds JOINs, and an inner join there drops every spool that
+    has no assignment — which is most of them. The joins are outer today; this
+    pins that, for every key at once, against a population deliberately mixed
+    so a lost join victim would be visible: assigned and unassigned, with and
+    without a location, and NULLs in the sortable text columns.
+    """
+
+    async def _population(self, db_session, printer_factory):
+        printer = await printer_factory(name="Printer A")
+        assigned = await _spool(db_session, brand="Assigned", material="PETG", color_name="Black")
+        db_session.add(SpoolAssignment(spool_id=assigned.id, printer_id=printer.id, ams_id=0, tray_id=0))
+        unassigned = await _spool(db_session, brand="Assigned", material="PETG", color_name="Black")
+        # NULLs in the sortable text columns, and no assignment either.
+        bare = await _spool(
+            db_session,
+            brand="Assigned",
+            material="PETG",
+            color_name="Black",
+            subtype=None,
+            note=None,
+            storage_location=None,
+            purchase_location=None,
+            slicer_filament_name=None,
+            lot=None,
+        )
+        await db_session.commit()
+        return {assigned.id, unassigned.id, bare.id}
+
+    @pytest.mark.parametrize("key", [*_SORT_KEYS, "location", "display_name"])
+    @pytest.mark.parametrize("direction", ["asc", "desc"])
+    async def test_every_sort_returns_the_same_spools(self, db_session, printer_factory, key, direction):
+        expected = await self._population(db_session, printer_factory)
+        filters = await inventory_service.build_spool_filters(
+            db_session, material="PETG", brand="Assigned", colors=["Black"]
+        )
+
+        rows = await inventory_service.list_spools(
+            db_session, filters=filters, sort_by=f"{key}_{direction}", limit=None
+        )
+        ids = [s.id for s in rows]
+        assert set(ids) == expected, f"{key}_{direction} changed which spools came back"
+        assert len(ids) == len(set(ids)), f"{key}_{direction} duplicated a row"
+
+    async def test_paging_a_location_sort_covers_every_spool_exactly_once(self, db_session, printer_factory):
+        """The same guard across page boundaries: the join must not shift rows
+        between pages either, or a spool falls through the crack unseen."""
+        expected = await self._population(db_session, printer_factory)
+        filters = await inventory_service.build_spool_filters(
+            db_session, material="PETG", brand="Assigned", colors=["Black"]
+        )
+
+        seen: list[int] = []
+        for offset in range(0, len(expected) + 2, 2):
+            page = await inventory_service.list_spools(
+                db_session, filters=filters, sort_by="location_asc", limit=2, offset=offset
+            )
+            seen.extend(s.id for s in page)
+
+        assert sorted(seen) == sorted(expected)
+
+
 class TestPagingTiebreak:
     async def test_page_2_tiebreak_on_low_cardinality_sort(self, db_session):
         """Every spool shares the same material (a low-cardinality sort) —
@@ -1027,30 +1093,32 @@ class TestGroupedModeService:
         assert len(groups) == 2
         assert all(g["group_count"] == 2 for g in groups)
 
-    async def test_spools_differing_only_in_lot_are_two_groups(self, db_session):
-        """The plan's named seed: lot is part of the key so sequential-lot
-        copies of a purchase bundle stay distinct."""
+    async def test_lot_does_not_split_a_group(self, db_session):
+        """Operator ruling 2026-09-07, reversing the plan's original seed.
+
+        Lot used to be part of the key so a purchase bundle's sequential lots
+        stayed distinct. An operator who numbers every spool's lot individually
+        then had a key unique per spool, and grouping did nothing at all — 168
+        spools, 168 groups of one. Identical spools now group whatever their
+        lots say, including a mix of set and unset."""
+        a = await _spool(db_session, lot=1)
+        b = await _spool(db_session, lot=2)
+        c = await _spool(db_session, lot=0)
+        d = await _spool(db_session, lot=None)
+
+        groups = await _groups(db_session)
+        assert len(groups) == 1
+        assert groups[0]["group_count"] == 4
+        assert groups[0]["ids"] == sorted([a.id, b.id, c.id, d.id])
+
+    async def test_a_group_reports_no_lot_because_it_may_span_several(self, db_session):
+        """The field is gone from the group row rather than reporting one
+        member's lot as if it were the group's."""
         await _spool(db_session, lot=1)
         await _spool(db_session, lot=2)
 
         groups = await _groups(db_session)
-        assert len(groups) == 2
-        assert all(g["group_count"] == 1 for g in groups)
-
-    async def test_lot_zero_is_distinct_from_null_and_nulls_merge(self, db_session):
-        """The client uses ``lot ?? ''`` (nullish), NOT ``|| ''``: lot=0 keys
-        as '0' while NULL keys as '' — 0 and NULL are DIFFERENT groups, and
-        all-NULL lots are ONE group (SQL GROUP BY treats NULLs as equal on
-        both dialects, which is exactly the ``?? ''`` fold)."""
-        zero = await _spool(db_session, lot=0)
-        null_a = await _spool(db_session, lot=None)
-        null_b = await _spool(db_session, lot=None)
-
-        groups = await _groups(db_session)
-        assert len(groups) == 2
-        by_count = {g["group_count"]: g for g in groups}
-        assert by_count[1]["ids"] == [zero.id]
-        assert by_count[2]["ids"] == sorted([null_a.id, null_b.id])
+        assert "lot" not in groups[0]
 
     async def test_used_spool_never_merges(self, db_session):
         """Client consumers (InventoryPage.tsx:1407-1424): only unused spools
@@ -1117,13 +1185,14 @@ class TestGroupedModeService:
         assert group["color_name"] == ""
         assert group["rgba"] == ""
         assert group["label_weight"] == 1000
-        assert group["lot"] is None
+        assert "lot" not in group
 
     async def test_group_paging_pages_groups_not_spools(self, db_session):
-        # 5 groups of 2 members each (distinct by lot), one shared sort value.
-        for lot in range(1, 6):
-            await _spool(db_session, lot=lot)
-            await _spool(db_session, lot=lot)
+        # 5 groups of 2 members each. Distinct by colour, not lot — lot stopped
+        # being a group key (2026-09-07) and no longer splits anything.
+        for n in range(1, 6):
+            await _spool(db_session, color_name=f"C{n}")
+            await _spool(db_session, color_name=f"C{n}")
 
         assert await _group_total(db_session) == 5
         page_one = await _groups(db_session, limit=2, offset=0)
@@ -1173,8 +1242,10 @@ class TestGroupedSort:
         """Every grouped ordering ends with a stable tiebreak — walk an
         identical-sort-value set page by page and the union must be complete
         and duplicate-free (the flat list's TestPagingTiebreak, over groups)."""
-        for lot in range(1, 7):
-            await _spool(db_session, lot=lot)
+        # Six distinct groups sharing one sort value — distinct by colour,
+        # since lot no longer splits a group (2026-09-07).
+        for n in range(1, 7):
+            await _spool(db_session, color_name=f"C{n}")
 
         seen: list[int] = []
         for offset in (0, 2, 4):
@@ -1218,7 +1289,7 @@ class TestGroupedModeRoute:
         assert len(group["ids"]) == 3
         assert group["subtype"] == ""  # coalesced key value, seeded NULL
         assert group["label_weight"] == 1000
-        assert group["lot"] is None
+        assert "lot" not in group
         # Representative rides the slim list projection: k_profile_count,
         # and k_profiles null unless the include_k_profiles opt-in (task 4)
         # asks for the nested array.
@@ -1238,9 +1309,9 @@ class TestGroupedModeRoute:
         assert [i["ids"] for i in body["items"]] == [[pla.id]]
 
     async def test_grouped_paging_slices_groups(self, async_client, db_session):
-        for lot in range(1, 4):  # 3 groups x 2 members
-            await _spool(db_session, lot=lot)
-            await _spool(db_session, lot=lot)
+        for n in range(1, 4):  # 3 groups x 2 members, distinct by colour
+            await _spool(db_session, color_name=f"C{n}")
+            await _spool(db_session, color_name=f"C{n}")
 
         resp = await async_client.get(
             "/api/v1/inventory/spools", params={"page": 2, "per_page": 2, "group_similar": "true"}
@@ -1252,8 +1323,8 @@ class TestGroupedModeRoute:
         assert body["items"][0]["group_count"] == 2
 
     async def test_grouped_all_true_returns_every_group(self, async_client, db_session):
-        for lot in range(1, 4):
-            await _spool(db_session, lot=lot)
+        for n in range(1, 4):
+            await _spool(db_session, color_name=f"C{n}")
 
         resp = await async_client.get(
             "/api/v1/inventory/spools", params={"page": 1, "all": "true", "group_similar": "true"}

@@ -5013,7 +5013,6 @@ export interface SpoolGroupItem {
   color_name: string;
   rgba: string;
   label_weight: number;
-  lot: number | null;
   group_count: number;
   /** Complete member ids, ascending — group expansion + selection feed. */
   ids: number[];

@@ -46,6 +46,31 @@ from backend.app.core.database import Base  # noqa: E402
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _dialect_follows_the_test_database():
+    """Make ``is_postgres()`` agree with the database the tests actually use.
+
+    ``core/db_dialect`` decides the dialect from ``settings.database_url``, and
+    pydantic fills that from the developer's ``.env``. Tests run on in-memory
+    SQLite regardless — so a developer whose ``.env`` says
+    ``DATABASE_URL=embedded`` had every dialect-branching query emit PostgreSQL
+    SQL against SQLite, and 22 grouped-inventory tests failed on
+    ``no such function: array_agg``. The failures were entirely environmental:
+    the same tests passed for anyone whose ``.env`` was unset.
+
+    A test suite must not depend on which backend the machine happens to be
+    configured for, so the setting is pinned to the test engine's URL here.
+    Tests that DO exercise the PostgreSQL branch monkeypatch ``is_postgres``
+    directly (see ``test_migration_m167``) and are unaffected.
+    """
+    from backend.app.core.config import settings
+
+    original = settings.database_url
+    object.__setattr__(settings, "database_url", TEST_DATABASE_URL)
+    yield
+    object.__setattr__(settings, "database_url", original)
+
+
 @pytest.fixture(autouse=True)
 def mfa_encryption_isolation(monkeypatch, tmp_path):
     """Per-test isolation for MFA encryption state.

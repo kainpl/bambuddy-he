@@ -783,7 +783,7 @@ async def inventory_stats(db: AsyncSession) -> dict[str, Any]:
 # (InventoryPage.tsx:83-87):
 #
 #     `${material}|${subtype || ''}|${brand || ''}|${color_name || ''}|
-#      ${rgba || ''}|${label_weight}|${lot ?? ''}`
+#      ${rgba || ''}|${label_weight}`   (lot dropped 2026-09-07)
 #
 # and the client's CONSUMERS (:1402-1439) are part of the behavioral spec
 # too: only unused (``weight_used === 0``) AND unassigned spools are eligible
@@ -802,7 +802,7 @@ GROUP_SORT_KEYS = frozenset({"display_name", "material", "brand", "color_name"})
 
 
 def _spool_group_key_exprs() -> dict[str, Any]:
-    """The 7 group-key columns, keyed by their response-field names.
+    """The 6 group-key columns, keyed by their response-field names.
 
     - ``material`` / ``label_weight`` — raw (both NOT NULL; the client key
       interpolated them uncoalesced).
@@ -810,12 +810,13 @@ def _spool_group_key_exprs() -> dict[str, Any]:
       ``coalesce(col, '')``: the client's ``|| ''`` folds NULL and ``''``
       into ONE key value (pinned by the client's own grouping test), and a
       bare GROUP BY would keep them apart.
-    - ``lot`` — RAW, deliberately NOT coalesced: the client used ``?? ''``
-      (nullish), not ``|| ''`` — so ``lot=0`` keys as ``'0'`` while NULL keys
-      as ``''``. GROUP BY on the bare integer column reproduces exactly that:
-      NULLs group together (SQL GROUP BY treats NULLs as equal on both
-      dialects), and 0 stays its own group. ``coalesce(lot, 0)`` (the SORT
-      map's spelling) would wrongly merge them.
+
+    ⚠️ ``lot`` was the 7th key column and is NOT one any more (operator ruling
+    2026-09-07). It was included so a purchase bundle's sequential lots stayed
+    distinct — but an operator who numbers every spool's lot individually then
+    has a key unique per spool, and grouping silently did nothing at all: 168
+    spools became 168 groups of one. Lot separation is worth less than grouping
+    working. A group may now span lots, which is why it no longer reports one.
     """
     return {
         "material": Spool.material,
@@ -824,7 +825,6 @@ def _spool_group_key_exprs() -> dict[str, Any]:
         "color_name": func.coalesce(Spool.color_name, ""),
         "rgba": func.coalesce(Spool.rgba, ""),
         "label_weight": Spool.label_weight,
-        "lot": Spool.lot,
     }
 
 
@@ -942,8 +942,8 @@ async def list_spool_groups(
     query itself).
 
     Each returned dict carries the key fields (text keys COALESCED — ``''``
-    where the column is NULL, because that IS the key value; ``lot`` raw,
-    None for the all-NULL-lots group), ``group_count``, the COMPLETE sorted
+    where the column is NULL, because that IS the key value), ``group_count``,
+    the COMPLETE sorted
     member ``ids``, and ``representative`` — the min(id) member as an ORM
     ``Spool`` row with ``k_profiles`` eager-loaded, ready for
     ``_spool_to_list_item``. The representative is fetched by joining
@@ -961,7 +961,6 @@ async def list_spool_groups(
             sub.c.color_name,
             sub.c.rgba,
             sub.c.label_weight,
-            sub.c.lot,
             sub.c.group_count,
             sub.c.member_ids,
         )
@@ -983,7 +982,6 @@ async def list_spool_groups(
             "color_name": row.color_name,
             "rgba": row.rgba,
             "label_weight": int(row.label_weight),
-            "lot": row.lot,
             "group_count": int(row.group_count),
             "ids": _parse_member_ids(row.member_ids),
             "representative": row.Spool,

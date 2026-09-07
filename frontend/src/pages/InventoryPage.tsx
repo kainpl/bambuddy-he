@@ -33,9 +33,7 @@ import { BulkEditSpoolsModal } from '../components/BulkEditSpoolsModal';
 import { LocationsModal } from '../components/LocationsModal';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
-import { resolveSpoolColorName,
-  colorSortKey,
-} from '../utils/colors';
+import { resolveSpoolColorName } from '../utils/colors';
 import { useColorCatalogVersion } from '../hooks/useColorCatalogVersion';
 import { getCurrencySymbol } from '../utils/currency';
 import { formatDateInput, parseUTCDate, type DateFormat } from '../utils/date';
@@ -93,11 +91,14 @@ function spoolSwatchStyle(s: InventorySpool): CSSProperties {
 }
 
 function spoolGroupKey(s: InventorySpool): string {
-  // Lot is part of the key so sequential-lot copies (a purchase bundle) stay
-  // distinct cards instead of collapsing into one aggregate.
+  // ⚠️ NO lot (operator ruling 2026-09-07). It used to be part of the key so a
+  // purchase bundle's sequential lots stayed distinct — but an operator who
+  // numbers every spool's lot individually then had a key unique per spool, and
+  // grouping did nothing: every group held exactly one. The server dropped it
+  // from its own key at the same time; the two modes must agree.
   // ⚠️ Spoolman-mode only since task 4 — the local inventory groups
-  // server-side by the same 7-column key (see serverGroupKey below).
-  return `${s.material}|${s.subtype || ''}|${s.brand || ''}|${s.color_name || ''}|${s.rgba || ''}|${s.label_weight}|${s.lot ?? ''}`;
+  // server-side by the same 6-column key (see serverGroupKey below).
+  return `${s.material}|${s.subtype || ''}|${s.brand || ''}|${s.color_name || ''}|${s.rgba || ''}|${s.label_weight}`;
 }
 
 /**
@@ -107,7 +108,7 @@ function spoolGroupKey(s: InventorySpool): string {
  * `expandedGroups` set stays valid across both.
  */
 function serverGroupKey(g: SpoolGroupItem): string {
-  return `${g.material}|${g.subtype}|${g.brand}|${g.color_name}|${g.rgba}|${g.label_weight}|${g.lot ?? ''}`;
+  return `${g.material}|${g.subtype}|${g.brand}|${g.color_name}|${g.rgba}|${g.label_weight}`;
 }
 
 /**
@@ -146,6 +147,11 @@ function mapServerSortColumn(colId: string): string {
 
 // Column definitions for the inventory table
 const COLUMN_CONFIG_KEY = 'bamdude-inventory-columns';
+// How many member ids a grouped row prints before it says "+N". The rest are
+// one chevron away; printing them all is what broke the grouped layout.
+const GROUP_ID_PREVIEW = 5;
+// Marks that the one-time colour-name enable in loadColumnConfig has run.
+const COLOR_NAME_DEFAULT_KEY = 'bamdude-inventory-color-name-default';
 
 const DEFAULT_COLUMNS: ColumnConfig[] = [
   { id: 'id', label: '#', visible: true },
@@ -157,7 +163,10 @@ const DEFAULT_COLUMNS: ColumnConfig[] = [
   { id: 'rgba', label: 'Color', visible: true },
   { id: 'material', label: 'Material', visible: true },
   { id: 'subtype', label: 'Subtype', visible: true },
-  { id: 'color_name', label: 'Color Name', visible: false },
+  // On by default WITH the swatch: the two merge into one column (swatch +
+  // name), which is the only colour column whose header may offer a sort — the
+  // order is alphabetical by name, so the name has to be visible.
+  { id: 'color_name', label: 'Color Name', visible: true },
   { id: 'brand', label: 'Brand', visible: true },
   { id: 'slicer_filament', label: 'Slicer Filament', visible: false },
   { id: 'location', label: 'Location', visible: true },
@@ -204,6 +213,25 @@ function loadColumnConfig(): ColumnConfig[] {
           result.splice(insertAt, 0, { ...def });
         }
       });
+      // One-time: switch the colour NAME on for installs that predate it being
+      // a default. A saved config wins over defaults forever, so without this
+      // an existing operator would keep a swatch-only colour column — and the
+      // swatch alone is no longer sortable (the sort is alphabetical by name,
+      // so the name must be on screen). They would silently lose colour
+      // sorting instead of gaining the name. Runs once, keyed separately; turn
+      // the column back off afterwards and it stays off.
+      try {
+        if (!localStorage.getItem(COLOR_NAME_DEFAULT_KEY)) {
+          localStorage.setItem(COLOR_NAME_DEFAULT_KEY, '1');
+          const colorName = result.find((c) => c.id === 'color_name');
+          if (colorName && !colorName.visible) {
+            colorName.visible = true;
+            saveColumnConfig(result);
+          }
+        }
+      } catch {
+        // Storage unavailable — the default below is already correct.
+      }
       return result;
     }
   } catch {
@@ -243,8 +271,22 @@ function toRenderColumns(visible: string[]): string[] {
   return out;
 }
 
+/**
+ * A weight for a table cell or the stats tile.
+ *
+ * `useKg` is the stats tile's coarse form — kilograms to one decimal, where a
+ * farm total of 214.3kg is the useful reading.
+ *
+ * Everything else is grams, EXCEPT past 10kg, where it switches to kilograms
+ * with three decimals. Only a GROUP row ever gets that big: a single spool tops
+ * out around 3kg, while a group of eleven sums to five digits, and `11417g` is
+ * a number you have to count the digits of. Three decimals of a kilogram is
+ * exactly gram precision, so the switch loses nothing — `11.417kg` is the same
+ * value, read at a glance.
+ */
 function formatWeight(g: number, useKg = false): string {
   if (useKg && g >= 1000) return `${(g / 1000).toFixed(1)}kg`;
+  if (g >= 10_000) return `${(g / 1000).toFixed(3)}kg`;
   return `${Math.round(g)}g`;
 }
 
@@ -587,12 +629,23 @@ const columnSortValues: Record<string, (spool: InventorySpool, assignmentMap: Re
   subtype: (s) => (s.subtype || '').toLowerCase(),
   // The NAME column sorts by name — alphabetical is what it says on the header.
   color_name: (s) => (s.color_name || '').toLowerCase(),
-  // ⚠️ The swatch columns sort by COLOUR. The swatch column had no extractor at
-  // all, so its header ignored clicks; the combined one sorted by name, which
-  // files a titanium grey under T and a burgundy under B — an ordering nobody
-  // reading a row of swatches can follow.
-  rgba: (s) => colorSortKey(s.rgba),
-  color_combined: (s) => colorSortKey(s.rgba),
+  // ⚠️ Colour sorts by NAME, and only where the name is on screen.
+  //
+  // It used to sort by perceptual hue (`colorSortKey`), on the reasoning that
+  // alphabetical order files a titanium grey under T and a burgundy under B,
+  // which nobody reading a row of swatches can follow. That reasoning lost to a
+  // worse problem: the SERVER has no rgba sort key and never will, so a
+  // swatch-header click was already remapped to `color_name`. The two modes
+  // therefore ordered the same column differently — hue here, alphabet on the
+  // server — and the operator, seeing the server's order under a column of
+  // swatches, read it as not sorting at all (2026-09-07 ruling).
+  //
+  // `rgba` deliberately has NO extractor, which is what makes `isColumnSortable`
+  // refuse it: a rendered `rgba` column only ever exists when `color_name` is
+  // hidden (with both on they merge into `color_combined`), so its header would
+  // offer an alphabetical order whose key is nowhere on the row. The combined
+  // column carries the name, so it sorts.
+  color_combined: (s) => (s.color_name || '').toLowerCase(),
   brand: (s) => (s.brand || '').toLowerCase(),
   slicer_filament: (s) => (s.slicer_filament_name || s.slicer_filament || '').toLowerCase(),
   location: (s, am) => {
@@ -3659,9 +3712,19 @@ function SpoolTableGroup({
             )}
           </td>
         ))}
+        {/* ⚠️ Capped, and never wrapping. This printed every member id, so a
+            group of 44 spools rendered 44 ids down a narrow column and stretched
+            its own row to the height of the viewport — the grouped view fell
+            apart exactly where grouping was most useful. The row is a summary:
+            a handful of ids place the group, the count says how many more, and
+            the chevron already expands to the real list. Full list on hover. */}
         <td className="py-3 px-4">
-          <span className="text-xs text-bambu-gray">
-            {memberIds.map((id) => `#${id}`).join(', ')}
+          <span
+            className="text-xs text-bambu-gray whitespace-nowrap"
+            title={memberIds.map((id) => `#${id}`).join(', ')}
+          >
+            {memberIds.slice(0, GROUP_ID_PREVIEW).map((id) => `#${id}`).join(', ')}
+            {memberIds.length > GROUP_ID_PREVIEW && ` +${memberIds.length - GROUP_ID_PREVIEW}`}
           </span>
         </td>
       </tr>

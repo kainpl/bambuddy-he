@@ -1132,12 +1132,15 @@ def _spool_to_list_item(
 
 class SpoolGroupItem(BaseModel):
     """One row of the grouped list mode (``group_similar=true``, task 3): the
-    7-column group key + membership + the min(id) member as representative
+    6-column group key + membership + the min(id) member as representative
     (slim list projection — same ``SpoolListItem`` the flat paged mode
     returns). The text key fields carry the COALESCED key value (``''`` where
-    the underlying column is NULL — the client key's ``|| ''`` fold); ``lot``
-    stays raw (``?? ''`` semantics: the all-NULL-lots group reports null,
-    lot=0 is its own group)."""
+    the underlying column is NULL — the client key's ``|| ''`` fold).
+
+    ⚠️ No ``lot``: it stopped being a key on 2026-09-07 (an operator numbering
+    each spool's lot individually got one group per spool), so a group may span
+    lots and has no single one to report. The representative still carries its
+    own."""
 
     material: str
     subtype: str
@@ -1145,7 +1148,6 @@ class SpoolGroupItem(BaseModel):
     color_name: str
     rgba: str
     label_weight: int
-    lot: int | None
     group_count: int
     ids: list[int]
     representative: SpoolListItem
@@ -1306,7 +1308,6 @@ async def list_spools(
                     color_name=g["color_name"],
                     rgba=g["rgba"],
                     label_weight=g["label_weight"],
-                    lot=g["lot"],
                     group_count=g["group_count"],
                     ids=g["ids"],
                     representative=_spool_to_list_item(
