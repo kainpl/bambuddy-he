@@ -392,7 +392,7 @@ Bambu Studio thinks in **filament families**: one identity (`filament_id`) behin
 </tr>
 </table>
 
-**Plus:** Customizable themes, mobile responsive, multi-language (EN/UK), auto updates, database backup/restore, PostgreSQL support
+**Plus:** Customizable themes, mobile responsive, multi-language (EN/UK), auto updates, database backup/restore, PostgreSQL support — bundled or your own
 
 ---
 
@@ -445,6 +445,22 @@ See [`install/README.md`](install/README.md#windows-installer-exe-windows-1011) 
 
 > **SmartScreen:** the installer is not code-signed yet, so Windows shows "Windows protected your PC" on first run — click **More info → Run anyway**. See [Code signing policy](#code-signing-policy) for the status of the SignPath application.
 
+### Choosing a database
+
+BamDude uses **SQLite** by default — nothing to set up. One variable, `DATABASE_URL`, switches it:
+
+| `DATABASE_URL` | Backend |
+|----------------|---------|
+| *empty / unset* | SQLite (default) |
+| `embedded` | a **PostgreSQL 18 that ships with BamDude** and that BamDude starts and stops for you |
+| `postgresql+asyncpg://…` | your own PostgreSQL server |
+
+The bundled server comes from our open-source [embedded-postgres](https://github.com/kainpl/embedded-postgres) package (PostgreSQL 18 + pgvector + pg_stat_statements; Linux x86_64/aarch64/armv7l, macOS, Windows) and arrives with the Python dependencies — nothing to install by hand. It lives under `DATA_DIR/postgres/`, listens on `127.0.0.1` only, and generates its own password. Pin `EMBEDDED_PG_PORT=6432` if you want to reach it with psql or DBeaver.
+
+Every installer asks which one you want: `install.sh --db sqlite|embedded|external`, a **Database** page in the Windows installer (where the bundled server can run as its own `BamDudePostgres` service), and the same question in `docker-install.sh`. Switching from SQLite imports your existing database automatically on the next start.
+
+Full manual: **<https://docs.bamdude.top/features/postgresql/>**
+
 ### Upgrading or migrating
 
 Full manual: **<https://docs.bamdude.top/getting-started/upgrading/>** ([source](https://github.com/kainpl/docs.bamdude.top)) — covers migration from Bambuddy-HE / BamDude 0.2.x, routine BamDude-to-BamDude updates, switching between self-install / Docker / GHCR, and rollback.
@@ -476,7 +492,7 @@ Short version:
 |-----------|------------|
 | Backend | Python, FastAPI, SQLAlchemy, aiogram 3.x |
 | Frontend | React 19, TypeScript, Tailwind CSS 4 |
-| Database | SQLite (default) or PostgreSQL |
+| Database | SQLite (default), a bundled PostgreSQL 18, or your own PostgreSQL |
 | 3D Viewer | Three.js |
 | Communication | MQTT (TLS), FTPS |
 | Telegram | aiogram 3.x, MarkdownV2, FSM |
