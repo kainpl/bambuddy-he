@@ -199,6 +199,7 @@ import { PrinterConditions } from '../components/zigbee/PrinterConditions';
 import { AirductModal } from '../components/AirductModal';
 import { TemperatureModal } from '../components/TemperatureModal';
 import { MotionModal } from '../components/MotionModal';
+import { invalidateQueueViews } from '../utils/queryInvalidation';
 
 // Color names resolve via getColorName() which reads the backend color_catalog
 // (loaded once at app startup by ColorCatalogProvider). Hardcoded hex/code tables
@@ -2277,7 +2278,7 @@ function PrinterCard({
     mutationFn: () => api.archivePrinter(printer.id),
     onSuccess: (res) => {
       queryClient.invalidateQueries({ queryKey: ['printers'] });
-      queryClient.invalidateQueries({ queryKey: ['queue'] });
+      invalidateQueueViews(queryClient);
       showToast(
         t('printers.archive.toastArchived', { name: printer.name, count: res.cancelled_items }),
         'success',
@@ -2455,7 +2456,7 @@ function PrinterCard({
         old ? { ...old, awaiting_plate_clear: false } : old
       );
       queryClient.invalidateQueries({ queryKey: ['printerStatus', printer.id] });
-      queryClient.invalidateQueries({ queryKey: ['queue', printer.id] });
+      invalidateQueueViews(queryClient);
     },
     onError: (error: Error) => showToast(error.message || t('printers.toast.failedToSendCommand'), 'error'),
   });
@@ -2471,7 +2472,7 @@ function PrinterCard({
         old ? { ...old, awaiting_plate_clear: false } : old
       );
       queryClient.invalidateQueries({ queryKey: ['printerStatus', printer.id] });
-      queryClient.invalidateQueries({ queryKey: ['queue', printer.id] });
+      invalidateQueueViews(queryClient);
     },
     onError: (error: Error) => showToast(error.message || t('printers.toast.failedToSendCommand'), 'error'),
   });
@@ -6115,8 +6116,7 @@ function PrinterCard({
           lockDispatchMode
           onDone={() => {
             setDroppedForQueue(null);
-            queryClient.invalidateQueries({ queryKey: ['queue', printer.id] });
-            queryClient.invalidateQueries({ queryKey: ['queues'] });
+            invalidateQueueViews(queryClient);
           }}
         />
       )}

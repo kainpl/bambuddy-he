@@ -8556,6 +8556,12 @@ export default {
       prep: 'заливання й прогрів',
     },
     unavailable: 'Немає оцінки',
+    // Запит не вдався або його відхилено — це НЕ «Немає оцінки», де ферма нічого не змогла розмістити.
+    error: 'Прогноз недоступний',
+    unknownPrints_one: '{{count}} друк без оцінки',
+    unknownPrints_few: '{{count}} друки без оцінки',
+    unknownPrints_many: '{{count}} друків без оцінки',
+    unknownPrints_other: '{{count}} друків без оцінки',
   },
   // Cloud Link — сполучення цієї ферми з порталом BamDude.
   cloudLink: {

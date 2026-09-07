@@ -94,6 +94,7 @@ import { FileTagsPopover, type TagsPopoverAnchor } from '../components/FileTagsP
 import { QueueSequencer } from '../components/QueueSequencer';
 import { libraryTagsQueryKey } from '../utils/libraryTagsQuery';
 import { LinkToProductsModal } from '../components/products/LinkToProductsModal';
+import { invalidateQueueViews } from '../utils/queryInvalidation';
 
 type SortField = 'name' | 'date' | 'size' | 'type';
 type SortDirection = 'asc' | 'desc';
@@ -3697,7 +3698,7 @@ export function FileManagerPage() {
             // what still has to be distributed. Everything queued → empty.
             if (fromSelection) setSelectedFiles(remaining.map((f) => f.id));
             queryClient.invalidateQueries({ queryKey: ['library-files'] });
-            queryClient.invalidateQueries({ queryKey: ['queue'] });
+            invalidateQueueViews(queryClient);
             queryClient.invalidateQueries({ queryKey: ['archives'] });
           }}
         />

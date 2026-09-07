@@ -7,6 +7,7 @@ import { api } from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { formatRelativeTime } from '../utils/date';
+import { invalidateQueueViews } from '../utils/queryInvalidation';
 
 interface PrinterQueueWidgetProps {
   printerId: number;
@@ -34,7 +35,7 @@ export function PrinterQueueWidget({ printerId, printerState, awaitingPlateClear
   const repeatPrintMutation = useMutation({
     mutationFn: () => api.repeatPrint(printerId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['queue', printerId] });
+      invalidateQueueViews(queryClient);
       queryClient.invalidateQueries({ queryKey: ['printerStatus', printerId] });
       showToast(t('queue.repeatPrintSuccess'), 'success');
     },
@@ -44,7 +45,7 @@ export function PrinterQueueWidget({ printerId, printerState, awaitingPlateClear
   const clearPlateMutation = useMutation({
     mutationFn: () => api.clearPlate(printerId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['queue', printerId] });
+      invalidateQueueViews(queryClient);
       queryClient.invalidateQueries({ queryKey: ['printerStatus', printerId] });
       showToast(t('queue.clearPlateSuccess'), 'success');
     },

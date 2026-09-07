@@ -18,6 +18,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { LibraryPickerModal } from '../LibraryPickerModal';
 import { QueueSequencer } from '../QueueSequencer';
 import type { SequencedFile } from '../QueueSequencer';
+import { invalidateQueueViews } from '../../utils/queryInvalidation';
 
 /**
  * Top-of-page panel that surfaces pending auto-queue items — the router
@@ -88,8 +89,7 @@ export function AutoQueuePanel() {
     mutationFn: (id: number) => api.assignAutoQueueNow(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['auto-queue'] });
-      queryClient.invalidateQueries({ queryKey: ['queue'] });
-      queryClient.invalidateQueries({ queryKey: ['queues'] });
+      invalidateQueueViews(queryClient);
       showToast(t('autoQueue.assigned'));
     },
     onError: (err: Error) => showToast(err.message, 'error'),
@@ -421,7 +421,7 @@ export function AutoQueuePanel() {
           onDone={() => {
             setDroppedForQueue(null);
             queryClient.invalidateQueries({ queryKey: ['auto-queue'] });
-            queryClient.invalidateQueries({ queryKey: ['queue'] });
+            invalidateQueueViews(queryClient);
           }}
         />
       )}

@@ -23,6 +23,7 @@ import {
   invalidateAfterDelete,
   invalidateOrderCandidates,
   invalidateOrderViews,
+  invalidateQueueViews,
 } from '../../utils/queryInvalidation';
 
 /** A query only has a state once something has put it in the cache. */
@@ -112,6 +113,9 @@ describe('invalidateOrderViews', () => {
       'project',
       'project-archives',
       'project-plan',
+      // spec 2026-09-06: the ETA is read off the plan, so it moves with it.
+      'order-forecast',
+      'orders-forecast',
       'customers',
       'customer',
       'order-candidates',
@@ -119,6 +123,26 @@ describe('invalidateOrderViews', () => {
       'product',
       'products',
     ]);
+  });
+});
+
+describe('invalidateQueueViews', () => {
+  it('moves the farm estimate with the queue rows it is computed from', () => {
+    // ⚠️ The tile is a server-side simulation over exactly these rows (spec
+    // 2026-09-06, Decision 5). It used to be refreshed only by the two
+    // WebSocket print events and a 30 s interval, so queueing a plate left the
+    // one figure the page exists to show a full interval behind.
+    const qc = new QueryClient();
+    seed(qc, [['queues'], ['queue', 3, 'pending'], ['queue-forecast'], ['projects']]);
+
+    invalidateQueueViews(qc);
+
+    expect(stale(qc, ['queues'])).toBe(true);
+    // The prefix: a mutation on one printer moves the whole farm's makespan.
+    expect(stale(qc, ['queue', 3, 'pending'])).toBe(true);
+    expect(stale(qc, ['queue-forecast'])).toBe(true);
+    // Not an order mutation — the order views are none of its business.
+    expect(stale(qc, ['projects'])).toBe(false);
   });
 });
 

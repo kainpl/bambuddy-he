@@ -15,6 +15,18 @@ interface Props {
   unassignedCount: number;
 }
 
+/** One reading of the bar. `hint` is a small second line under the value —
+ *  only the estimate tile carries one today, and it says why the number is
+ *  what it is rather than repeating it. */
+interface Tile {
+  key: string;
+  icon: typeof PrinterIcon;
+  label: string;
+  value: string | number;
+  tone: string;
+  hint?: string;
+}
+
 function formatDuration(totalSeconds: number): string {
   if (!Number.isFinite(totalSeconds) || totalSeconds <= 0) return '0m';
   const hours = Math.floor(totalSeconds / 3600);
@@ -36,7 +48,7 @@ export function QueueStatsBar({ queues, unassignedCount }: Props) {
     return { printing, pending, error };
   }, [queues]);
 
-  const tiles = [
+  const tiles: Tile[] = [
     {
       key: 'printing',
       icon: PrinterIcon,
@@ -69,6 +81,12 @@ export function QueueStatsBar({ queues, unassignedCount }: Props) {
       label: t('queue.stats.estimatedRemaining'),
       value: formatDuration(forecast?.free_seconds ?? 0),
       tone: 'text-bambu-green',
+      // Why the number can read «0m» with printers running: a queued row or a
+      // print whose 3MF has not been attached carries no estimate, and the
+      // simulation counts those rather than defaulting them to two hours.
+      hint: forecast && forecast.unknown_prints > 0
+        ? t('farmForecast.unknownPrints', { count: forecast.unknown_prints })
+        : undefined,
     },
     {
       key: 'errors',
@@ -81,7 +99,7 @@ export function QueueStatsBar({ queues, unassignedCount }: Props) {
 
   return (
     <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mb-4">
-      {tiles.map(({ key, icon: Icon, label, value, tone }) => (
+      {tiles.map(({ key, icon: Icon, label, value, tone, hint }) => (
         <div
           key={key}
           className="flex items-center gap-3 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg px-3 py-2"
@@ -90,6 +108,7 @@ export function QueueStatsBar({ queues, unassignedCount }: Props) {
           <div className="min-w-0">
             <div className="text-[10px] uppercase tracking-wide text-bambu-gray truncate">{label}</div>
             <div className={`text-lg font-semibold ${tone} leading-tight`}>{value}</div>
+            {hint && <div className="text-[10px] text-bambu-gray truncate" title={hint}>{hint}</div>}
           </div>
         </div>
       ))}

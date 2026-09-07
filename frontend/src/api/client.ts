@@ -4042,7 +4042,12 @@ export interface StaggerState {
 
 // ---- farm forecast (spec 2026-09-06) ----
 
-export interface FarmForecast { free_at: string | null; free_seconds: number }
+export interface FarmForecast {
+  free_at: string | null;
+  free_seconds: number;
+  /** Rows in the queues with no estimate — why «free at» can read 0m while printers are busy. */
+  unknown_prints: number;
+}
 export interface RowForecast { plate_id: number; proposed_split: Record<number, number> | null }
 export interface LineForecast {
   line_id: number;
@@ -9897,7 +9902,23 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
-  getOrdersForecast: (ids: number[]) => request<ForecastBatch>(`/projects/forecast?ids=${ids.join(',')}`),
+  /**
+   * The ETA of a page of orders.
+   *
+   * ⚠️ **Chunked by 200, because the endpoint refuses more.** A list of every
+   * order in the farm is a normal thing to render, and a 400 there is not a
+   * "no estimate" — it blanks the whole column. The farm header is the same
+   * snapshot in every chunk, so the first one's is kept.
+   */
+  getOrdersForecast: async (ids: number[]): Promise<ForecastBatch> => {
+    const chunks: number[][] = [];
+    for (let i = 0; i < ids.length; i += 200) chunks.push(ids.slice(i, i + 200));
+    if (chunks.length === 0) chunks.push([]);
+    const pages = await Promise.all(
+      chunks.map((chunk) => request<ForecastBatch>(`/projects/forecast?ids=${chunk.join(',')}`)),
+    );
+    return { farm: pages[0].farm, orders: pages.flatMap((p) => p.orders) };
+  },
   getOrderForecast: (id: number) => request<OrderForecastDetail>(`/projects/${id}/forecast`),
 
   // Customers

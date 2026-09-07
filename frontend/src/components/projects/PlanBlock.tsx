@@ -12,7 +12,7 @@ import { Button } from '../Button';
 import { PlanLine } from './PlanLine';
 import { MAX_PER_PLATE } from './PlanRow';
 import { projectPlan, rowDistribution, splitIsOff, type ChosenByRow, type SplitByRow } from './planMath';
-import { invalidateOrderViews } from '../../utils/queryInvalidation';
+import { invalidateOrderViews, invalidateQueueViews } from '../../utils/queryInvalidation';
 
 /**
  * What to print next for this order, per line.
@@ -202,10 +202,11 @@ export function PlanBlock({
 
   const invalidate = useCallback(() => {
     invalidateOrderViews(queryClient, { orderId: order.id });
-    // ⚠️ The two queue keys are NOT order views and stay here: enqueueing
-    // puts rows in a printer's queue and in the auto-queue distributor, which
-    // no order page reads and the helper therefore knows nothing about.
-    queryClient.invalidateQueries({ queryKey: ['queue'] });
+    // ⚠️ The queue keys are NOT order views and stay here: enqueueing puts
+    // rows in a printer's queue and in the auto-queue distributor, which no
+    // order page reads and `invalidateOrderViews` therefore knows nothing
+    // about. The queue's own helper covers the tile that dates them.
+    invalidateQueueViews(queryClient);
     queryClient.invalidateQueries({ queryKey: ['auto-queue'] });
   }, [queryClient, order.id]);
 

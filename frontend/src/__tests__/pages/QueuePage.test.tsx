@@ -97,7 +97,7 @@ describe('QueuePage', () => {
           ],
         }),
       ),
-      http.get('/api/v1/queue/forecast', () => HttpResponse.json({ free_at: '2026-09-06T12:00:00Z', free_seconds: 0 })),
+      http.get('/api/v1/queue/forecast', () => HttpResponse.json({ free_at: '2026-09-06T12:00:00Z', free_seconds: 0, unknown_prints: 0 })),
     );
   });
 
@@ -212,9 +212,22 @@ describe('QueuePage', () => {
 
   describe('stats bar', () => {
     it('shows the farm free-at estimate from the forecast endpoint', async () => {
-      server.use(http.get('/api/v1/queue/forecast', () => HttpResponse.json({ free_at: '2026-09-06T13:30:00Z', free_seconds: 5400 })));
+      server.use(http.get('/api/v1/queue/forecast', () => HttpResponse.json({ free_at: '2026-09-06T13:30:00Z', free_seconds: 5400, unknown_prints: 0 })));
       render(<QueuePage />);
       expect(await screen.findByText('1h 30m')).toBeInTheDocument();
+    });
+
+    it('says how many rows carry no estimate, so «0m» is not a mystery', async () => {
+      // A queued row or a print whose 3MF has not been attached has no
+      // estimate, and the simulation counts those rather than defaulting them
+      // to two hours — without the hint the tile just reads a small number.
+      server.use(
+        http.get('/api/v1/queue/forecast', () =>
+          HttpResponse.json({ free_at: '2026-09-06T12:00:00Z', free_seconds: 0, unknown_prints: 2 }),
+        ),
+      );
+      render(<QueuePage />);
+      expect(await screen.findByText('2 prints without an estimate')).toBeInTheDocument();
     });
   });
 

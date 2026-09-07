@@ -63,6 +63,7 @@ import { formatETA, formatDuration } from '../utils/date';
 import { getBedTypeInfo } from '../utils/bedType';
 import { mapModelCode } from '../utils/printer';
 import { queueResumePayload } from '../utils/queueStatus';
+import { invalidateQueueViews } from '../utils/queryInvalidation';
 
 interface QueueCardProps {
   queue: PrinterQueue;
@@ -196,8 +197,7 @@ export function QueueCard({ queue, onEditItem }: QueueCardProps) {
     mutationFn: (data: { status?: 'idle' | 'paused'; is_paused?: boolean; auto_distribute_eligible?: boolean }) =>
       api.updateQueue(queue.id, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['queues'] });
-      queryClient.invalidateQueries({ queryKey: ['queue', queue.printer_id] });
+      invalidateQueueViews(queryClient);
       showToast(t('queueCard.toast.statusUpdated'), 'success');
     },
     onError: (err: Error) => {
@@ -210,7 +210,7 @@ export function QueueCard({ queue, onEditItem }: QueueCardProps) {
   const repeatPrintMutation = useMutation({
     mutationFn: () => api.repeatPrint(queue.printer_id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['queue', queue.printer_id] });
+      invalidateQueueViews(queryClient);
       queryClient.invalidateQueries({ queryKey: ['printerStatus', queue.printer_id] });
       showToast(t('queue.repeatPrintSuccess'), 'success');
     },
@@ -220,7 +220,7 @@ export function QueueCard({ queue, onEditItem }: QueueCardProps) {
   const clearPlateMutation = useMutation({
     mutationFn: () => api.clearPlate(queue.printer_id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['queue', queue.printer_id] });
+      invalidateQueueViews(queryClient);
       queryClient.invalidateQueries({ queryKey: ['printerStatus', queue.printer_id] });
       showToast(t('queue.clearPlateSuccess'), 'success');
     },
@@ -233,7 +233,7 @@ export function QueueCard({ queue, onEditItem }: QueueCardProps) {
   const startItemMutation = useMutation({
     mutationFn: (itemId: number) => api.startQueueItem(itemId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['queue', queue.printer_id] });
+      invalidateQueueViews(queryClient);
       queryClient.invalidateQueries({ queryKey: ['printerStatus', queue.printer_id] });
       showToast(t('queueCard.toast.itemStarted'), 'success');
     },
@@ -246,7 +246,7 @@ export function QueueCard({ queue, onEditItem }: QueueCardProps) {
   const cancelItemMutation = useMutation({
     mutationFn: (itemId: number) => api.cancelQueueItem(itemId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['queue', queue.printer_id] });
+      invalidateQueueViews(queryClient);
       showToast(t('queue.toast.cancelled'), 'success');
     },
     onError: (err: Error) => {
@@ -276,15 +276,14 @@ export function QueueCard({ queue, onEditItem }: QueueCardProps) {
     mutationFn: () => api.stopPrint(queue.printer_id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['printerStatus', queue.printer_id] });
-      queryClient.invalidateQueries({ queryKey: ['queue', queue.printer_id] });
+      invalidateQueueViews(queryClient);
       showToast(t('queueCard.toast.stopped'), 'success');
     },
     onError: (err: Error) => showToast(err.message, 'error'),
   });
 
   // ── Queue item commands (reorder / bump / clone / skip / toggle / retry) ──
-  const invalidateQueue = () =>
-    queryClient.invalidateQueries({ queryKey: ['queue', queue.printer_id] });
+  const invalidateQueue = () => invalidateQueueViews(queryClient);
 
   const reorderMutation = useMutation({
     mutationFn: ({ id, direction }: { id: number; direction: 'up' | 'down' }) =>
@@ -604,8 +603,7 @@ export function QueueCard({ queue, onEditItem }: QueueCardProps) {
       onDone={() => {
         setDroppedForQueue(null);
         setCopyTargetIds(null);
-        queryClient.invalidateQueries({ queryKey: ['queue', queue.printer_id] });
-        queryClient.invalidateQueries({ queryKey: ['queues'] });
+        invalidateQueueViews(queryClient);
       }}
     />
   ) : null;

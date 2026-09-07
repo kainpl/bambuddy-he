@@ -1,7 +1,15 @@
 import { formatDateTime } from './date';
 import type { DateFormat, TimeFormat } from './date';
 
-/** `h:mm` for a machine-hours figure; null → '—'. */
+/**
+ * `h:mm` for a machine-hours figure; null → '—'.
+ *
+ * Deliberately not `formatDuration` ("2h 30m"): these figures sit in columns
+ * of right-aligned tabular numbers, and a value whose width changes with the
+ * words in it breaks the column. It is a SIZE, not a countdown. The minutes
+ * are rounded, so a job of 90 seconds reads `0:02` rather than `0:01` plus a
+ * hidden remainder.
+ */
 export function hoursMinutes(seconds: number | null | undefined): string {
   if (seconds == null) return '—';
   const minutes = Math.max(0, Math.round(seconds / 60));

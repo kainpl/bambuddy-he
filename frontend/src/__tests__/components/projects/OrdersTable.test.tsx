@@ -85,4 +85,33 @@ describe('OrdersTable', () => {
     render(<OrdersTable orders={[row({ id: 5, name: 'C' })]} />);
     expect(screen.getByTestId('order-5-ready')).toHaveTextContent('…');
   });
+
+  it('a failed fetch reads as an error, never as «No estimate»', () => {
+    // ⚠️ Three states share these cells and only one is about the farm.
+    // Mapping a dead request onto «No estimate» — which means «the simulation
+    // could place nothing» — sends the operator hunting a scheduling problem
+    // that is really a broken request.
+    render(<OrdersTable orders={[row({ id: 1, name: 'A' })]} forecastError />);
+    const ready = screen.getByTestId('order-1-ready');
+    expect(ready).toHaveTextContent('—');
+    expect(ready).not.toHaveTextContent('No estimate');
+    expect(within(ready).getByTitle('Forecast unavailable')).toBeInTheDocument();
+    expect(screen.getByTestId('order-1-machine-hours')).toHaveTextContent('—');
+  });
+
+  it('a closed order is dashed in both cells — closed means nothing is planned', () => {
+    // The batch is not even asked about it (spec Decision 9), so `forecasts`
+    // legitimately has no entry; without this branch the cell would read
+    // «No estimate» and invite somebody to go looking for a printer.
+    render(
+      <OrdersTable
+        orders={[row({ id: 1, name: 'A', status: 'completed' })]}
+        forecasts={{ 2: fc({ project_id: 2 }) }}
+      />,
+    );
+    const ready = screen.getByTestId('order-1-ready');
+    expect(ready).toHaveTextContent('—');
+    expect(ready).not.toHaveTextContent('No estimate');
+    expect(screen.getByTestId('order-1-machine-hours')).toHaveTextContent('—');
+  });
 });

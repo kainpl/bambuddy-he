@@ -25,7 +25,19 @@ const DESC_FIRST: ReadonlySet<SortKey> = new Set(['printing', 'queued', 'remaini
  * the list. Default order: due date, then name; a header click sorts by that
  * column and clicks again to flip.
  */
-export function OrdersTable({ orders, forecasts }: { orders: OrderListItem[]; forecasts?: Record<number, OrderForecast> }) {
+export function OrdersTable({
+  orders,
+  forecasts,
+  forecastError,
+}: {
+  orders: OrderListItem[];
+  forecasts?: Record<number, OrderForecast>;
+  /** The batch fetch failed or was refused — three distinct states share these
+   *  two cells, and only one of them is about the farm: «…» is still loading,
+   *  «No estimate» means the simulation could place nothing, and a dash with
+   *  the error hint means we never got an answer to read. */
+  forecastError?: boolean;
+}) {
   const { t } = useTranslation();
   const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: api.getSettings, staleTime: 60_000 });
   const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({ key: 'due', desc: false });
@@ -97,7 +109,12 @@ export function OrdersTable({ orders, forecasts }: { orders: OrderListItem[]; fo
                 <td className="p-2 min-w-[8rem]"><ProgressBar value={o.printed} max={o.ordered} testId={`order-${o.id}-table-progress`} /></td>
                 <td className={`p-2 text-xs ${overdue ? 'text-red-500' : 'text-bambu-gray'}`}>{o.due_date ? new Date(o.due_date).toLocaleDateString() : ''}</td>
                 <td className="p-2 text-xs whitespace-nowrap" data-testid={`order-${o.id}-ready`}>
-                  {!forecasts ? (
+                  {forecastError ? (
+                    <span title={t('farmForecast.error')}>—</span>
+                  ) : o.status !== 'active' ? (
+                    // Closed = nothing is planned, so there is nothing to date.
+                    '—'
+                  ) : !forecasts ? (
                     '…'
                   ) : !forecasts[o.id]?.now_eta ? (
                     t('farmForecast.unavailable')
@@ -116,7 +133,15 @@ export function OrdersTable({ orders, forecasts }: { orders: OrderListItem[]; fo
                   )}
                 </td>
                 <td className="p-2 text-right tabular-nums" data-testid={`order-${o.id}-machine-hours`}>
-                  {forecasts ? hoursMinutes(forecasts[o.id]?.machine_seconds) : '…'}
+                  {forecastError ? (
+                    <span title={t('farmForecast.error')}>—</span>
+                  ) : o.status !== 'active' ? (
+                    '—'
+                  ) : forecasts ? (
+                    hoursMinutes(forecasts[o.id]?.machine_seconds)
+                  ) : (
+                    '…'
+                  )}
                 </td>
               </tr>
             );

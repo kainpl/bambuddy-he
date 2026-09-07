@@ -25,7 +25,7 @@ import { useMultiPrinterFilamentMapping, type PerPrinterConfig } from '../../hoo
 import { useOrderCandidates } from '../../hooks/useOrderCandidates';
 import { OrderFilingField, type OrderFilingValue } from '../OrderFilingField';
 import { canQueueWithoutAsking } from '../../utils/bulkQueueEligibility';
-import { invalidateOrderCandidates, invalidateOrderViews } from '../../utils/queryInvalidation';
+import { invalidateOrderCandidates, invalidateOrderViews, invalidateQueueViews } from '../../utils/queryInvalidation';
 import { getCurrencySymbol } from '../../utils/currency';
 import { toDateTimeLocalValue, parseUTCDate } from '../../utils/date';
 import { getBedTypeInfo } from '../../utils/bedType';
@@ -1154,7 +1154,7 @@ export function PrintModal({
   const updateQueueMutation = useMutation({
     mutationFn: (data: PrintQueueItemUpdate) => api.updateQueueItem(queueItem!.id, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['queue'] });
+      invalidateQueueViews(queryClient);
       showToast(t('printModal.queueItemUpdated'));
       onSuccess?.();
       onClose();
@@ -1323,7 +1323,7 @@ export function PrintModal({
           showToast(queuedCount > 1 ? t('queue.itemsQueued', { count: queuedCount }) : t('queue.printQueued'));
         }
         queryClient.invalidateQueries({ queryKey: ['auto-queue'] });
-        queryClient.invalidateQueries({ queryKey: ['queue'] });
+        invalidateQueueViews(queryClient);
         invalidateOrderCandidates(queryClient);
         onSuccess?.();
         onClose();
@@ -1624,7 +1624,7 @@ export function PrintModal({
           showToast(t('queue.itemsQueued', { count: results.queued }));
         }
       }
-      queryClient.invalidateQueries({ queryKey: ['queue'] });
+      invalidateQueueViews(queryClient);
       invalidateOrderCandidates(queryClient);
       onSuccess?.();
       onClose();
@@ -1632,7 +1632,7 @@ export function PrintModal({
       showToast(t('printModal.failedPrefix', { error: results.errors[0] }), 'error');
     } else {
       showToast(t('printModal.partialSuccess', { success: results.success, failed: results.failed }), 'error');
-      queryClient.invalidateQueries({ queryKey: ['queue'] });
+      invalidateQueueViews(queryClient);
       invalidateOrderCandidates(queryClient);
     }
   };

@@ -65,6 +65,30 @@ export const ORDER_VIEW_KEYS = [
   'products',
 ] as const;
 
+/**
+ * Mark the QUEUE views stale after a mutation that moved queued work.
+ *
+ * ⚠️ **`queue-forecast` is the reason this exists.** The queue page's
+ * «estimated remaining» tile is a server-side simulation over exactly the rows
+ * these mutations add, remove and reorder (spec 2026-09-06, Decision 5), and
+ * it was invalidated only by the two WebSocket print events and a 30 s
+ * interval. Queue a plate and the tile kept the old number until the interval
+ * came round — the classic "right after F5, wrong before it", and here it is
+ * the one figure the page exists to show.
+ *
+ * ⚠️ **`queue` is a PREFIX and the sweep is deliberately wide.** A queue
+ * mutation on one printer moves the farm's makespan, which is every printer's
+ * business; scoping this to the printer that was touched would leave the tile
+ * and the other cards behind. TanStack refetches only ACTIVE queries, so off
+ * the queue page it costs nothing, and on it the cost is one extra refetch per
+ * mutation — priced and accepted (ruling 2026-09-07, final review I3).
+ */
+export function invalidateQueueViews(qc: QueryClient): void {
+  qc.invalidateQueries({ queryKey: ['queues'] });
+  qc.invalidateQueries({ queryKey: ['queue'] });
+  qc.invalidateQueries({ queryKey: ['queue-forecast'] });
+}
+
 /** What the caller touched. Read for call-site legibility today; see below. */
 export interface OrderViewScope {
   orderId?: number;

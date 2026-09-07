@@ -8471,6 +8471,10 @@ export default {
       prep: 'upload and preheat',
     },
     unavailable: 'No estimate',
+    // A failed or refused fetch — NOT «No estimate», which means the farm could place nothing.
+    error: 'Forecast unavailable',
+    unknownPrints_one: '{{count}} print without an estimate',
+    unknownPrints_other: '{{count}} prints without an estimate',
   },
   // Cloud Link — pairing this farm with a BamDude portal.
   cloudLink: {
