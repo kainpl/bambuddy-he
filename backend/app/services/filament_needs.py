@@ -9,6 +9,18 @@ reserves nothing and gates nothing; the plan engine stays ignorant of spools.
 Unknown grams are counted, never defaulted (Decision 5): a plate without
 filaments, or a filament without a type, is an unknown PRINT; a typed filament
 without grams is an unknown print OF ITS KEY. Zero grams is an answer.
+
+⚠️ **The queue side is deliberately a CONSERVATIVE over-count.** The loader adds
+every pending row of the order, of both queue tiers; the plan engine subtracts
+only the rows it can ATTRIBUTE — a row queued from an archive rather than a
+library file, or a file that is no plate of the line's product, counts nothing
+for it (see ``plan_engine.queued_yield_by_line``'s docstring). So a re-queued
+archive print filed under an order is added here without ever having been
+subtracted there, and the order's need over-states itself by that print's grams
+until the print lands. Accepted on purpose: mirroring the engine's attribution
+would mean a second copy of ``queued_yield_by_line`` living in an advisory
+layer, and over-stating a need is the safe direction for a figure whose whole
+job is «will the shelf hold out».
 """
 
 from __future__ import annotations
@@ -17,12 +29,14 @@ import logging
 from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
+from time import monotonic
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from backend.app.api.routes.settings import get_setting
+from backend.app.models.archive import PrintArchive
+from backend.app.models.auto_queue import AutoQueueItem
 from backend.app.models.color_catalog import ColorCatalogEntry
 from backend.app.models.library import LibraryFile
 from backend.app.models.print_queue import PrintQueueItem
@@ -76,7 +90,7 @@ class SpoolStock:
 @dataclass
 class Needs:
     grams: dict[NeedKey, float] = field(default_factory=dict)
-    unknown_by_key: Counter = field(default_factory=Counter)
+    unknown_by_key: Counter[NeedKey] = field(default_factory=Counter)
     unknown_prints: int = 0
 
     def add(self, filaments: list[FilamentLine] | None, colour: str | None, prints: int) -> None:
@@ -255,13 +269,23 @@ def _spoolman_colour_name(name: str | None, material: str) -> str | None:
     return s or None
 
 
-async def line_colours_of(db: AsyncSession, project_ids: list[int]) -> dict[int, str | None]:
+async def line_colours_of(db: AsyncSession, project_ids: list[int]) -> dict[int, tuple[int, str | None]]:
+    """``line_id → (project_id, colour)`` for every line of the orders, in one statement.
+
+    The ORDER rides along because a queue row may carry a line without an order
+    id and must still be attributed — see :func:`queued_needs_of`. Reading it
+    here costs nothing: the statement already walks exactly these rows.
+    """
     if not project_ids:
         return {}
     rows = (
-        await db.execute(select(ProjectLine.id, ProjectLine.color).where(ProjectLine.project_id.in_(project_ids)))
+        await db.execute(
+            select(ProjectLine.id, ProjectLine.project_id, ProjectLine.color).where(
+                ProjectLine.project_id.in_(project_ids)
+            )
+        )
     ).all()
-    return dict(rows)
+    return {line_id: (project_id, colour) for line_id, project_id, colour in rows}
 
 
 async def plate_filaments_of(db: AsyncSession, plate_ids: set[int]) -> dict[int, list[FilamentLine]]:
@@ -278,54 +302,164 @@ async def plate_filaments_of(db: AsyncSession, plate_ids: set[int]) -> dict[int,
 
 
 async def queued_needs_of(
-    db: AsyncSession, project_ids: list[int], line_colours: dict[int, str | None]
+    db: AsyncSession, project_ids: list[int], lines: dict[int, tuple[int, str | None]]
 ) -> dict[int, list[QueuedNeed]]:
+    """The order's pending rows of BOTH queue tiers — exactly what the plan engine subtracts.
+
+    ⚠️ **The predicate mirrors** :func:`plan_engine.queued_yield_by_line`, whose
+    docstring owns it: "still waiting" is ``print_queue.status == 'pending'``
+    AND ``auto_queue_items.status == 'pending' AND assigned_to_item_id IS
+    NULL`` — an auto row already handed to a printer item is counted once,
+    through that item. The auto tier is not optional here: «whole plan to
+    queue» with no printer picked writes exactly those rows
+    (``routes/projects.py`` → ``auto_queue_add.add_items_to_auto_queue``), and
+    a loader that read only ``print_queue`` watched the need drop to zero the
+    moment the button was pressed, with full spools on the shelf and no flag
+    saying why (final review C1).
+
+    ⚠️ **Selected by order id OR line id**, because a queue row may carry a
+    LINE without an order id — the engine's line branch filters on the line
+    alone for that very reason, so filtering on the order alone here subtracted
+    such a row without adding it back (final review I4). A row that names a
+    line is attributed to that line's order; one that names none, to its own.
+
+    ⚠️ **Both reads select COLUMNS, never the entity.** An ``AutoQueueItem``
+    drags its ``target_location`` in on ``lazy="selectin"`` — a
+    ``printer_locations`` SELECT inside an advisory read is a lie about what
+    this code does, and the plan engine refuses it for the same reason. The
+    files and archives the rows point at are then read once each by id, so the
+    statement count is fixed however long the queue is.
+
+    See the module docstring for what this does NOT mirror: the engine's
+    attribution, and therefore its conservative over-count.
+    """
     if not project_ids:
         return {}
-    items = (
+    line_ids = list(lines)
+    active = set(project_ids)
+    rows = list(
         (
             await db.execute(
-                select(PrintQueueItem)
-                .options(selectinload(PrintQueueItem.archive), selectinload(PrintQueueItem.library_file))
-                .where(PrintQueueItem.status == "pending", PrintQueueItem.project_id.in_(project_ids))
+                select(
+                    PrintQueueItem.library_file_id,
+                    PrintQueueItem.archive_id,
+                    PrintQueueItem.plate_id,
+                    PrintQueueItem.project_id,
+                    PrintQueueItem.project_line_id,
+                ).where(
+                    PrintQueueItem.status == "pending",
+                    or_(
+                        PrintQueueItem.project_id.in_(project_ids),
+                        PrintQueueItem.project_line_id.in_(line_ids),
+                    ),
+                )
             )
-        )
-        .scalars()
-        .all()
+        ).all()
+    ) + list(
+        (
+            await db.execute(
+                select(
+                    AutoQueueItem.library_file_id,
+                    AutoQueueItem.archive_id,
+                    AutoQueueItem.plate_id,
+                    AutoQueueItem.project_id,
+                    AutoQueueItem.project_line_id,
+                ).where(
+                    AutoQueueItem.status == "pending",
+                    AutoQueueItem.assigned_to_item_id.is_(None),
+                    or_(
+                        AutoQueueItem.project_id.in_(project_ids),
+                        AutoQueueItem.project_line_id.in_(line_ids),
+                    ),
+                )
+            )
+        ).all()
+    )
+    file_ids = {r[0] for r in rows if r[0] is not None}
+    archive_ids = {r[1] for r in rows if r[1] is not None}
+    files: dict[int, LibraryFile] = (
+        {f.id: f for f in (await db.execute(select(LibraryFile).where(LibraryFile.id.in_(file_ids)))).scalars()}
+        if file_ids
+        else {}
+    )
+    archives: dict[int, PrintArchive] = (
+        {a.id: a for a in (await db.execute(select(PrintArchive).where(PrintArchive.id.in_(archive_ids)))).scalars()}
+        if archive_ids
+        else {}
     )
     out: dict[int, list[QueuedNeed]] = {}
-    for item in items:
-        raw = filaments_for_row(archive=item.archive, library_file=item.library_file, plate_id=item.plate_id)
-        colour = line_colours.get(item.project_line_id) if item.project_line_id else None
-        out.setdefault(item.project_id, []).append(QueuedNeed(colour, _lines_of(raw)))
+    for library_file_id, archive_id, plate_id, project_id, line_id in rows:
+        owner, colour = lines.get(line_id, (project_id, None)) if line_id is not None else (project_id, None)
+        if owner not in active:
+            continue
+        raw = filaments_for_row(
+            archive=archives.get(archive_id) if archive_id is not None else None,
+            library_file=files.get(library_file_id) if library_file_id is not None else None,
+            plate_id=plate_id,
+        )
+        out.setdefault(owner, []).append(QueuedNeed(colour, _lines_of(raw)))
     return out
+
+
+SPOOLMAN_SHELF_TTL_S = 30.0
+"""How long a Spoolman answer — or its failure — stands for every reader.
+
+The UI's own ``staleTime`` on both filament queries, so a shelf figure is never
+older on screen than it would have been anyway. The point is the FAILURE:
+Spoolman down costs three 5 s connect attempts, and paying ~16 s of a held
+session per request made an order page unusable because a service it does not
+own is unreachable (final review I6). Now that price is paid once per half
+minute. The INTERNAL shelf is never memoised — it is one statement, and a spool
+edited on the inventory page must show on the order page at once.
+"""
+
+_SPOOLMAN_SHELF: tuple[float, list[SpoolStock], bool] | None = None
+
+
+def reset_spoolman_shelf_cache() -> None:
+    """Forget the memoised Spoolman shelf. For tests, and for anything that must not wait out the TTL."""
+    global _SPOOLMAN_SHELF
+    _SPOOLMAN_SHELF = None
+
+
+async def _spoolman_stock() -> tuple[list[SpoolStock], bool]:
+    """One Spoolman round trip mapped to ``SpoolStock``; a dead one is reported, never raised."""
+    client = await get_spoolman_client()
+    if client is None:
+        # Not an error the user made: the setting is on and the client is not
+        # built (no URL, or the integration failed to start). Logged so the
+        # «shelf could not be read» banner has something behind it.
+        logger.info("filament needs: Spoolman is enabled but no client is configured")
+        return [], True
+    try:
+        raw = await client.get_all_spools()
+    except Exception as exc:  # noqa: BLE001 — the shelf is optional; the need is still shown
+        logger.warning("filament needs: Spoolman did not answer: %s", exc)
+        return [], True
+    spools: list[SpoolStock] = []
+    for s in raw or []:
+        if not isinstance(s, dict) or s.get("archived"):
+            continue
+        fil = s.get("filament") or {}
+        material = (fil.get("material") or "").strip().upper()
+        if not material:
+            continue
+        hex_colour = (fil.get("color_hex") or "").replace("#", "").lower()[:6] or None
+        colour_name = _spoolman_colour_name(fil.get("name"), material)
+        spools.append(SpoolStock(material, colour_name, hex_colour, max(0.0, float(s.get("remaining_weight") or 0.0))))
+    return spools, False
 
 
 async def load_stock(db: AsyncSession) -> tuple[list[SpoolStock], bool]:
     """Live spools of the active backend; ``(spools, unavailable)`` — a dead Spoolman is reported, never raised."""
     if ((await get_setting(db, "spoolman_enabled")) or "").lower() == "true":
-        client = await get_spoolman_client()
-        if client is None:
-            return [], True
-        try:
-            raw = await client.get_all_spools()
-        except Exception as exc:  # noqa: BLE001 — the shelf is optional; the need is still shown
-            logger.warning("filament needs: Spoolman did not answer: %s", exc)
-            return [], True
-        spools: list[SpoolStock] = []
-        for s in raw or []:
-            if not isinstance(s, dict) or s.get("archived"):
-                continue
-            fil = s.get("filament") or {}
-            material = (fil.get("material") or "").strip().upper()
-            if not material:
-                continue
-            hex_colour = (fil.get("color_hex") or "").replace("#", "").lower()[:6] or None
-            colour_name = _spoolman_colour_name(fil.get("name"), material)
-            spools.append(
-                SpoolStock(material, colour_name, hex_colour, max(0.0, float(s.get("remaining_weight") or 0.0)))
-            )
-        return spools, False
+        global _SPOOLMAN_SHELF
+        shelf = _SPOOLMAN_SHELF
+        if shelf is not None and monotonic() - shelf[0] < SPOOLMAN_SHELF_TTL_S:
+            return list(shelf[1]), shelf[2]
+        spools, unavailable = await _spoolman_stock()
+        _SPOOLMAN_SHELF = (monotonic(), spools, unavailable)
+        return list(spools), unavailable
     rows = (await db.execute(select(Spool).where(Spool.archived_at.is_(None)))).scalars().all()
     return [
         SpoolStock(
@@ -355,11 +489,17 @@ async def needs_of_orders(db: AsyncSession, project_ids: list[int]) -> dict[int,
         return {}
     status_of = dict((await db.execute(select(Project.id, Project.status).where(Project.id.in_(project_ids)))).all())
     active = [pid for pid in project_ids if status_of.get(pid) == "active"]
-    plans = await plan_for_orders(db, active) if active else {}
+    if not active:
+        # No target, no shelf. Every answer here is an empty list whatever the
+        # spools say, and reading them would spend a Spoolman round trip — up
+        # to ~16 s when it is down — to decorate nothing (final review I6).
+        return {pid: OrderNeeds(pid, [], 0, False) for pid in project_ids if pid in status_of}
+    plans = await plan_for_orders(db, active)
     plate_ids = {row.plate_id for plan in plans.values() for line in plan.lines for row in line.rows}
-    line_colours = await line_colours_of(db, active)
+    lines = await line_colours_of(db, active)
+    line_colours = {line_id: colour for line_id, (_, colour) in lines.items()}
     filaments = await plate_filaments_of(db, plate_ids)
-    queued = await queued_needs_of(db, active, line_colours)
+    queued = await queued_needs_of(db, active, lines)
     spools, unavailable = await load_stock(db)
     names_of_hex = await names_of_hex_loader(db)
     out: dict[int, OrderNeeds] = {}

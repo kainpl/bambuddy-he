@@ -11,10 +11,25 @@ from backend.app.models.project import Project
 from backend.app.models.project_line import ProjectLine
 from backend.app.models.settings import Settings
 from backend.app.models.spool import Spool
+from backend.app.schemas.auto_queue import AutoQueueItemCreate
 from backend.app.services import filament_needs
+from backend.app.services.auto_queue_add import add_items_to_auto_queue
 from backend.tests.unit.services.test_product_composition import counting_statements
 
 pytestmark = pytest.mark.integration
+
+
+@pytest.fixture(autouse=True)
+def _forget_the_spoolman_shelf():
+    """The Spoolman shelf is memoised MODULE-WIDE for 30 s, so it outlives a test.
+
+    Without this, the first test to reach Spoolman decides what every later one
+    sees — including the dead-Spoolman test, which would read the live answer
+    the previous test cached and never observe its own failure.
+    """
+    filament_needs.reset_spoolman_shelf_cache()
+    yield
+    filament_needs.reset_spoolman_shelf_cache()
 
 
 def _sliced(filename: str, filaments: list[dict]) -> LibraryFile:
@@ -125,6 +140,51 @@ async def test_pending_queue_rows_of_the_order_are_need_too(db_session, shelf, p
 
 
 @pytest.mark.asyncio
+async def test_auto_queue_rows_of_the_order_are_need_too(db_session, shelf):
+    """C1: «whole plan to queue» with no printer picked writes AUTO rows, and they are still need.
+
+    The plan engine subtracts a pending, unassigned ``auto_queue_items`` row
+    exactly as it subtracts a ``print_queue`` one, so a loader that read only
+    the per-printer tier watched the need collapse to the plan's remainder the
+    moment the button was pressed — with the spools untouched and no flag.
+    """
+    pid, line_id = await _order(db_session, shelf["product"].id, 2)
+    await add_items_to_auto_queue(
+        db_session,
+        AutoQueueItemCreate(library_file_id=shelf["file"].id, project_id=pid, project_line_id=line_id, quantity=1),
+        None,
+    )
+    out = await filament_needs.needs_of_orders(db_session, [pid])
+    rows = {(r.material, r.colour): r for r in out[pid].rows}
+    # 1 print still to plan (10 g) + the auto row's own 10 g — not the 10 g the
+    # plan alone would report after the engine took the auto row off it.
+    assert rows[("PETG", None)].need_g == 20.0
+    assert rows[("PLA", None)].need_g == 4.0  # the support filament rides along, both prints
+
+
+@pytest.mark.asyncio
+async def test_a_queue_row_with_a_line_but_no_order_id_counts_for_its_order(db_session, shelf, printer_factory):
+    """I4: the engine's LINE branch filters on ``project_line_id`` ALONE — so must the loader.
+
+    A row may carry a line without an order id (the engine's own docstring says
+    naming the order there would drop real work). Filtering the loader by order
+    id subtracted such a row from the plan and never added it back.
+    """
+    p = await printer_factory(name="P1", model="P1S")
+    db_session.add(PrinterQueue(id=p.id, printer_id=p.id, status="idle"))
+    pid, line_id = await _order(db_session, shelf["product"].id, 2)
+    db_session.add(
+        PrintQueueItem(
+            queue_id=p.id, library_file_id=shelf["file"].id, status="pending", project_id=None, project_line_id=line_id
+        )
+    )
+    await db_session.commit()
+    out = await filament_needs.needs_of_orders(db_session, [pid])
+    rows = {(r.material, r.colour): r for r in out[pid].rows}
+    assert rows[("PETG", None)].need_g == 20.0
+
+
+@pytest.mark.asyncio
 async def test_a_closed_order_answers_no_rows_and_an_unknown_id_is_absent(db_session, shelf):
     pid, _ = await _order(db_session, shelf["product"].id, 3, status="completed")
     out = await filament_needs.needs_of_orders(db_session, [pid, 999_999])
@@ -170,10 +230,54 @@ async def test_spoolman_answers_and_a_dead_spoolman_says_so(db_session, shelf, m
         return _Dead()
 
     monkeypatch.setattr(filament_needs, "get_spoolman_client", _dead)
+    # The answer above is memoised for 30 s; forget it, or this half reads it.
+    filament_needs.reset_spoolman_shelf_cache()
     out = await filament_needs.needs_of_orders(db_session, [pid])
     assert out[pid].stock_unavailable is True
     petg = {(r.material, r.colour): r for r in out[pid].rows}[("PETG", "black")]
     assert petg.need_g == 10.0 and petg.have_g is None and petg.short_g is None
+
+
+@pytest.mark.asyncio
+async def test_the_spoolman_shelf_is_read_once_per_ttl(db_session, shelf, monkeypatch):
+    """I6: a dead Spoolman costs three 5 s connects — that price is paid once per 30 s, not per request."""
+    db_session.add(Settings(key="spoolman_enabled", value="true"))
+    await db_session.commit()
+    pid, _ = await _order(db_session, shelf["product"].id, 1, colour="black")
+
+    calls = []
+
+    class _Counting:
+        async def get_all_spools(self):
+            calls.append(1)
+            return []
+
+    async def _client():
+        return _Counting()
+
+    monkeypatch.setattr(filament_needs, "get_spoolman_client", _client)
+    await filament_needs.needs_of_orders(db_session, [pid])
+    await filament_needs.needs_of_orders(db_session, [pid])
+    assert len(calls) == 1  # the second request read the memo, not the network
+
+    filament_needs.reset_spoolman_shelf_cache()
+    await filament_needs.needs_of_orders(db_session, [pid])
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_no_active_order_reads_no_shelf_at_all(db_session, shelf, monkeypatch):
+    """I6: a closed order's empty rows need no spools — and must not pay for a dead Spoolman to say so."""
+    db_session.add(Settings(key="spoolman_enabled", value="true"))
+    await db_session.commit()
+    pid, _ = await _order(db_session, shelf["product"].id, 3, status="completed")
+
+    async def _never():
+        raise AssertionError("the shelf was read with nothing to compare it against")
+
+    monkeypatch.setattr(filament_needs, "get_spoolman_client", _never)
+    out = await filament_needs.needs_of_orders(db_session, [pid])
+    assert out[pid].rows == [] and out[pid].stock_unavailable is False
 
 
 @pytest.mark.asyncio
