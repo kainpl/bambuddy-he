@@ -377,8 +377,12 @@ async def _success_streak(db, filters: list) -> int:
     ordered = (
         select(
             _IS_DONE.label("done"),
-            func.row_number().over(order_by=_ENDED).label("rn_all"),
-            func.row_number().over(partition_by=_IS_DONE, order_by=_ENDED).label("rn_grp"),
+            # ⚠️ id is the tiebreak, not decoration: two prints that end on the
+            # same timestamp otherwise order arbitrarily, and the run length
+            # then depends on which the planner happened to emit first — the
+            # two dialects disagreed on exactly that in a seeded check.
+            func.row_number().over(order_by=(_ENDED, PrintArchive.id)).label("rn_all"),
+            func.row_number().over(partition_by=_IS_DONE, order_by=(_ENDED, PrintArchive.id)).label("rn_grp"),
         )
         .where(*filters, PrintArchive.status.in_(TERMINAL_STATUSES))
         .subquery()

@@ -126,6 +126,25 @@ async def test_the_success_streak_matches_a_hand_rolled_run(db_session):
 
 
 @pytest.mark.asyncio
+async def test_the_streak_is_deterministic_when_two_prints_end_together(db_session):
+    """⚠️ Verified against a real PostgreSQL 2026-09-08: without an explicit
+    tiebreak the two dialects disagreed here, because the run length depends on
+    which of two equally-timed rows the planner emits first."""
+    same = datetime(2026, 9, 1, 8, 0)
+    await _seed(
+        db_session,
+        [
+            _archive(created_at=same, status="completed"),
+            _archive(created_at=same, status="failed"),
+            _archive(created_at=same, status="completed"),
+        ],
+    )
+    out = await _collect(db_session)
+    # Ordered by (ended, id): completed, failed, completed → the longest run is 1.
+    assert out["records"]["success_streak"] == 1
+
+
+@pytest.mark.asyncio
 async def test_the_streak_is_zero_when_nothing_completed(db_session):
     await _seed(db_session, [_archive(status="failed"), _archive(status="cancelled")])
     out = await _collect(db_session)
