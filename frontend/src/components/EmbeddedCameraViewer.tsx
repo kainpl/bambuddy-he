@@ -563,6 +563,7 @@ export function EmbeddedCameraViewer({ printerId, printerName, viewerIndex = 0, 
   const streamUrl = withStreamToken(`/api/v1/printers/${printerId}/camera/stream?fps=15&t=${imageKey}`);
 
   return (
+    // not-a-modal: viewer
     <div
       ref={containerRef}
       className={`${isFullscreen ? 'fixed inset-0 z-[100]' : 'fixed z-40 rounded-lg shadow-2xl border border-bambu-dark-tertiary'} bg-bambu-dark-secondary overflow-hidden`}
