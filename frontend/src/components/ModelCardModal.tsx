@@ -28,8 +28,8 @@ import { useToast } from '../contexts/ToastContext';
 import { cardNotesText } from './products/cardNotes';
 import { formatFileSize } from '../utils/file';
 import { Button } from './Button';
+import { Modal } from './Modal';
 import { RichTextEditor } from './RichTextEditor';
-import { useDialogFocus } from '../hooks/useDialogFocus';
 
 /**
  * Which 3MF the card is read from.
@@ -82,13 +82,8 @@ function ArchiveCard({ archiveId, archiveName, onClose }: ArchiveCardProps) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const titleId = useId();
-  // Mounted only while it is open, so "open" is simply `true`.
-  const dialog = useDialogFocus<HTMLDivElement>(true);
   const [isEditing, setIsEditing] = useState(false);
   const [selectedImageIndex, setSelectedImageIndex] = useState<number | null>(null);
-  // The picture overlay over this one, same treatment: focus in on open, back
-  // to the thumbnail on close. Not a trap — see `useDialogFocus`.
-  const lightbox = useDialogFocus<HTMLDivElement>(selectedImageIndex !== null);
   const [editData, setEditData] = useState<{
     title?: string;
     description?: string;
@@ -112,22 +107,20 @@ function ArchiveCard({ archiveId, archiveName, onClose }: ArchiveCardProps) {
     },
   });
 
-  // Handle escape key to close modal
+  // Escape leaves the edit form — one layer at a time. The dialog itself and
+  // the picture viewer are the shell's (the stack listens on `window`), so this
+  // one takes the event only while the form is open under nothing, and stops it
+  // there.
   useEffect(() => {
+    if (!isEditing || selectedImageIndex !== null) return;
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        if (selectedImageIndex !== null) {
-          setSelectedImageIndex(null);
-        } else if (isEditing) {
-          handleCancelEdit();
-        } else {
-          onClose();
-        }
-      }
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      handleCancelEdit();
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [selectedImageIndex, isEditing, onClose]);
+  }, [selectedImageIndex, isEditing]);
 
   // Combine all images for gallery
   const allImages = [
@@ -173,87 +166,63 @@ function ArchiveCard({ archiveId, archiveName, onClose }: ArchiveCardProps) {
     allImages.length > 0
   );
 
-  // Handle backdrop click to close modal
-  const handleBackdropClick = (e: React.MouseEvent) => {
-    if (e.target === e.currentTarget) {
-      onClose();
-    }
-  };
-
   return (
-    <div
-      className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
-      onClick={handleBackdropClick}
-    >
-      {/* ⚠️ The role, the name and the focus, as one unit — see
-          `useDialogFocus`, which lists every overlay that uses it and says
-          exactly what it does and does not do. Without them the overlay is an
-          anonymous `<div>` a screen reader never announces, and a keyboard user
-          opening it starts at the top of the PAGE behind. */}
-      <div
-        ref={dialog}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        tabIndex={-1}
-        className="bg-bambu-dark-secondary rounded-xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col outline-none"
+    <>
+      <Modal
+        onClose={onClose}
+        labelledBy={titleId}
+        size="4xl"
+        bodyClassName="flex flex-col"
+        header={
+          <div className="flex flex-1 items-center justify-between min-w-0">
+            <div className="flex items-center gap-3">
+              <FileText className="w-5 h-5 text-bambu-green" />
+              {/* ⚠️ The load, the edit form and the PATCH below are the
+                  project-page dialog byte for byte and are pinned by
+                  `__tests__/components/ModelCardModal.test.tsx`. Pass 6 moved the
+                  STRINGS and nothing else: they were written into this JSX in
+                  English, on a screen whose other half has been translatable
+                  since the day it was written.
+
+                  FOUR pieces of text changed, and one of them is not a pure
+                  move: `Edit`, `Cancel` and `Save` became `modelCard.edit` /
+                  `.cancel` / `.save`, while the `Print Profile` heading took the
+                  SHARED `modelCard.printProfile` the file half already used — so
+                  the English now reads "Print profile", one heading in one
+                  spelling on both halves, instead of two capitalisations of the
+                  same word depending on which 3MF you opened. */}
+              <h2 id={titleId} className="text-lg font-semibold text-white">
+                {t('modelCard.title')}
+                {archiveName && <span className="text-bambu-gray ml-2">- {archiveName}</span>}
+              </h2>
+            </div>
+            <div className="flex items-center gap-2">
+              {!isEditing && hasContent && (
+                <Button variant="ghost" size="sm" onClick={handleStartEdit}>
+                  <Edit3 className="w-4 h-4 mr-1" />
+                  {t('modelCard.edit')}
+                </Button>
+              )}
+              {isEditing && (
+                <>
+                  <Button variant="ghost" size="sm" onClick={handleCancelEdit}>
+                    {t('modelCard.cancel')}
+                  </Button>
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    onClick={handleSave}
+                    disabled={updateMutation.isPending}
+                  >
+                    <Save className="w-4 h-4 mr-1" />
+                    {t('modelCard.save')}
+                  </Button>
+                </>
+              )}
+            </div>
+          </div>
+        }
       >
-        {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-bambu-dark-tertiary">
-          <div className="flex items-center gap-3">
-            <FileText className="w-5 h-5 text-bambu-green" />
-            {/* ⚠️ The load, the edit form and the PATCH below are the
-                project-page dialog byte for byte and are pinned by
-                `__tests__/components/ModelCardModal.test.tsx`. Pass 6 moved the
-                STRINGS and nothing else: they were written into this JSX in
-                English, on a screen whose other half has been translatable
-                since the day it was written.
-
-                FOUR pieces of text changed, and one of them is not a pure
-                move: `Edit`, `Cancel` and `Save` became `modelCard.edit` /
-                `.cancel` / `.save`, while the `Print Profile` heading took the
-                SHARED `modelCard.printProfile` the file half already used — so
-                the English now reads "Print profile", one heading in one
-                spelling on both halves, instead of two capitalisations of the
-                same word depending on which 3MF you opened. */}
-            <h2 id={titleId} className="text-lg font-semibold text-white">
-              {t('modelCard.title')}
-              {archiveName && <span className="text-bambu-gray ml-2">- {archiveName}</span>}
-            </h2>
-          </div>
-          <div className="flex items-center gap-2">
-            {!isEditing && hasContent && (
-              <Button variant="ghost" size="sm" onClick={handleStartEdit}>
-                <Edit3 className="w-4 h-4 mr-1" />
-                {t('modelCard.edit')}
-              </Button>
-            )}
-            {isEditing && (
-              <>
-                <Button variant="ghost" size="sm" onClick={handleCancelEdit}>
-                  {t('modelCard.cancel')}
-                </Button>
-                <Button
-                  variant="primary"
-                  size="sm"
-                  onClick={handleSave}
-                  disabled={updateMutation.isPending}
-                >
-                  <Save className="w-4 h-4 mr-1" />
-                  {t('modelCard.save')}
-                </Button>
-              </>
-            )}
-            <button
-              onClick={onClose}
-              aria-label={t('common.close')}
-              className="p-2 hover:bg-bambu-dark-tertiary rounded-lg transition-colors"
-            >
-              <X className="w-5 h-5 text-bambu-gray" />
-            </button>
-          </div>
-        </div>
-
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-6">
           {isLoading && (
@@ -469,19 +438,14 @@ function ArchiveCard({ archiveId, archiveName, onClose }: ArchiveCardProps) {
             </div>
           )}
         </div>
-      </div>
+      </Modal>
 
       {/* Image Lightbox */}
       {selectedImageIndex !== null && allImages[selectedImageIndex] && (
-        <div
-          ref={lightbox}
-          role="dialog"
-          aria-modal="true"
-          aria-label={t('modelCard.pictureViewer')}
-          tabIndex={-1}
-          data-testid="archive-lightbox"
-          className="fixed inset-0 bg-black/90 backdrop-blur-sm flex items-center justify-center z-60 outline-none"
-          onClick={() => setSelectedImageIndex(null)}
+        <Modal
+          variant="lightbox"
+          onClose={() => setSelectedImageIndex(null)}
+          ariaLabel={t('modelCard.pictureViewer')}
         >
           <button
             onClick={(e) => {
@@ -525,9 +489,9 @@ function ArchiveCard({ archiveId, archiveName, onClose }: ArchiveCardProps) {
           <div className="absolute bottom-4 text-white text-sm">
             {selectedImageIndex + 1} / {allImages.length}
           </div>
-        </div>
+        </Modal>
       )}
-    </div>
+    </>
   );
 }
 
@@ -579,8 +543,6 @@ function FileCard({ fileId, fileName, linkedProductIds, onClose }: FileCardProps
   const [rereadOpen, setRereadOpen] = useState(false);
   const [downloading, setDownloading] = useState<string | null>(null);
   const titleId = useId();
-  // Mounted only while it is open, so "open" is simply `true`.
-  const dialog = useDialogFocus<HTMLDivElement>(true);
 
   const { data: card, isLoading, error } = useQuery({
     queryKey: ['library-file-card', fileId],
@@ -622,23 +584,20 @@ function FileCard({ fileId, fileName, linkedProductIds, onClose }: FileCardProps
         members.length > 0),
   );
 
+  // Escape closes the re-read menu — one layer at a time. The dialog itself and
+  // the picture viewer are the shell's (the stack listens on `window`), so this
+  // one takes the event only while the menu is open under nothing, and stops it
+  // there.
   useEffect(() => {
+    if (!rereadOpen || lightbox !== null) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
-      if (lightbox !== null) setLightbox(null);
-      else if (rereadOpen) setRereadOpen(false);
-      else onClose();
+      e.stopPropagation();
+      setRereadOpen(false);
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [lightbox, rereadOpen, onClose]);
-
-  // ⚠️ Focus moves INTO the overlay when it opens and back to the thumbnail
-  // when it closes — and that is ALL it does. **Tab is not trapped**: it walks
-  // out of the overlay and into the modal behind it. What the move fixes is the
-  // two ends, which without it leave a keyboard user starting at the top of the
-  // document and, on close, with the focus ring on `<body>` — nowhere.
-  const overlay = useDialogFocus<HTMLDivElement>(lightbox !== null);
+  }, [lightbox, rereadOpen]);
 
   const sanitizeHtml = (html: string) =>
     DOMPurify.sanitize(html, {
@@ -698,99 +657,86 @@ function FileCard({ fileId, fileName, linkedProductIds, onClose }: FileCardProps
     }
   };
 
-  const handleBackdropClick = (e: React.MouseEvent) => {
-    if (e.target === e.currentTarget) onClose();
-  };
+  // ⚠️ Hoisted out of `header={…}` on purpose: the re-read menu's
+  // click-catcher is a `fixed inset-0` div, and inside the Modal's own
+  // opening tag `modalShellOwnership` reads it as a hand-rolled overlay on
+  // the shell itself.
+  const header = (
+    <div className="flex flex-1 items-center justify-between min-w-0">
+      <div className="flex items-center gap-3 min-w-0">
+        <FileText className="w-5 h-5 text-bambu-green shrink-0" />
+        <h2 id={titleId} className="text-lg font-semibold text-white truncate">
+          {t('modelCard.title')}
+          {fileName && <span className="text-bambu-gray ml-2">- {fileName}</span>}
+        </h2>
+      </div>
+      <div className="flex items-center gap-2">
+        {hasPermission('projects:create') && (
+          <Button variant="secondary" size="sm" onClick={() => create.mutate()} disabled={create.isPending}>
+            {create.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Package className="w-4 h-4" />}
+            {t('modelCard.createProduct')}
+          </Button>
+        )}
+        {hasPermission('projects:update') && linked.length > 0 && (
+          <div className="relative">
+            {/* ⚠️ `haspopup` + `expanded` on the TRIGGER, not on the menu.
+                The menu below already has `role="menu"`, but a screen reader
+                reaches the button first and, without these, announces it as
+                an ordinary button — nothing says a menu is about to open, or
+                that one is already open. */}
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              aria-haspopup="menu"
+              aria-expanded={rereadOpen}
+              onClick={() => setRereadOpen((v) => !v)}
+              disabled={reread.isPending}
+            >
+              {reread.isPending ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <RefreshCw className="w-4 h-4" />
+              )}
+              {t('modelCard.rereadInto')}
+            </Button>
+            {rereadOpen && (
+              <>
+                {/* not-a-modal: popover */}
+                <div className="fixed inset-0 z-10" onClick={() => setRereadOpen(false)} />
+                <div
+                  role="menu"
+                  className="absolute right-0 top-full mt-1 z-20 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg shadow-xl py-1 min-w-[220px] max-h-64 overflow-y-auto"
+                >
+                  {linked.map((productId) => (
+                    <button
+                      key={productId}
+                      type="button"
+                      role="menuitem"
+                      className="w-full px-3 py-2 text-left text-sm text-white hover:bg-bambu-dark truncate"
+                      onClick={() => reread.mutate(productId)}
+                    >
+                      {products.find((p) => p.id === productId)?.name ?? `#${productId}`}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
 
   return (
-    <div
-      className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
-      onClick={handleBackdropClick}
-    >
-      {/* ⚠️ The role, the name and the focus, as one unit — see
-          `useDialogFocus`, which lists every overlay that uses it and says
-          exactly what it does and does not do. Without them the overlay is an
-          anonymous `<div>` a screen reader never announces, and a keyboard user
-          opening it starts at the top of the PAGE behind. */}
-      <div
-        ref={dialog}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        tabIndex={-1}
-        className="bg-bambu-dark-secondary rounded-xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col outline-none"
+    <>
+      <Modal
+        onClose={onClose}
+        labelledBy={titleId}
+        size="4xl"
+        bodyClassName="flex flex-col"
+        header={header}
       >
-        <div className="flex items-center justify-between p-4 border-b border-bambu-dark-tertiary">
-          <div className="flex items-center gap-3 min-w-0">
-            <FileText className="w-5 h-5 text-bambu-green shrink-0" />
-            <h2 id={titleId} className="text-lg font-semibold text-white truncate">
-              {t('modelCard.title')}
-              {fileName && <span className="text-bambu-gray ml-2">- {fileName}</span>}
-            </h2>
-          </div>
-          <div className="flex items-center gap-2">
-            {hasPermission('projects:create') && (
-              <Button variant="secondary" size="sm" onClick={() => create.mutate()} disabled={create.isPending}>
-                {create.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Package className="w-4 h-4" />}
-                {t('modelCard.createProduct')}
-              </Button>
-            )}
-            {hasPermission('projects:update') && linked.length > 0 && (
-              <div className="relative">
-                {/* ⚠️ `haspopup` + `expanded` on the TRIGGER, not on the menu.
-                    The menu below already has `role="menu"`, but a screen reader
-                    reaches the button first and, without these, announces it as
-                    an ordinary button — nothing says a menu is about to open, or
-                    that one is already open. */}
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  aria-haspopup="menu"
-                  aria-expanded={rereadOpen}
-                  onClick={() => setRereadOpen((v) => !v)}
-                  disabled={reread.isPending}
-                >
-                  {reread.isPending ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <RefreshCw className="w-4 h-4" />
-                  )}
-                  {t('modelCard.rereadInto')}
-                </Button>
-                {rereadOpen && (
-                  <>
-                    <div className="fixed inset-0 z-10" onClick={() => setRereadOpen(false)} />
-                    <div
-                      role="menu"
-                      className="absolute right-0 top-full mt-1 z-20 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg shadow-xl py-1 min-w-[220px] max-h-64 overflow-y-auto"
-                    >
-                      {linked.map((productId) => (
-                        <button
-                          key={productId}
-                          type="button"
-                          role="menuitem"
-                          className="w-full px-3 py-2 text-left text-sm text-white hover:bg-bambu-dark truncate"
-                          onClick={() => reread.mutate(productId)}
-                        >
-                          {products.find((p) => p.id === productId)?.name ?? `#${productId}`}
-                        </button>
-                      ))}
-                    </div>
-                  </>
-                )}
-              </div>
-            )}
-            <button
-              onClick={onClose}
-              aria-label={t('common.close')}
-              className="p-2 hover:bg-bambu-dark-tertiary rounded-lg transition-colors"
-            >
-              <X className="w-5 h-5 text-bambu-gray" />
-            </button>
-          </div>
-        </div>
-
         <div className="flex-1 overflow-y-auto p-6">
           {isLoading && (
             <div className="flex items-center justify-center py-12">
@@ -964,18 +910,13 @@ function FileCard({ fileId, fileName, linkedProductIds, onClose }: FileCardProps
             </div>
           )}
         </div>
-      </div>
+      </Modal>
 
       {lightbox !== null && pictures[lightbox] && (
-        <div
-          ref={overlay}
-          role="dialog"
-          aria-modal="true"
-          aria-label={t('modelCard.pictureViewer')}
-          tabIndex={-1}
-          data-testid="card-lightbox"
-          className="fixed inset-0 bg-black/90 backdrop-blur-sm flex items-center justify-center z-60 outline-none"
-          onClick={() => setLightbox(null)}
+        <Modal
+          variant="lightbox"
+          onClose={() => setLightbox(null)}
+          ariaLabel={t('modelCard.pictureViewer')}
         >
           <button
             type="button"
@@ -1015,8 +956,8 @@ function FileCard({ fileId, fileName, linkedProductIds, onClose }: FileCardProps
           >
             <X className="w-6 h-6 text-white" />
           </button>
-        </div>
+        </Modal>
       )}
-    </div>
+    </>
   );
 }

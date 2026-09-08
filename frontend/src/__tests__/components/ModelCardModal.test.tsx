@@ -403,10 +403,10 @@ describe('ModelCardModal — a library file', () => {
     opener.focus();
     fireEvent.click(opener);
 
-    expect(screen.getByTestId('card-lightbox')).toHaveFocus();
+    expect(screen.getByRole('dialog', { name: 'Picture viewer' })).toHaveFocus();
 
     fireEvent.keyDown(document, { key: 'Escape' });
-    expect(screen.queryByTestId('card-lightbox')).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Picture viewer' })).not.toBeInTheDocument();
     expect(opener).toHaveFocus();
   });
 
@@ -466,17 +466,16 @@ describe('ModelCardModal — a library file', () => {
 
     fireEvent.click((await screen.findByAltText('front.png')).closest('button') as HTMLButtonElement);
 
-    const lightbox = screen.getByTestId('card-lightbox');
-    expect(lightbox).toHaveAttribute('role', 'dialog');
+    const lightbox = screen.getByRole('dialog', { name: 'Picture viewer' });
     expect(lightbox).toHaveAttribute('aria-modal', 'true');
-    expect(lightbox).toHaveAccessibleName('Picture viewer');
   });
 
   // ⚠️ The ARCHIVE half is a second component in the same file with its own
-  // copy of all of this — its own `useDialogFocus`, its own overlay, its own
-  // Escape ordering. Everything above tests the FILE half, so `archive-lightbox`
-  // was a testid nothing read and the archive picture viewer could have lost its
-  // role, its name or its focus without a red test anywhere.
+  // copy of all of this — its own overlay, its own Escape ordering. Everything
+  // above tests the FILE half, so without this one the archive picture viewer
+  // could have lost its role, its name or its focus with no red test anywhere.
+  // Both viewers are addressed by role and accessible name: the shell owns the
+  // element that carries them, so a testid of our own no longer reaches it.
   it('announces and focuses the ARCHIVE half lightbox the same way', async () => {
     vi.spyOn(api, 'getArchiveProjectPage').mockResolvedValue(archiveCard as never);
     render(<ModelCardModal source={{ kind: 'archive', id: 12 }} onClose={() => {}} />);
@@ -485,15 +484,13 @@ describe('ModelCardModal — a library file', () => {
     opener.focus();
     fireEvent.click(opener);
 
-    const lightbox = screen.getByTestId('archive-lightbox');
-    expect(lightbox).toHaveAttribute('role', 'dialog');
+    const lightbox = screen.getByRole('dialog', { name: 'Picture viewer' });
     expect(lightbox).toHaveAttribute('aria-modal', 'true');
-    expect(lightbox).toHaveAccessibleName('Picture viewer');
     expect(lightbox).toHaveFocus();
 
     // Escape closes the LIGHTBOX and leaves the modal behind it standing.
     fireEvent.keyDown(document, { key: 'Escape' });
-    expect(screen.queryByTestId('archive-lightbox')).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Picture viewer' })).not.toBeInTheDocument();
     expect(screen.getByText('Desk lamp')).toBeInTheDocument();
     expect(opener).toHaveFocus();
   });
