@@ -527,6 +527,9 @@ DEBUG=true uvicorn backend.app.main:app --reload --loop asyncio
 cd frontend && npm install && npm run dev
 ```
 
+Want to contribute? [CONTRIBUTING.md](CONTRIBUTING.md) has the setup, the checks
+CI runs and the house rules; [SECURITY.md](SECURITY.md) is for vulnerabilities.
+
 ---
 
 ## License
