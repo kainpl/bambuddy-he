@@ -1356,6 +1356,7 @@ function PendingItemRow({
             </button>
             {menuOpen && (
               <>
+                {/* not-a-modal: menu */}
                 <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
                 <div className="absolute right-0 top-full mt-1 z-20 min-w-[180px] rounded-md bg-bambu-dark-secondary border border-bambu-dark-tertiary shadow-xl py-1 text-xs">
                   {item.archive_id && (

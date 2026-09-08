@@ -111,6 +111,7 @@ export function FileTagsPopover({ file, anchor, onClose }: FileTagsPopoverProps)
 
   return createPortal(
     <>
+      {/* not-a-modal: popover */}
       <div className="fixed inset-0 z-[65]" onClick={onClose} />
       <div
         role="dialog"

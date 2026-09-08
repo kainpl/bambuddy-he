@@ -138,6 +138,7 @@ export function CardActionMenu({ label, testId, width = 180, children }: CardAct
       {open
         && createPortal(
           <>
+            {/* not-a-modal: menu */}
             <div className="fixed inset-0 z-[55]" onClick={close} />
             <div
               ref={panelRef}

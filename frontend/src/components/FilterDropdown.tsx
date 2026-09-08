@@ -43,6 +43,7 @@ export function FilterDropdown({
 
       {isOpen && (
         <>
+          {/* not-a-modal: popover */}
           <div className="fixed inset-0 z-10" onClick={() => setIsOpen(false)} />
           <div className="absolute top-full left-0 mt-1 min-w-[160px] bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg shadow-xl z-20 py-1 max-h-60 overflow-y-auto">
             {options.map((option) => (
