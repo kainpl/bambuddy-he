@@ -81,6 +81,48 @@ import sys
 from contextlib import closing
 from pathlib import Path
 
+# The tables whose file columns decide what is referenced. If either is
+# unreadable the answer to "what is an orphan?" is "everything".
+_REQUIRED_TABLES = ("print_archives", "library_files")
+
+
+def _refuse_unusable_database(db_path: Path) -> None:
+    """Stop before the scan when the database cannot answer the question.
+
+    ⚠️ Two ways this script used to arrive at "delete everything", both silent:
+
+    * **The install is on PostgreSQL.** ``DATABASE_URL`` points elsewhere and
+      this SQLite file is a leftover — on a migrated install it is the 0-byte
+      ``data/bamdude.db`` the app recreates beside ``bamdude.db.migrated``.
+    * **The file exists but holds no schema.** ``Path.exists()`` was the only
+      check, and SQLite opens an empty file as a valid empty database.
+
+    Either way the two SELECTs below raised "no such table", which was caught
+    and printed as a warning, the referenced set stayed empty, and every file
+    under ``archive/`` was reported as an orphan — with ``--apply`` offered on
+    the next line. Same shape as the ``EMPTY_WALK_GUARD`` in
+    ``services/library_scan.py``: an empty answer from a stocked directory is a
+    broken question, not a mandate to delete.
+    """
+    database_url = os.environ.get("DATABASE_URL", "").strip()
+    if database_url:
+        where = "the bundled PostgreSQL" if database_url == "embedded" else database_url.split("@")[-1]
+        raise SystemExit(
+            f"refusing to run: DATABASE_URL is set ({where}), so this install's data is not in "
+            f"{db_path}.\nThis script reads SQLite only. Against a leftover SQLite file it would "
+            "report every archived file as an orphan."
+        )
+
+    with closing(sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)) as conn:
+        present = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    missing = [name for name in _REQUIRED_TABLES if name not in present]
+    if missing:
+        raise SystemExit(
+            f"refusing to run: {db_path} has no {', '.join(missing)} table.\n"
+            "That is not a BamDude database (or it is an empty leftover). Every file would look "
+            "unreferenced, and --apply would delete all of them."
+        )
+
 
 def _resolve_data_dir(arg_data_dir: str | None) -> Path:
     if arg_data_dir:
@@ -112,7 +154,16 @@ def _collect_referenced_paths(db_path: Path) -> set[str]:
                     if v:
                         referenced.add(Path(str(v)).as_posix())
         except sqlite3.OperationalError as e:
-            print(f"warning: skipping {table}: {e}", file=sys.stderr)
+            # ⚠️ NOT a warning. An unreadable table means "nothing is
+            # referenced", and this script deletes precisely what is not
+            # referenced — so the friendly degradation was a full wipe of the
+            # archive. See ``_refuse_unusable_database`` for the guard that
+            # normally stops us reaching here.
+            conn.close()
+            raise SystemExit(
+                f"refusing to continue: cannot read {table} ({e}).\n"
+                "Every file would look unreferenced, and --apply would delete all of them."
+            ) from e
     conn.close()
     return referenced
 
@@ -239,6 +290,7 @@ def main(argv: list[str] | None = None) -> int:
     if not db_path.exists():
         print(f"DB not found at {db_path}", file=sys.stderr)
         return 1
+    _refuse_unusable_database(db_path)
     if not archive_root.exists():
         print(f"archive/ not found at {archive_root} — nothing to do")
         return 0

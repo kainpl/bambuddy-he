@@ -122,3 +122,47 @@ def test_it_refuses_to_guess_when_the_data_dir_is_not_one(tmp_path, missing):
     else:
         target.rmdir()
         assert prune.main(["--data-dir", str(data)]) == 0
+
+
+class TestItRefusesWhatItCannotAnswer:
+    """⚠️ The script deletes what no database row names. So a database that
+    names nothing is not an empty install — it is a broken question, and the
+    honest answer to it is to stop. Same shape as ``EMPTY_WALK_GUARD`` in
+    ``services/library_scan.py``.
+
+    Both of these used to print a warning and then report every file under
+    ``archive/`` as an orphan, with ``--apply`` offered on the next line.
+    """
+
+    def test_an_empty_leftover_database_stops_the_run(self, tmp_path, monkeypatch):
+        """What a PostgreSQL install actually looks like on disk: a 0-byte
+        ``data/bamdude.db`` beside ``bamdude.db.migrated``. SQLite opens it
+        happily as a valid empty database."""
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        data = tmp_path / "data"
+        (data / "archive").mkdir(parents=True)
+        (data / "bamdude.db").touch()
+        _write(data / "archive" / "keep" / "a.3mf")
+
+        with pytest.raises(SystemExit) as excinfo:
+            prune.main(["--data-dir", str(data)])
+        assert "print_archives" in str(excinfo.value)
+        assert (data / "archive" / "keep" / "a.3mf").exists()
+
+    def test_it_will_not_run_against_a_postgresql_install(self, tmp_path, monkeypatch):
+        """The rows are in PostgreSQL; whatever SQLite file is lying around
+        cannot say what is referenced."""
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://bamdude@db.local/bamdude")
+        data = _data_dir(tmp_path)
+        files = _populate(data)
+
+        with pytest.raises(SystemExit) as excinfo:
+            prune.main(["--data-dir", str(data)])
+        assert "DATABASE_URL" in str(excinfo.value)
+        assert files["orphan"].exists()
+
+    def test_a_healthy_sqlite_install_is_unaffected(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        data = _data_dir(tmp_path)
+        _populate(data)
+        assert prune.main(["--data-dir", str(data)]) == 0
