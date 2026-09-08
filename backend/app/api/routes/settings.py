@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.app.core import query_timing
 from backend.app.core.auth import RequirePermission, get_current_user_optional, require_energy_cost_update
 from backend.app.core.config import settings as app_settings
 from backend.app.core.database import get_db
@@ -137,6 +138,8 @@ async def get_settings(
                 "printer_sensor_history_retention_days",
                 "archive_3mf_retention_days",
                 "log_retention_days",
+                "slow_query_ms",
+                "slow_request_ms",
                 "ftp_retry_count",
                 "ftp_retry_delay",
                 "ftp_timeout",
@@ -248,6 +251,16 @@ async def update_settings(
         from backend.app.core.logging_state import update_log_retention
 
         update_log_retention(int(update_data["log_retention_days"]))
+
+    # Same idea for the timing thresholds: the listeners are attached to the
+    # engine long before a database exists, so they read module state that this
+    # applies at once — no restart to start (or stop) measuring.
+    for _key, _apply in (
+        ("slow_query_ms", query_timing.set_query_threshold_ms),
+        ("slow_request_ms", query_timing.set_request_threshold_ms),
+    ):
+        if update_data.get(_key) is not None:
+            _apply(int(update_data[_key]))
 
     # Update DB templates when system language changes
     locale_lang = update_data.get("language")

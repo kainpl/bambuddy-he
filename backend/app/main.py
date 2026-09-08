@@ -8438,6 +8438,19 @@ async def lifespan(app: FastAPI):
         except Exception as _ret_exc:
             logging.getLogger(__name__).debug("Could not apply DB log_retention_days at startup: %s", _ret_exc)
 
+    # The timing thresholds live in the database but the listeners were attached
+    # at import time, so the stored values have to be pushed into module state
+    # once at startup. Best-effort: a farm must boot even if this row is odd.
+    try:
+        from backend.app.api.routes.settings import get_setting as _get_timing_setting
+        from backend.app.core.database import async_session as _timing_session
+
+        async with _timing_session() as _tm_db:
+            query_timing.set_query_threshold_ms(int(await _get_timing_setting(_tm_db, "slow_query_ms") or 0))
+            query_timing.set_request_threshold_ms(int(await _get_timing_setting(_tm_db, "slow_request_ms") or 0))
+    except Exception as _tm_exc:
+        logging.getLogger(__name__).debug("Could not apply DB timing thresholds at startup: %s", _tm_exc)
+
     # Register an app-scoped httpx client for Bambu Cloud services so
     # per-request BambuCloudService instances reuse the same connection pool
     # (important for routes like /cloud/filament-info that chain many

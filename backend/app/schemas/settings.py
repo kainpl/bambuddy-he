@@ -191,6 +191,18 @@ class AppSettings(BaseModel):
         le=365,
         description="Number of days to keep historical daily log archives (bamdude-YYYY-MM-DD.log).",
     )
+    slow_query_ms: int = Field(
+        default=0,
+        ge=0,
+        le=60000,
+        description="Log a warning for any SQL statement slower than this, in milliseconds. 0 disables.",
+    )
+    slow_request_ms: int = Field(
+        default=0,
+        ge=0,
+        le=600000,
+        description="Log a warning for any HTTP request slower than this, in milliseconds. 0 disables.",
+    )
 
     # Queue auto-drying settings
     queue_drying_enabled: bool = Field(
@@ -631,6 +643,8 @@ class AppSettingsUpdate(BaseModel):
     archive_3mf_retention_enabled: bool | None = None
     archive_3mf_retention_days: int | None = Field(default=None, ge=1)
     log_retention_days: int | None = Field(default=None, ge=1, le=365)
+    slow_query_ms: int | None = Field(default=None, ge=0, le=60000)
+    slow_request_ms: int | None = Field(default=None, ge=0, le=600000)
     runout_zero_point_enabled: bool | None = None
     ams_sync_bidirectional: bool | None = None
     runout_purge_grams: int | None = Field(default=None, ge=0, le=500)
