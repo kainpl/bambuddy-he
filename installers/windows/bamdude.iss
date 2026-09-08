@@ -456,6 +456,15 @@ begin
   RemoveData := False;
   DataPath := ExpandConstant('{commonappdata}\BamDude');
 
+  // KeepSizeX is False, so the window is allowed to grow wider than the 470
+  // asked for here — and on a wide screen it does, which makes the option
+  // descriptions run in long lines. Verified in this shape on 2026-09-08 and
+  // left alone deliberately.
+  //
+  // ⚠️ Passing True to narrow it is a one-word change but NOT a cosmetic one:
+  // the height below is derived from how the labels wrapped, so a narrower
+  // window wraps more, grows taller, and needs looking at again in BOTH
+  // languages — the Ukrainian strings are the longer pair.
   Form := CreateCustomForm(ScaleX(470), ScaleY(320), False, True);
   try
     Form.Caption := CustomMessage('UninstallDataTitle');
