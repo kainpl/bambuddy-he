@@ -1,0 +1,224 @@
+/**
+ * Every modal renders through `components/Modal.tsx`. A hand-rolled full-screen
+ * overlay is how modals came to close on a click outside, each file copying the
+ * last; this scan is what stops the next copy.
+ *
+ * Two rules, checked on every JSX opening tag in `src/**\/*.tsx`:
+ * 1. `fixed inset-0` with a visible ground (`bg-black` / `backdrop-blur`) is a
+ *    modal → must be <Modal>.
+ * 2. an `inset-0` overlay with a pointer handler is a click-outside → only a
+ *    menu, popover, drawer, loading or viewer overlay may have one, and it says
+ *    so on the line above: `// not-a-modal: menu` (or `{/* not-a-modal: menu *\/}`).
+ *
+ * `NOT_YET_MIGRATED` is the migration's allowlist. It shrinks to [] and is then
+ * deleted; a file that no longer trips a rule but is still listed FAILS, so a
+ * finished file cannot linger here.
+ */
+import { describe, it, expect } from 'vitest';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { join, relative, sep } from 'node:path';
+
+const SRC = join(process.cwd(), 'src');
+const SHELL = 'components/Modal.tsx';
+const MARKER = /(\/\/|\{\/\*)\s*not-a-modal:\s*(menu|popover|drawer|loading|viewer)\b/;
+
+/** Files still on hand-rolled overlays. Remove a file the moment it is migrated. */
+const NOT_YET_MIGRATED: string[] = [
+  'components/AMSHistoryModal.tsx',
+  'components/AMSSettingsModal.tsx',
+  'components/AddExternalLinkModal.tsx',
+  'components/AddNotificationModal.tsx',
+  'components/AddSmartPlugModal.tsx',
+  'components/AddTelegramChatModal.tsx',
+  'components/AirductModal.tsx',
+  'components/AlertModal.tsx',
+  'components/AmsBackupModal.tsx',
+  'components/AssignSpoolModal.tsx',
+  'components/AuthoredFamiliesSection.tsx',
+  'components/BatchTagModal.tsx',
+  'components/BulkEditSpoolsModal.tsx',
+  'components/BulkPrinterToolbar.tsx',
+  'components/BulkTagsPickerModal.tsx',
+  'components/CalibrationHistoryModal.tsx',
+  'components/CalibrationModal.tsx',
+  'components/CameraDiagnoseModal.tsx',
+  'components/CardActionMenu.tsx',
+  'components/ColumnConfigModal.tsx',
+  'components/CompareArchivesModal.tsx',
+  'components/ConfigureAmsSlotModal.tsx',
+  'components/ConfirmModal.tsx',
+  'components/ConnectionDiagnostic.tsx',
+  'components/CopyQueueModal.tsx',
+  'components/CreateFilamentFamilyModal.tsx',
+  'components/CreateUserAdvancedAuthModal.tsx',
+  'components/EditArchiveModal.tsx',
+  'components/FilamentCalibrationModal.tsx',
+  'components/FilamentHoverCard.tsx',
+  'components/FileManagerModal.tsx',
+  'components/FileTagsPopover.tsx',
+  'components/FileUploadModal.tsx',
+  'components/FilterDropdown.tsx',
+  'components/ForecastPanel.tsx',
+  'components/GitBackupSettings.tsx',
+  'components/GitRestoreModal.tsx',
+  'components/HMSErrorModal.tsx',
+  'components/HeaterHistoryModal.tsx',
+  'components/IconPicker.tsx',
+  'components/KProfilesView.tsx',
+  'components/KeyboardShortcutsModal.tsx',
+  'components/LabelTemplatePickerModal.tsx',
+  'components/Layout.tsx',
+  'components/LibraryPickerModal.tsx',
+  'components/LibraryPlateGallery.tsx',
+  'components/LibraryTagsModal.tsx',
+  'components/LinkSpoolModal.tsx',
+  'components/LocalProfilesView.tsx',
+  'components/LocationsModal.tsx',
+  'components/MQTTDebugModal.tsx',
+  'components/Maintenance/MaintenanceToolbar.tsx',
+  'components/ModelCardModal.tsx',
+  'components/ModelViewerModal.tsx',
+  'components/MotionModal.tsx',
+  'components/NotificationLogViewer.tsx',
+  'components/NotificationTemplateEditor.tsx',
+  'components/OrcaCloudProfilesView.tsx',
+  'components/PhotoGalleryModal.tsx',
+  'components/PlateObjectsPreviewModal.tsx',
+  'components/PlugPowerHistoryModal.tsx',
+  'components/PrintModal/index.tsx',
+  'components/PrinterInfoModal.tsx',
+  'components/PrinterSettingsModal.tsx',
+  'components/PurgeArchivesModal.tsx',
+  'components/PurgeOldFilesModal.tsx',
+  'components/QRCodeModal.tsx',
+  'components/Queue/BatchActionDialog.tsx',
+  'components/Queue/QueueToolbar.tsx',
+  'components/QueueCard.tsx',
+  'components/RestoreDuplicateDialog.tsx',
+  'components/SaveArchiveToLibraryModal.tsx',
+  'components/SkipObjectsModal.tsx',
+  'components/SliceModal.tsx',
+  'components/SpoolCsvImportModal.tsx',
+  'components/SpoolFormModal.tsx',
+  'components/TagManagementModal.tsx',
+  'components/TemperatureModal.tsx',
+  'components/TimelapseEditorModal.tsx',
+  'components/TimelapseViewer.tsx',
+  'components/TrashSplitButton.tsx',
+  'components/VirtualPrinterAddDialog.tsx',
+  'components/VirtualPrinterDiagnosticModal.tsx',
+  'components/customers/CustomerModal.tsx',
+  'components/library/PlanFromFilesModal.tsx',
+  'components/products/FromFileDialog.tsx',
+  'components/products/ImportProductDialog.tsx',
+  'components/products/LinkToProductsModal.tsx',
+  'components/products/ProductCardDialog.tsx',
+  'components/products/ProductGallery.tsx',
+  'components/products/ProductHeader.tsx',
+  'components/products/ProductStock.tsx',
+  'components/projects/AddToOrderMenu.tsx',
+  'components/projects/BatchAssignOrderModal.tsx',
+  'components/projects/DuplicateOrderModal.tsx',
+  'components/projects/OrderModal.tsx',
+  'components/settings/CameraTokensPanel.tsx',
+  'components/settings/PrintOptionsPreferencesPanel.tsx',
+  'components/zigbee/DeviceReportingModal.tsx',
+  'components/zigbee/SensorFormModal.tsx',
+  'components/zigbee/SensorHistoryModal.tsx',
+  'components/zigbee/SensorThresholdsModal.tsx',
+  'pages/ArchivesPage.tsx',
+  'pages/FileManagerPage.tsx',
+  'pages/LoginPage.tsx',
+  'pages/MakerworldPage.tsx',
+  'pages/PrintersPage.tsx',
+  'pages/ProfilesPage.tsx',
+  'pages/SettingsPage.tsx',
+  'pages/StatsPage.tsx',
+];
+
+function walk(dir: string, out: string[] = []): string[] {
+  for (const d of readdirSync(dir, { withFileTypes: true })) {
+    const p = join(dir, d.name);
+    if (d.isDirectory()) {
+      if (d.name !== '__tests__') walk(p, out);
+    } else if (d.name.endsWith('.tsx')) {
+      out.push(p);
+    }
+  }
+  return out;
+}
+
+interface Tag {
+  line: number;
+  text: string;
+  lineBefore: string;
+}
+
+/** Every JSX opening tag, from `<Tag` to its own `>`, honouring braces and strings. */
+function openingTags(src: string): Tag[] {
+  const lines = src.split('\n');
+  const tags: Tag[] = [];
+  const re = /<([A-Za-z][\w.]*)\b/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src))) {
+    let i = m.index + m[0].length;
+    let depth = 0;
+    let str: string | null = null;
+    while (i < src.length) {
+      const c = src[i];
+      if (str) {
+        if (c === str && src[i - 1] !== '\\') str = null;
+      } else if (c === '"' || c === "'" || c === '`') {
+        str = c;
+      } else if (c === '{') {
+        depth += 1;
+      } else if (c === '}') {
+        depth -= 1;
+      } else if (c === '>' && depth === 0) {
+        break;
+      }
+      i += 1;
+    }
+    const text = src.slice(m.index, i + 1);
+    if (text.length > 4000) continue;
+    const line = src.slice(0, m.index).split('\n').length;
+    tags.push({ line, text, lineBefore: lines[line - 2] ?? '' });
+  }
+  return tags;
+}
+
+function offenders(file: string, src: string): string[] {
+  const out: string[] = [];
+  for (const t of openingTags(src)) {
+    if (!/className=/.test(t.text) || !/\binset-0\b/.test(t.text)) continue;
+    if (MARKER.test(t.lineBefore)) continue;
+    const fullScreen = /\bfixed\b/.test(t.text);
+    const visible = /\bbg-black\b|\bbackdrop-blur/.test(t.text);
+    const handler = /\bon(Click|MouseDown|PointerDown|TouchStart)=/.test(t.text);
+    if (fullScreen && visible) {
+      out.push(`${file}:${t.line} — hand-rolled modal overlay; render <Modal> from components/Modal.tsx`);
+    } else if (handler && (fullScreen || (visible && /\babsolute\b/.test(t.text)))) {
+      out.push(
+        `${file}:${t.line} — click-outside on an overlay; put "// not-a-modal: menu|popover|drawer|loading|viewer" on the line above, or use <Modal variant="lightbox">`,
+      );
+    }
+  }
+  return out;
+}
+
+describe('modal shell ownership', () => {
+  const files = walk(SRC)
+    .map((p) => relative(SRC, p).split(sep).join('/'))
+    .filter((f) => f !== SHELL);
+  const byFile = new Map(files.map((f) => [f, offenders(f, readFileSync(join(SRC, f), 'utf8'))]));
+
+  it('every full-screen overlay outside the shell is a <Modal>, or is marked as not a modal', () => {
+    const bad = files.filter((f) => !NOT_YET_MIGRATED.includes(f)).flatMap((f) => byFile.get(f) ?? []);
+    expect(bad).toEqual([]);
+  });
+
+  it('NOT_YET_MIGRATED lists only files that still need migrating', () => {
+    const stale = NOT_YET_MIGRATED.filter((f) => !existsSync(join(SRC, f)) || (byFile.get(f) ?? []).length === 0);
+    expect(stale).toEqual([]);
+  });
+});
