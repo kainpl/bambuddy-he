@@ -61,10 +61,16 @@ class EmbeddedPostgresError(RuntimeError):
 
 
 def _bin(name: str) -> Path:
+    """Absolute path to one of the wheel's own binaries.
+
+    name is never user input: every call site in this module passes a
+    literal (``pg_ctl``, ``initdb``, ``pg_isready``, ``psql``, ``createdb``),
+    and the parent comes from the installed package rather than from settings.
+    """
     from embedded_postgres._commands import POSTGRES_BIN_PATH
 
     exe = f"{name}.exe" if sys.platform == "win32" else name
-    path = Path(POSTGRES_BIN_PATH) / exe
+    path = Path(POSTGRES_BIN_PATH) / exe  # SEC-PATH-OK: literal name; parent is the wheel's own bin dir
     if not path.exists():
         raise EmbeddedPostgresError(f"embedded-postgres wheel has no {exe} at {path}")
     return path
