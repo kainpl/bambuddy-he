@@ -544,13 +544,6 @@ async def change_own_password(
             detail="Current password is incorrect",
         )
 
-    # Validate new password
-    if len(password_data.new_password) < 6:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="New password must be at least 6 characters",
-        )
-
     # Fetch user from this session to ensure changes are persisted
     result = await db.execute(select(User).where(User.id == current_user.id))
     user = result.scalar_one_or_none()

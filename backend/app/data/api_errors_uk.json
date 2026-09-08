@@ -412,7 +412,6 @@
   "Network error polling Orca Cloud token endpoint: {}": "Помилка мережі під час опитування ендпоінта токенів Orca Cloud: {}",
   "Network error pushing Orca Cloud profile: {}": "Помилка мережі під час надсилання профілю в Orca Cloud: {}",
   "Network error requesting Orca Cloud device code: {}": "Помилка мережі під час запиту коду пристрою Orca Cloud: {}",
-  "New password must be at least 6 characters": "Новий пароль має містити щонайменше 6 символів",
   "new_name is required": "new_name обовʼязковий",
   "No 3MF file available for this archive. The file could not be downloaded from the printer when the print was recorded.": "Для цього архіву немає файлу 3MF. Файл не вдалося завантажити з принтера, коли друк було записано.",
   "No access token configured": "Токен доступу не налаштовано",

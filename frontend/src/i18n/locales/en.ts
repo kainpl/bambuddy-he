@@ -45,6 +45,9 @@ export default {
 
   // Common
   common: {
+    showPassword: 'Show password',
+    hidePassword: 'Hide password',
+    stillNeeded: 'Still needed: {{items}}',
     save: 'Save',
     saving: 'Saving...',
     cancel: 'Cancel',
@@ -2615,7 +2618,7 @@ export default {
     username: 'Username',
     enterUsername: 'Enter username',
     password: 'Password',
-    enterPassword: 'Enter password (min 6 characters)',
+    enterPassword: 'At least 8 characters, with upper case, lower case and a digit',
     confirmPassword: 'Confirm Password',
     confirmPasswordPlaceholder: 'Confirm password',
     // Title tooltips
@@ -2739,7 +2742,6 @@ export default {
     enterNewPassword: 'Enter new password',
     confirmNewPassword: 'Confirm new password',
     enterCurrentPassword: 'Enter current password',
-    enterNewPasswordMin6: 'Enter new password (min 6 characters)',
     toast: {
       keyCopied: 'Key copied to clipboard',
       copyFailed: 'Failed to copy key',
@@ -3363,7 +3365,7 @@ export default {
       title: 'Set New Password',
       subtitle: 'Enter and confirm your new password below.',
       newPassword: 'New Password',
-      newPasswordPlaceholder: 'At least 8 characters',
+      newPasswordPlaceholder: 'At least 8 characters, with upper case, lower case and a digit',
       confirmPassword: 'Confirm Password',
       confirmPasswordPlaceholder: 'Repeat new password',
       saving: 'Saving…',
@@ -3413,7 +3415,7 @@ export default {
     adminPassword: 'Admin Password',
     optional: '(optional)',
     adminUsernamePlaceholder: 'Enter admin username',
-    adminPasswordPlaceholder: 'Enter admin password (min 6 characters)',
+    adminPasswordPlaceholder: 'At least 8 characters, with upper case, lower case and a digit',
     confirmPassword: 'Confirm Password',
     confirmPasswordPlaceholder: 'Confirm admin password',
     settingUp: 'Setting up...',
@@ -3423,7 +3425,7 @@ export default {
       authEnabledAdminCreated: 'Admin user created - welcome to BamDude',
       enterBothCredentials: 'Please enter both admin username and password',
       passwordsDoNotMatch: 'Passwords do not match',
-      passwordTooShort: 'Password must be at least 6 characters'
+      passwordTooShort: 'Password must be at least 8 characters'
     }
   },
 
@@ -3433,11 +3435,11 @@ export default {
     currentPassword: 'Current Password',
     currentPasswordPlaceholder: 'Enter current password',
     newPassword: 'New Password',
-    newPasswordPlaceholder: 'Enter new password (min 6 characters)',
+    newPasswordPlaceholder: 'At least 8 characters, with upper case, lower case and a digit',
     confirmPassword: 'Confirm New Password',
     confirmPasswordPlaceholder: 'Confirm new password',
     passwordsDoNotMatch: 'Passwords do not match',
-    passwordTooShort: 'Password must be at least 6 characters',
+    passwordTooShort: 'Password must be at least 8 characters',
     changing: 'Changing...',
     success: 'Password changed successfully',
     failed: 'Failed to change password'

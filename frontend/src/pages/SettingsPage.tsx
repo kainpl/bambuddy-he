@@ -26,6 +26,8 @@ import { NotificationLogViewer } from '../components/NotificationLogViewer';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { GcodeEditor } from '../components/GcodeEditor';
 import { CreateUserAdvancedAuthModal } from '../components/CreateUserAdvancedAuthModal';
+import { PasswordField } from '../components/PasswordField';
+import { SubmitBlockedHint } from '../components/SubmitBlockedHint';
 import CameraTokensPanel from '../components/settings/CameraTokensPanel';
 import { StreamOverlayBuilder } from '../components/StreamOverlayBuilder';
 import { SpoolmanSettings } from '../components/SpoolmanSettings';
@@ -6743,37 +6745,35 @@ export function SettingsPage() {
                   autoComplete="username"
                 />
               </div>
+              {/* Email is optional here and required in advanced-auth mode,
+                  where the generated password is mailed out. The field was
+                  missing entirely even though the form state and the create
+                  mutation both already carried it. */}
               <div>
-                <label className="block text-sm font-medium text-white mb-2">{t('settings.password')}</label>
+                <label className="block text-sm font-medium text-white mb-2">{t('users.form.email')}</label>
                 <input
-                  type="password"
-                  value={userFormData.password}
-                  onChange={(e) => setUserFormData({ ...userFormData, password: e.target.value })}
+                  type="email"
+                  value={userFormData.email}
+                  onChange={(e) => setUserFormData({ ...userFormData, email: e.target.value })}
                   className="w-full px-4 py-3 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors"
-                  placeholder={t('settings.enterPassword')}
-                  autoComplete="new-password"
-                  minLength={6}
+                  placeholder={t('users.form.emailPlaceholder')}
+                  autoComplete="email"
                 />
               </div>
-              <div>
-                <label className="block text-sm font-medium text-white mb-2">{t('settings.confirmPassword')}</label>
-                <input
-                  type="password"
-                  value={userFormData.confirmPassword}
-                  onChange={(e) => setUserFormData({ ...userFormData, confirmPassword: e.target.value })}
-                  className={`w-full px-4 py-3 bg-bambu-dark-secondary border rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors ${
-                    userFormData.confirmPassword && userFormData.password !== userFormData.confirmPassword
-                      ? 'border-red-500'
-                      : 'border-bambu-dark-tertiary'
-                  }`}
-                  placeholder={t('settings.confirmPasswordPlaceholder')}
-                  autoComplete="new-password"
-                  minLength={6}
-                />
-                {userFormData.confirmPassword && userFormData.password !== userFormData.confirmPassword && (
-                  <p className="text-red-700 dark:text-red-400 text-xs mt-1">{t('settings.passwordsDoNotMatch')}</p>
-                )}
-              </div>
+              <PasswordField
+                label={t('settings.password')}
+                value={userFormData.password ?? ''}
+                onChange={(password) => setUserFormData({ ...userFormData, password })}
+                placeholder={t('settings.enterPassword')}
+                showRules
+              />
+              <PasswordField
+                label={t('settings.confirmPassword')}
+                value={userFormData.confirmPassword}
+                onChange={(confirmPassword) => setUserFormData({ ...userFormData, confirmPassword })}
+                placeholder={t('settings.confirmPasswordPlaceholder')}
+                mustMatch={userFormData.password ?? ''}
+              />
               <div>
                 <label className="block text-sm font-medium text-white mb-2">{t('settings.groups')}</label>
                 <div className="space-y-2 max-h-40 overflow-y-auto p-2 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg">
@@ -6800,7 +6800,15 @@ export function SettingsPage() {
                 </div>
               </div>
             </div>
-            <div className="mt-6 flex justify-end gap-3">
+            {/* The password rules answer for themselves inside PasswordField;
+                this covers the fields that are merely still empty. */}
+            <SubmitBlockedHint
+              missing={[
+                ...(!userFormData.username ? [t('settings.username')] : []),
+                ...(!userFormData.password ? [t('settings.password')] : []),
+              ]}
+            />
+            <div className="mt-2 flex justify-end gap-3">
               <Button
                 variant="secondary"
                 onClick={() => {
@@ -6846,6 +6854,10 @@ export function SettingsPage() {
           onCreate={handleCreateUser}
           isCreating={createUserMutation.isPending}
           isCreateButtonDisabled={createUserMutation.isPending || !userFormData.username || !userFormData.email}
+          missingFields={[
+            ...(!userFormData.username ? [t('users.form.username')] : []),
+            ...(!userFormData.email ? [t('users.form.email') || 'Email'] : []),
+          ]}
         />
       )}
 
@@ -6896,40 +6908,24 @@ export function SettingsPage() {
               {/* Password Fields - only show when Advanced Auth is disabled */}
               {!advancedAuthStatus?.advanced_auth_enabled && (
                 <>
-                  <div>
-                    <label className="block text-sm font-medium text-white mb-2">
-                      {t('users.form.password') || 'Password'} <span className="text-bambu-gray font-normal">({t('users.form.leaveBlankToKeep') || 'leave blank to keep current'})</span>
-                    </label>
-                    <input
-                      type="password"
-                      value={userFormData.password}
-                      onChange={(e) => setUserFormData({ ...userFormData, password: e.target.value, confirmPassword: '' })}
-                      className="w-full px-4 py-3 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors"
-                      placeholder={t('settings.enterNewPassword')}
-                      autoComplete="new-password"
-                      minLength={6}
-                    />
-                  </div>
+                  {/* Blank means "keep the current password", so the rules
+                      only speak once something has been typed — which is what
+                      PasswordField does with an empty value. */}
+                  <PasswordField
+                    label={`${t('users.form.password') || 'Password'} (${t('users.form.leaveBlankToKeep') || 'leave blank to keep current'})`}
+                    value={userFormData.password ?? ''}
+                    onChange={(password) => setUserFormData({ ...userFormData, password, confirmPassword: '' })}
+                    placeholder={t('settings.enterNewPassword')}
+                    showRules
+                  />
                   {userFormData.password && (
-                    <div>
-                      <label className="block text-sm font-medium text-white mb-2">{t('settings.confirmPassword')}</label>
-                      <input
-                        type="password"
-                        value={userFormData.confirmPassword}
-                        onChange={(e) => setUserFormData({ ...userFormData, confirmPassword: e.target.value })}
-                        className={`w-full px-4 py-3 bg-bambu-dark-secondary border rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors ${
-                          userFormData.confirmPassword && userFormData.password !== userFormData.confirmPassword
-                            ? 'border-red-500'
-                            : 'border-bambu-dark-tertiary'
-                        }`}
-                        placeholder={t('settings.confirmNewPassword')}
-                        autoComplete="new-password"
-                        minLength={6}
-                      />
-                      {userFormData.confirmPassword && userFormData.password !== userFormData.confirmPassword && (
-                        <p className="text-red-700 dark:text-red-400 text-xs mt-1">{t('settings.passwordsDoNotMatch')}</p>
-                      )}
-                    </div>
+                    <PasswordField
+                      label={t('settings.confirmPassword')}
+                      value={userFormData.confirmPassword}
+                      onChange={(confirmPassword) => setUserFormData({ ...userFormData, confirmPassword })}
+                      placeholder={t('settings.confirmNewPassword')}
+                      mustMatch={userFormData.password ?? ''}
+                    />
                   )}
                 </>
               )}
@@ -6986,7 +6982,15 @@ export function SettingsPage() {
                 </div>
               </div>
             </div>
-            <div className="mt-6 flex justify-end gap-3">
+            <SubmitBlockedHint
+              missing={[
+                ...(!userFormData.username ? [t('users.form.username')] : []),
+                ...(advancedAuthStatus?.advanced_auth_enabled && !userFormData.email
+                  ? [t('users.form.email') || 'Email']
+                  : []),
+              ]}
+            />
+            <div className="mt-2 flex justify-end gap-3">
               <Button
                 variant="secondary"
                 onClick={() => {
@@ -7481,54 +7485,27 @@ export function SettingsPage() {
         >
           <CardContent>
             <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-white mb-2">
-                  Current Password
-                </label>
-                <input
-                  type="password"
-                  value={changePasswordData.currentPassword}
-                  onChange={(e) => setChangePasswordData({ ...changePasswordData, currentPassword: e.target.value })}
-                  className="w-full px-4 py-3 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors"
-                  placeholder={t('settings.enterCurrentPassword')}
-                  autoComplete="current-password"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-white mb-2">
-                  New Password
-                </label>
-                <input
-                  type="password"
-                  value={changePasswordData.newPassword}
-                  onChange={(e) => setChangePasswordData({ ...changePasswordData, newPassword: e.target.value })}
-                  className="w-full px-4 py-3 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors"
-                  placeholder={t('settings.enterNewPasswordMin6')}
-                  autoComplete="new-password"
-                  minLength={6}
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-white mb-2">
-                  Confirm New Password
-                </label>
-                <input
-                  type="password"
-                  value={changePasswordData.confirmPassword}
-                  onChange={(e) => setChangePasswordData({ ...changePasswordData, confirmPassword: e.target.value })}
-                  className={`w-full px-4 py-3 bg-bambu-dark-secondary border rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors ${
-                    changePasswordData.confirmPassword && changePasswordData.newPassword !== changePasswordData.confirmPassword
-                      ? 'border-red-500'
-                      : 'border-bambu-dark-tertiary'
-                  }`}
-                  placeholder={t('settings.confirmNewPassword')}
-                  autoComplete="new-password"
-                  minLength={6}
-                />
-                {changePasswordData.confirmPassword && changePasswordData.newPassword !== changePasswordData.confirmPassword && (
-                  <p className="text-red-700 dark:text-red-400 text-xs mt-1">{t('settings.passwordsDoNotMatch')}</p>
-                )}
-              </div>
+              <PasswordField
+                label={t('changePassword.currentPassword')}
+                value={changePasswordData.currentPassword}
+                onChange={(currentPassword) => setChangePasswordData({ ...changePasswordData, currentPassword })}
+                placeholder={t('settings.enterCurrentPassword')}
+                autoComplete="current-password"
+              />
+              <PasswordField
+                label={t('changePassword.newPassword')}
+                value={changePasswordData.newPassword}
+                onChange={(newPassword) => setChangePasswordData({ ...changePasswordData, newPassword })}
+                placeholder={t('settings.enterNewPassword')}
+                showRules
+              />
+              <PasswordField
+                label={t('changePassword.confirmPassword')}
+                value={changePasswordData.confirmPassword}
+                onChange={(confirmPassword) => setChangePasswordData({ ...changePasswordData, confirmPassword })}
+                placeholder={t('settings.confirmNewPassword')}
+                mustMatch={changePasswordData.newPassword}
+              />
             </div>
             <div className="mt-6 flex justify-end gap-3">
               <Button
@@ -7546,8 +7523,9 @@ export function SettingsPage() {
                     showToast(t('settings.toast.passwordsDoNotMatch'), 'error');
                     return;
                   }
-                  if (changePasswordData.newPassword.length < 6) {
-                    showToast(t('settings.toast.passwordTooShort'), 'error');
+                  const ruleKey = checkPasswordComplexity(changePasswordData.newPassword);
+                  if (ruleKey) {
+                    showToast(t(ruleKey), 'error');
                     return;
                   }
                   setChangePasswordLoading(true);

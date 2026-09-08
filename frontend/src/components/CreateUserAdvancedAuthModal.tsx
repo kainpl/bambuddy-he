@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Plus, Loader2, Users as UsersIcon } from 'lucide-react';
 import { Button } from './Button';
 import { Modal } from './Modal';
+import { SubmitBlockedHint } from './SubmitBlockedHint';
 import type { Group, UserCreate } from '../api/client';
 
 interface AdvancedAuthFormData extends UserCreate {
@@ -19,6 +20,8 @@ interface CreateUserAdvancedAuthModalProps {
   onCreate: () => void;
   isCreating: boolean;
   isCreateButtonDisabled: boolean;
+  /** Translated names of the still-empty required fields, for the hint. */
+  missingFields: string[];
 }
 
 export function CreateUserAdvancedAuthModal({
@@ -29,6 +32,7 @@ export function CreateUserAdvancedAuthModal({
   onCreate,
   isCreating,
   isCreateButtonDisabled,
+  missingFields,
 }: CreateUserAdvancedAuthModalProps) {
   const { t } = useTranslation();
   const headingId = useId();
@@ -128,7 +132,8 @@ export function CreateUserAdvancedAuthModal({
         </div>
 
         {/* Action Buttons */}
-        <div className="mt-6 flex justify-end gap-3">
+        <SubmitBlockedHint missing={missingFields} />
+        <div className="mt-2 flex justify-end gap-3">
           <Button
             variant="secondary"
             onClick={onClose}

@@ -45,6 +45,9 @@ export default {
 
   // Common
   common: {
+    showPassword: 'Показати пароль',
+    hidePassword: 'Приховати пароль',
+    stillNeeded: 'Ще потрібно: {{items}}',
     save: 'Зберегти',
     saving: 'Збереження...',
     cancel: 'Скасувати',
@@ -2636,7 +2639,7 @@ export default {
     username: "Ім'я користувача",
     enterUsername: "Введіть ім'я користувача",
     password: 'Пароль',
-    enterPassword: 'Введіть пароль (мін. 6 символів)',
+    enterPassword: 'Щонайменше 8 символів, з великою та малою літерою і цифрою',
     confirmPassword: 'Підтвердити пароль',
     confirmPasswordPlaceholder: 'Підтвердити пароль',
     // Title tooltips
@@ -2760,7 +2763,6 @@ export default {
     enterNewPassword: 'Введіть новий пароль',
     confirmNewPassword: 'Підтвердіть новий пароль',
     enterCurrentPassword: 'Введіть поточний пароль',
-    enterNewPasswordMin6: 'Введіть новий пароль (мін. 6 символів)',
     toast: {
       keyCopied: 'Ключ скопійовано в буфер обміну',
       copyFailed: 'Не вдалося скопіювати ключ',
@@ -3392,7 +3394,7 @@ export default {
       title: 'Встановити новий пароль',
       subtitle: 'Введіть і підтвердьте новий пароль нижче.',
       newPassword: 'Новий пароль',
-      newPasswordPlaceholder: 'Мінімум 8 символів',
+      newPasswordPlaceholder: 'Щонайменше 8 символів, з великою та малою літерою і цифрою',
       confirmPassword: 'Підтвердження',
       confirmPasswordPlaceholder: 'Повторіть новий пароль',
       saving: 'Збереження…',
@@ -3442,7 +3444,7 @@ export default {
     adminPassword: 'Пароль адміністратора',
     optional: "(необов'язково)",
     adminUsernamePlaceholder: "Введіть ім'я адміністратора",
-    adminPasswordPlaceholder: 'Введіть пароль адміністратора (мін. 6 символів)',
+    adminPasswordPlaceholder: 'Щонайменше 8 символів, з великою та малою літерою і цифрою',
     confirmPassword: 'Підтвердити пароль',
     confirmPasswordPlaceholder: 'Підтвердіть пароль адміністратора',
     settingUp: 'Налаштування...',
@@ -3452,7 +3454,7 @@ export default {
       authEnabledAdminCreated: 'Адміністратора створено - вітаємо в BamDude',
       enterBothCredentials: "Введіть ім'я та пароль адміністратора",
       passwordsDoNotMatch: 'Паролі не збігаються',
-      passwordTooShort: 'Пароль повинен містити щонайменше 6 символів'
+      passwordTooShort: 'Пароль повинен містити щонайменше 8 символів'
     }
   },
 
@@ -3462,11 +3464,11 @@ export default {
     currentPassword: 'Поточний пароль',
     currentPasswordPlaceholder: 'Введіть поточний пароль',
     newPassword: 'Новий пароль',
-    newPasswordPlaceholder: 'Введіть новий пароль (мін. 6 символів)',
+    newPasswordPlaceholder: 'Щонайменше 8 символів, з великою та малою літерою і цифрою',
     confirmPassword: 'Підтвердити новий пароль',
     confirmPasswordPlaceholder: 'Підтвердіть новий пароль',
     passwordsDoNotMatch: 'Паролі не збігаються',
-    passwordTooShort: 'Пароль повинен містити щонайменше 6 символів',
+    passwordTooShort: 'Пароль повинен містити щонайменше 8 символів',
     changing: 'Зміна...',
     success: 'Пароль успішно змінено',
     failed: 'Не вдалося змінити пароль'

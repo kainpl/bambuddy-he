@@ -3,18 +3,28 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+MIN_PASSWORD_LENGTH = 8
+
 
 def _validate_password_complexity(v: str) -> str:
     """Enforce minimum password complexity (upstream §18.6 M-C).
 
-    Requires at least one uppercase letter, one lowercase letter, and one
-    digit in addition to the min_length=8 Field constraint. The special-
-    character rule was dropped — NIST SP 800-63B explicitly advises against
-    composition rules beyond length + a basic mix, and the friction was
-    causing real operators to just pick worse-remembered passwords.
-    Existing stored password hashes are not re-validated — only applies on
-    create / change / reset.
+    Requires 8 characters plus at least one uppercase letter, one lowercase
+    letter and one digit. The special-character rule was dropped — NIST SP
+    800-63B explicitly advises against composition rules beyond length + a
+    basic mix, and the friction was causing real operators to just pick
+    worse-remembered passwords. Existing stored password hashes are not
+    re-validated — only applies on create / change / reset.
+
+    ⚠️ The length lives HERE, not only in a ``Field(min_length=8)``.
+    ``ChangePasswordRequest`` and ``SetupRequest`` carry that constraint, but
+    ``UserCreate`` / ``UserUpdate`` never did, so admin-created accounts could
+    take a three-character password that the login form's own rules would then
+    refuse to reproduce. The order matches ``frontend/src/utils/password.ts``
+    so the user fixes the problem they were just told about.
     """
+    if len(v) < MIN_PASSWORD_LENGTH:
+        raise ValueError(f"Password must be at least {MIN_PASSWORD_LENGTH} characters")
     if not re.search(r"[A-Z]", v):
         raise ValueError("Password must contain at least one uppercase letter")
     if not re.search(r"[a-z]", v):

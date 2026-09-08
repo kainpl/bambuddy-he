@@ -9,6 +9,8 @@ import { Mail, Shield, Smartphone, Key } from 'lucide-react';
 import { api, type LoginResponse } from '../api/client';
 import { Button } from '../components/Button';
 import { Modal } from '../components/Modal';
+import { PasswordField } from '../components/PasswordField';
+import { checkPasswordComplexity } from '../utils/password';
 
 type LoginStep = 'credentials' | '2fa' | 'reset-password';
 
@@ -397,8 +399,9 @@ export function LoginPage() {
         showToast(t('login.resetPassword.passwordsDoNotMatch'), 'error');
         return;
       }
-      if (newPassword.length < 8) {
-        showToast(t('login.resetPassword.passwordTooShort'), 'error');
+      const ruleKey = checkPasswordComplexity(newPassword);
+      if (ruleKey) {
+        showToast(t(ruleKey), 'error');
         return;
       }
       resetPasswordMutation.mutate();
@@ -418,39 +421,26 @@ export function LoginPage() {
           </div>
 
           <form onSubmit={handleResetSubmit} className="space-y-4">
-            <div>
-              <label htmlFor="new-password" className="block text-sm font-medium text-white mb-2">
-                {t('login.resetPassword.newPassword')}
-              </label>
-              <input
-                id="new-password"
-                type="password"
-                required
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-                className="block w-full px-4 py-3 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors"
-                placeholder={t('login.resetPassword.newPasswordPlaceholder')}
-                autoFocus
-                autoComplete="new-password"
-                minLength={8}
-              />
-            </div>
+            <PasswordField
+              id="new-password"
+              label={t('login.resetPassword.newPassword')}
+              value={newPassword}
+              onChange={setNewPassword}
+              placeholder={t('login.resetPassword.newPasswordPlaceholder')}
+              required
+              autoFocus
+              showRules
+            />
 
-            <div>
-              <label htmlFor="confirm-password" className="block text-sm font-medium text-white mb-2">
-                {t('login.resetPassword.confirmPassword')}
-              </label>
-              <input
-                id="confirm-password"
-                type="password"
-                required
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                className="block w-full px-4 py-3 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors"
-                placeholder={t('login.resetPassword.confirmPasswordPlaceholder')}
-                autoComplete="new-password"
-              />
-            </div>
+            <PasswordField
+              id="confirm-password"
+              label={t('login.resetPassword.confirmPassword')}
+              value={confirmPassword}
+              onChange={setConfirmPassword}
+              placeholder={t('login.resetPassword.confirmPasswordPlaceholder')}
+              required
+              mustMatch={newPassword}
+            />
 
             <button
               type="submit"
@@ -696,21 +686,15 @@ export function LoginPage() {
               />
             </div>
 
-            <div>
-              <label htmlFor="password" className="block text-sm font-medium text-white mb-2">
-                {t('login.password') || 'Password'}
-              </label>
-              <input
-                id="password"
-                type="password"
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="accent-bambu-green block w-full px-4 py-3 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors"
-                placeholder={t('login.passwordPlaceholder')}
-                autoComplete="current-password"
-              />
-            </div>
+            <PasswordField
+              id="password"
+              label={t('login.password') || 'Password'}
+              value={password}
+              onChange={setPassword}
+              placeholder={t('login.passwordPlaceholder')}
+              autoComplete="current-password"
+              required
+            />
 
             {/* Remember-me — sliding-session opt-in for 30-day persistence. */}
             <div className="flex items-center gap-2">

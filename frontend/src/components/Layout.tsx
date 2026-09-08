@@ -22,6 +22,8 @@ import { UnknownSpoolModal } from './UnknownSpoolModal';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { CardContent } from './Card';
+import { PasswordField } from './PasswordField';
+import { checkPasswordComplexity, isPasswordValid } from '../utils/password';
 import { parseUTCDate } from '../utils/date';
 import { Button } from './Button';
 import { BugReportBubble } from './BugReportBubble';
@@ -1422,54 +1424,29 @@ export function Layout() {
                 aria-hidden="true"
                 tabIndex={-1}
               />
-              <div>
-                <label className="block text-sm font-medium text-white mb-2">
-                  {t('changePassword.currentPassword')}
-                </label>
-                <input
-                  type="password"
-                  value={changePasswordData.currentPassword}
-                  onChange={(e) => setChangePasswordData({ ...changePasswordData, currentPassword: e.target.value })}
-                  className="w-full px-4 py-3 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors"
-                  placeholder={t('changePassword.currentPasswordPlaceholder')}
-                  autoComplete="current-password"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-white mb-2">
-                  {t('changePassword.newPassword')}
-                </label>
-                <input
-                  type="password"
-                  value={changePasswordData.newPassword}
-                  onChange={(e) => setChangePasswordData({ ...changePasswordData, newPassword: e.target.value })}
-                  className="w-full px-4 py-3 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors"
-                  placeholder={t('changePassword.newPasswordPlaceholder')}
-                  autoComplete="new-password"
-                  minLength={6}
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-white mb-2">
-                  {t('changePassword.confirmPassword')}
-                </label>
-                <input
-                  type="password"
-                  value={changePasswordData.confirmPassword}
-                  onChange={(e) => setChangePasswordData({ ...changePasswordData, confirmPassword: e.target.value })}
-                  className={`w-full px-4 py-3 bg-bambu-dark-secondary border rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors ${
-                    changePasswordData.confirmPassword && changePasswordData.newPassword !== changePasswordData.confirmPassword
-                      ? 'border-red-500'
-                      : 'border-bambu-dark-tertiary'
-                  }`}
-                  placeholder={t('changePassword.confirmPasswordPlaceholder')}
-                  autoComplete="new-password"
-                  minLength={6}
-                />
-                {changePasswordData.confirmPassword && changePasswordData.newPassword !== changePasswordData.confirmPassword && (
-                  <p className="text-red-700 dark:text-red-400 text-xs mt-1">{t('changePassword.passwordsDoNotMatch')}</p>
-                )}
-              </div>
+              {/* No rules on the current password: they describe the NEW one,
+                  and an account created before they existed is still valid. */}
+              <PasswordField
+                label={t('changePassword.currentPassword')}
+                value={changePasswordData.currentPassword}
+                onChange={(currentPassword) => setChangePasswordData({ ...changePasswordData, currentPassword })}
+                placeholder={t('changePassword.currentPasswordPlaceholder')}
+                autoComplete="current-password"
+              />
+              <PasswordField
+                label={t('changePassword.newPassword')}
+                value={changePasswordData.newPassword}
+                onChange={(newPassword) => setChangePasswordData({ ...changePasswordData, newPassword })}
+                placeholder={t('changePassword.newPasswordPlaceholder')}
+                showRules
+              />
+              <PasswordField
+                label={t('changePassword.confirmPassword')}
+                value={changePasswordData.confirmPassword}
+                onChange={(confirmPassword) => setChangePasswordData({ ...changePasswordData, confirmPassword })}
+                placeholder={t('changePassword.confirmPasswordPlaceholder')}
+                mustMatch={changePasswordData.newPassword}
+              />
             </div>
             <div className="mt-6 flex justify-end gap-3">
               <Button
@@ -1487,8 +1464,9 @@ export function Layout() {
                     showToast(t('changePassword.passwordsDoNotMatch'), 'error');
                     return;
                   }
-                  if (changePasswordData.newPassword.length < 6) {
-                    showToast(t('changePassword.passwordTooShort'), 'error');
+                  const ruleKey = checkPasswordComplexity(changePasswordData.newPassword);
+                  if (ruleKey) {
+                    showToast(t(ruleKey), 'error');
                     return;
                   }
                   setChangePasswordLoading(true);
@@ -1504,7 +1482,7 @@ export function Layout() {
                     setChangePasswordLoading(false);
                   }
                 }}
-                disabled={changePasswordLoading || !changePasswordData.currentPassword || !changePasswordData.newPassword || changePasswordData.newPassword !== changePasswordData.confirmPassword || changePasswordData.newPassword.length < 6}
+                disabled={changePasswordLoading || !changePasswordData.currentPassword || !changePasswordData.newPassword || changePasswordData.newPassword !== changePasswordData.confirmPassword || !isPasswordValid(changePasswordData.newPassword)}
               >
                 {changePasswordLoading ? (
                   <>

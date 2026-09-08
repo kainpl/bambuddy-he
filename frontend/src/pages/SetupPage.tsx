@@ -6,7 +6,9 @@ import { api, setAuthToken } from '../api/client';
 import { useToast } from '../contexts/ToastContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
-import { Info, Eye, EyeOff } from 'lucide-react';
+import { Info } from 'lucide-react';
+import { PasswordField } from '../components/PasswordField';
+import { checkPasswordComplexity } from '../utils/password';
 
 export function SetupPage() {
   const navigate = useNavigate();
@@ -18,7 +20,6 @@ export function SetupPage() {
   const [adminEmail, setAdminEmail] = useState('');
   const [adminPassword, setAdminPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
 
   const setupMutation = useMutation({
     mutationFn: () =>
@@ -51,8 +52,9 @@ export function SetupPage() {
       showToast(t('setup.toast.passwordsDoNotMatch'), 'error');
       return;
     }
-    if (adminPassword.length < 6) {
-      showToast(t('setup.toast.passwordTooShort'), 'error');
+    const ruleKey = checkPasswordComplexity(adminPassword);
+    if (ruleKey) {
+      showToast(t(ruleKey), 'error');
       return;
     }
 
@@ -123,59 +125,25 @@ export function SetupPage() {
               />
             </div>
 
-            <div>
-              <label htmlFor="admin-password" className="block text-sm font-medium text-white mb-2">
-                {t('setup.adminPassword')}
-              </label>
-              <div className="relative">
-                <input
-                  id="admin-password"
-                  type={showPassword ? 'text' : 'password'}
-                  value={adminPassword}
-                  onChange={(e) => setAdminPassword(e.target.value)}
-                  className="block w-full px-4 py-3 pr-12 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors"
-                  placeholder={t('setup.adminPasswordPlaceholder')}
-                  minLength={6}
-                  autoComplete="new-password"
-                  required
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-bambu-gray hover:text-white transition-colors"
-                  tabIndex={-1}
-                >
-                  {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
-                </button>
-              </div>
-            </div>
+            <PasswordField
+              id="admin-password"
+              label={t('setup.adminPassword')}
+              value={adminPassword}
+              onChange={setAdminPassword}
+              placeholder={t('setup.adminPasswordPlaceholder')}
+              required
+              showRules
+            />
 
-            <div>
-              <label htmlFor="confirm-password" className="block text-sm font-medium text-white mb-2">
-                {t('setup.confirmPassword')}
-              </label>
-              <div className="relative">
-                <input
-                  id="confirm-password"
-                  type={showPassword ? 'text' : 'password'}
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  className="block w-full px-4 py-3 pr-12 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors"
-                  placeholder={t('setup.confirmPasswordPlaceholder')}
-                  minLength={6}
-                  autoComplete="new-password"
-                  required
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-bambu-gray hover:text-white transition-colors"
-                  tabIndex={-1}
-                >
-                  {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
-                </button>
-              </div>
-            </div>
+            <PasswordField
+              id="confirm-password"
+              label={t('setup.confirmPassword')}
+              value={confirmPassword}
+              onChange={setConfirmPassword}
+              placeholder={t('setup.confirmPasswordPlaceholder')}
+              required
+              mustMatch={adminPassword}
+            />
           </div>
 
           <div>
