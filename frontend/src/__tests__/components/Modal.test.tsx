@@ -99,6 +99,8 @@ describe('Modal', () => {
     );
     const panel = screen.getByRole('dialog');
     for (const c of classes.split(' ')) expect(panel).toHaveClass(c);
+    if (size === 'full') expect(panel).not.toHaveClass('max-h-[90vh]');
+    else expect(panel).toHaveClass('max-h-[90vh]');
     cleanup();
     _resetForTests();
   });

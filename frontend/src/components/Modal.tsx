@@ -137,7 +137,7 @@ export function Modal({
         aria-describedby={describedBy}
         aria-label={labelled ? undefined : ariaLabel}
         tabIndex={-1}
-        className={`relative flex max-h-[90vh] w-full flex-col rounded-xl border border-bambu-dark-tertiary bg-bambu-dark-secondary shadow-2xl outline-none ${MODAL_SIZE_CLASS[size]} ${panelClassName}`}
+        className={`relative flex w-full flex-col rounded-xl border border-bambu-dark-tertiary bg-bambu-dark-secondary shadow-2xl outline-none ${size === 'full' ? '' : 'max-h-[90vh]'} ${MODAL_SIZE_CLASS[size]} ${panelClassName}`}
       >
         {showHeader && (
           <div className="flex shrink-0 items-center justify-between gap-3 border-b border-bambu-dark-tertiary px-4 py-4">
