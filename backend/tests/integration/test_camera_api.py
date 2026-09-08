@@ -36,6 +36,17 @@ async def _inject_camera_stream_token(async_client: AsyncClient):
     async_client.get = original_get  # type: ignore[method-assign]
 
 
+@pytest.fixture(autouse=True)
+def _clear_snapshot_cache():
+    from backend.app.api.routes import camera
+
+    camera._snapshot_frames.clear()
+    camera._snapshot_frame_times.clear()
+    yield
+    camera._snapshot_frames.clear()
+    camera._snapshot_frame_times.clear()
+
+
 class TestCameraAPI:
     """Integration tests for /api/v1/printers/{id}/camera/ endpoints."""
 
@@ -209,6 +220,63 @@ class TestCameraAPI:
 
         # Note: The actual test might fail due to file operations, but this tests the endpoint structure
         # In production tests, we'd mock more comprehensively
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_camera_snapshot_reuses_recent_capture(self, async_client: AsyncClient, printer_factory):
+        """Verify rapid snapshot polls reuse the previous successful capture."""
+        printer = await printer_factory()
+        fake_jpeg = b"\xff\xd8first-cached-frame"
+
+        with (
+            patch("backend.app.api.routes.camera.capture_camera_frame", new_callable=AsyncMock) as mock_capture,
+            patch("builtins.open", create=True) as mock_open,
+            patch("pathlib.Path.exists", return_value=True),
+            patch("pathlib.Path.unlink"),
+        ):
+            mock_capture.return_value = True
+            mock_open.return_value.__enter__.return_value.read.return_value = fake_jpeg
+
+            first = await async_client.get(f"/api/v1/printers/{printer.id}/camera/snapshot")
+            second = await async_client.get(f"/api/v1/printers/{printer.id}/camera/snapshot")
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert first.content == fake_jpeg
+        assert second.content == fake_jpeg
+        mock_capture.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_camera_snapshot_recaptures_after_cache_expires(self, async_client: AsyncClient, printer_factory):
+        """Verify snapshot cache expires and a later poll captures again."""
+        from backend.app.api.routes import camera
+
+        printer = await printer_factory()
+        now = 1000.0
+        fake_jpegs = [b"\xff\xd8first-frame", b"\xff\xd8second-frame"]
+
+        async def fake_capture(*, output_path, **_kwargs):
+            output_path.write_bytes(fake_jpegs.pop(0))
+            return True
+
+        with (
+            patch("backend.app.api.routes.camera.time.monotonic", side_effect=lambda: now),
+            patch("backend.app.api.routes.camera.capture_camera_frame", new_callable=AsyncMock) as mock_capture,
+            patch("pathlib.Path.exists", return_value=True),
+            patch("pathlib.Path.unlink"),
+        ):
+            mock_capture.side_effect = fake_capture
+
+            first = await async_client.get(f"/api/v1/printers/{printer.id}/camera/snapshot")
+            now += camera._SNAPSHOT_CACHE_TTL_SECONDS + 0.1
+            second = await async_client.get(f"/api/v1/printers/{printer.id}/camera/snapshot")
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert first.content == b"\xff\xd8first-frame"
+        assert second.content == b"\xff\xd8second-frame"
+        assert mock_capture.await_count == 2
 
     @pytest.mark.asyncio
     @pytest.mark.integration
