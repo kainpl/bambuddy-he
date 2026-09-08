@@ -8,9 +8,10 @@ import { useEffect, useRef } from 'react';
  * the returned ref to the element that carries `role="dialog"`, give that
  * element `tabIndex={-1}` so it can hold focus, and pass whether it is open.
  *
- * Since the modal shell (`components/Modal.tsx`) every modal and lightbox goes
- * through it, so the shell is the caller — grep this file's name rather than
- * trusting any list written here; a list is what went stale last time.
+ * Since the modal shell (`components/Modal.tsx`) landed, every modal and
+ * lightbox goes through it, so the shell is the caller — grep this file's name
+ * rather than trusting any list written here; a list is what went stale last
+ * time.
  *
  * ⚠️ **This is NOT a focus trap and must not be described as one.** Tab still
  * walks out of the overlay and into the page behind it; what the hook fixes is
