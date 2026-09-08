@@ -24,14 +24,6 @@ const MARKER = /(\/\/|\{\/\*)\s*not-a-modal:\s*(menu|popover|drawer|loading|view
 
 /** Files still on hand-rolled overlays. Remove a file the moment it is migrated. */
 const NOT_YET_MIGRATED: string[] = [
-  'components/AMSHistoryModal.tsx',
-  'components/AMSSettingsModal.tsx',
-  'components/AddExternalLinkModal.tsx',
-  'components/AddNotificationModal.tsx',
-  'components/AddSmartPlugModal.tsx',
-  'components/AddTelegramChatModal.tsx',
-  'components/AirductModal.tsx',
-  'components/AmsBackupModal.tsx',
   'components/AssignSpoolModal.tsx',
   'components/AuthoredFamiliesSection.tsx',
   'components/BatchTagModal.tsx',

@@ -21,10 +21,9 @@
  * Theme-aware via CSS variables, matching AMSHistoryModal — adapts to every
  * background variant the user has picked.
  */
-import { useEffect } from 'react';
-import { X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { Modal } from './Modal';
 import { Toggle } from './Toggle';
 import {
   computeBackupGroups,
@@ -196,21 +195,6 @@ export function AmsBackupModal({
 }: AmsBackupModalProps) {
   const { t } = useTranslation();
 
-  // Close on Escape key while the modal is open. Captures at the window
-  // level so it works even when focus isn't inside the modal subtree
-  // (e.g. after the Toggle is clicked).
-  useEffect(() => {
-    if (!isOpen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.stopPropagation();
-        onClose();
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [isOpen, onClose]);
-
   if (!isOpen) return null;
 
   // Theme-aware tokens, matching AMSHistoryModal.
@@ -249,94 +233,59 @@ export function AmsBackupModal({
   const isUnknown = state === null;
 
   return (
-    <div
-      className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
-      onClick={onClose}
-      data-testid="ams-backup-modal"
-    >
+    <Modal onClose={onClose} title={t('printers.amsBackup.modalTitle')} size="2xl" bodyClassName="flex flex-col">
       <div
-        className="rounded-xl w-full max-w-2xl max-h-[90vh] overflow-hidden shadow-xl flex flex-col"
-        style={{ backgroundColor: modalBg }}
-        onClick={(e) => e.stopPropagation()}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="ams-backup-modal-title"
+        className="flex items-center justify-between px-5 py-3 border-b"
+        style={{ borderColor, backgroundColor: sectionBg }}
       >
-        <div
-          className="flex items-center justify-between px-5 py-3 border-b"
-          style={{ borderColor }}
-        >
-          <h2
-            id="ams-backup-modal-title"
-            className="text-base font-semibold"
-            style={{ color: textPrimary }}
-          >
-            {t('printers.amsBackup.modalTitle')}
-          </h2>
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-1 rounded-md transition-colors hover:bg-black/10"
-            style={{ color: textSecondary }}
-            aria-label={t('common.close')}
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-
-        <div
-          className="flex items-center justify-between px-5 py-3 border-b"
-          style={{ borderColor, backgroundColor: sectionBg }}
-        >
-          <div className="min-w-0 mr-3">
-            <div className="text-sm font-medium" style={{ color: textPrimary }}>
-              {isUnknown
-                ? t('printers.amsBackup.stateUnknown')
-                : isOn
-                  ? t('printers.amsBackup.stateOn')
-                  : t('printers.amsBackup.stateOff')}
-            </div>
-            <p className="text-xs mt-0.5" style={{ color: textSecondary }}>
-              {t('printers.amsBackup.modalHelp')}
-            </p>
+        <div className="min-w-0 mr-3">
+          <div className="text-sm font-medium" style={{ color: textPrimary }}>
+            {isUnknown
+              ? t('printers.amsBackup.stateUnknown')
+              : isOn
+                ? t('printers.amsBackup.stateOn')
+                : t('printers.amsBackup.stateOff')}
           </div>
-          <Toggle
-            checked={isOn}
-            onChange={onToggle}
-            disabled={!canToggle || isUnknown || pending}
-          />
+          <p className="text-xs mt-0.5" style={{ color: textSecondary }}>
+            {t('printers.amsBackup.modalHelp')}
+          </p>
         </div>
-
-        <div className="flex-1 overflow-y-auto px-5 py-6">
-          {pairs.length === 0 ? (
-            <p
-              className="text-sm text-center py-8"
-              style={{ color: textSecondary }}
-            >
-              {t('printers.amsBackup.modalNoPairs')}
-            </p>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 justify-items-center">
-              {pairs.map((g) => (
-                <BackupRing
-                  key={g.key}
-                  group={g}
-                  trayCountByAms={trayCountByAms}
-                  innerBg={modalBg}
-                  textPrimary={textPrimary}
-                  textSecondary={textSecondary}
-                  showExtruderBadge={effectiveDualNozzle}
-                  extruderLabel={
-                    g.extruder === 0
-                      ? t('printers.amsBackup.extruderRightShort')
-                      : t('printers.amsBackup.extruderLeftShort')
-                  }
-                />
-              ))}
-            </div>
-          )}
-        </div>
+        <Toggle
+          checked={isOn}
+          onChange={onToggle}
+          disabled={!canToggle || isUnknown || pending}
+        />
       </div>
-    </div>
+
+      <div className="flex-1 overflow-y-auto px-5 py-6">
+        {pairs.length === 0 ? (
+          <p
+            className="text-sm text-center py-8"
+            style={{ color: textSecondary }}
+          >
+            {t('printers.amsBackup.modalNoPairs')}
+          </p>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 justify-items-center">
+            {pairs.map((g) => (
+              <BackupRing
+                key={g.key}
+                group={g}
+                trayCountByAms={trayCountByAms}
+                innerBg={modalBg}
+                textPrimary={textPrimary}
+                textSecondary={textSecondary}
+                showExtruderBadge={effectiveDualNozzle}
+                extruderLabel={
+                  g.extruder === 0
+                    ? t('printers.amsBackup.extruderRightShort')
+                    : t('printers.amsBackup.extruderLeftShort')
+                }
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    </Modal>
   );
 }
