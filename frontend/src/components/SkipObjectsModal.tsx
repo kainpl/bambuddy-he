@@ -279,10 +279,6 @@ export function SkipObjectsModal({ printerId, isOpen, onClose }: SkipObjectsModa
         message={t('printers.skipObjects.confirmMessage', { name: pendingSkip.name })}
         confirmText={t('printers.skipObjects.skip')}
         isLoading={skipObjectsMutation.isPending}
-        // The lightbox sits at z-60, above ConfirmModal's default z-50 — a
-        // confirm raised from a marker there would render *behind* it and be
-        // unreachable. Lift it over the lightbox while that view is open.
-        overlayZIndex={enlarged ? 'z-[70]' : undefined}
         onConfirm={() => skipObjectsMutation.mutate([pendingSkip.id])}
         onCancel={() => setPendingSkip(null)}
       />

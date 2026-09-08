@@ -522,7 +522,6 @@ export function GitRestoreModal({ onClose }: GitRestoreModalProps) {
       {showConfirm && (
         <ConfirmModal
           variant="danger"
-          overlayZIndex="z-[110]"
           title={t('backup.restoreFromGit.confirmTitle')}
           message={
             overwriteExisting

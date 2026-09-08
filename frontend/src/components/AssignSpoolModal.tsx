@@ -656,9 +656,6 @@ export function AssignSpoolModal({ isOpen, onClose, printerId, amsId, trayId, tr
             message={message}
             confirmText={t('inventory.assignMismatchConfirm')}
             variant="warning"
-            // Sit above the AssignSpoolModal wrapper (z-[100], #1336) —
-            // without this the mismatch dialog is hidden behind its parent.
-            overlayZIndex="z-[110]"
             isLoading={assignMutation.isPending}
             onConfirm={handleConfirmMismatch}
             onCancel={() => {
