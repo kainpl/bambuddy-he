@@ -96,6 +96,8 @@
 
 ### Fixed
 
+- **A fresh install on PostgreSQL could not create its first administrator.** Finishing the setup screen answered «500» every time: the code that records «setup is done» built its database statement for SQLite no matter which backend was actually running, and PostgreSQL rejected it. Nobody had hit it before because every earlier PostgreSQL install had been migrated from an existing SQLite database, where that step was already recorded and never ran again. The same mistake was in two more places — the advanced-authentication switch and saving SMTP settings — and all three now go through the one helper that knows which database it is talking to.
+
 - **Installing a newer version over a running BamDude could hang instead of upgrading.** Before copying files the installer stops the services, but it stopped the bundled PostgreSQL service first — while BamDude, which depends on it, was still running — using a command that then asks whether to stop the dependent services too. That question was drawn on a hidden window nobody could answer, so setup sat at «Preparing to install» forever with the database still up. It now stops BamDude first, uses a command that never asks, and waits for each service to actually be stopped before touching its files. Your data is unaffected either way: an upgrade never runs the uninstaller, and the data folder is never part of it.
 
 - **Camera snapshots no longer spawn a capture per poll.** Rapid Cam Wall polling of the same printer reuses a frame captured within the last five seconds instead of opening a fresh camera connection (and an ffmpeg process) for every request; a live stream's own buffer still wins when one is attached, and a failed capture is never cached. Contributed by @volnov in #38.
