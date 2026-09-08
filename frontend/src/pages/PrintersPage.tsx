@@ -6265,7 +6265,13 @@ function PrinterCard({
                           onBlur={() => handleUpdateRefLabel(ref.index, editingRefLabel.label)}
                           onKeyDown={(e) => {
                             if (e.key === 'Enter') handleUpdateRefLabel(ref.index, editingRefLabel.label);
-                            if (e.key === 'Escape') setEditingRefLabel(null);
+                            // Inner layer: cancel the inline edit only — the
+                            // modal stack's window listener must not also
+                            // close the plate-check modal on this keypress.
+                            if (e.key === 'Escape') {
+                              e.stopPropagation();
+                              setEditingRefLabel(null);
+                            }
                           }}
                           className="w-full mt-1 px-1 py-0.5 text-xs bg-bambu-dark-tertiary border border-bambu-green rounded text-white"
                           autoFocus
@@ -9815,7 +9821,7 @@ export function PrintersPage() {
             onClose={() => setExpandedPrinterId(null)}
             title={expandedPrinter.name}
             size="xl"
-            panelClassName="bg-transparent border-0 shadow-none"
+            panelStyle={{ backgroundColor: 'transparent', border: 0, boxShadow: 'none' }}
             bodyClassName="my-4"
           >
             <PrinterCard
