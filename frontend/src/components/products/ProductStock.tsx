@@ -1,16 +1,16 @@
-import { useEffect, useId, useState } from 'react';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Loader2, PackageCheck, X } from 'lucide-react';
+import { Loader2, PackageCheck } from 'lucide-react';
 import { api, STOCK_MOVEMENT_LIMIT, STOCK_NOTE_TOKENS } from '../../api/client';
 import type { StockMovement } from '../../api/client';
 import { useToast } from '../../contexts/ToastContext';
-import { useDialogFocus } from '../../hooks/useDialogFocus';
 import { useProductStock } from '../../hooks/useProductStock';
 import { formatDateOnly } from '../../utils/date';
 import type { DateFormat } from '../../utils/date';
 import { Button } from '../Button';
+import { Modal } from '../Modal';
 
 const FIELD_CLASS =
   'w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-sm focus:border-bambu-green focus:outline-none';
@@ -75,26 +75,16 @@ interface AdjustDialogProps {
  * balance — the server answers 422 for any other, and offering a part whose
  * only possible outcome is an error is worse than not offering it.
  *
- * ⚠️ It follows the page's overlay contract like every other dialog here —
- * `role`, `aria-modal`, a name, `useDialogFocus` and Escape (finding M1). An
- * overlay without them is an anonymous `<div>` a screen reader never announces,
- * and a keyboard user who opens it starts at the top of the page behind.
+ * ⚠️ It rides the shared shell like every other dialog here, which is what
+ * carries the `role`, the `aria-modal`, the name, the focus and Escape
+ * (finding M1). An overlay without them is an anonymous `<div>` a screen reader
+ * never announces, and a keyboard user who opens it starts at the top of the
+ * page behind.
  */
 function AdjustDialog({ productId, parts, onClose }: AdjustDialogProps) {
   const { t } = useTranslation();
   const { showToast } = useToast();
   const queryClient = useQueryClient();
-  const titleId = useId();
-  // Mounted only while it is open, so "open" is simply `true`.
-  const dialog = useDialogFocus<HTMLDivElement>(true);
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [onClose]);
 
   const [partId, setPartId] = useState<number>(parts[0]?.part_id ?? 0);
   const [delta, setDelta] = useState('1');
@@ -121,95 +111,70 @@ function AdjustDialog({ productId, parts, onClose }: AdjustDialogProps) {
   const valid = Number.isInteger(parsed) && parsed !== 0 && note.trim().length > 0 && partId > 0;
 
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      {/* The role, the name and the focus as one unit — see `useDialogFocus`,
-          which lists every overlay that uses it and says what it does not do. */}
-      <div
-        ref={dialog}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        tabIndex={-1}
-        className="bg-bambu-dark-secondary rounded-lg w-full max-w-md border border-bambu-dark-tertiary outline-none"
-      >
-        <div className="p-4 border-b border-bambu-dark-tertiary flex items-center justify-between">
-          <h2 id={titleId} className="text-lg font-semibold text-white">
-            {t('stock.adjust.title')}
-          </h2>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label={t('common.cancel')}
-            className="p-1 hover:bg-bambu-dark rounded"
+    <Modal onClose={onClose} title={t('stock.adjust.title')} size="md">
+      <div className="p-4 space-y-3">
+        <div>
+          <label htmlFor="stock-adjust-part" className="block text-sm text-bambu-gray mb-1">
+            {t('stock.adjust.part')}
+          </label>
+          <select
+            id="stock-adjust-part"
+            value={partId}
+            onChange={(e) => setPartId(Number(e.target.value))}
+            className={FIELD_CLASS}
           >
-            <X className="w-5 h-5 text-bambu-gray" />
-          </button>
+            {parts.map((p) => (
+              <option key={p.part_id} value={p.part_id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
         </div>
 
-        <div className="p-4 space-y-3">
-          <div>
-            <label htmlFor="stock-adjust-part" className="block text-sm text-bambu-gray mb-1">
-              {t('stock.adjust.part')}
-            </label>
-            <select
-              id="stock-adjust-part"
-              value={partId}
-              onChange={(e) => setPartId(Number(e.target.value))}
-              className={FIELD_CLASS}
-            >
-              {parts.map((p) => (
-                <option key={p.part_id} value={p.part_id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label htmlFor="stock-adjust-delta" className="block text-sm text-bambu-gray mb-1">
-              {t('stock.adjust.delta')}
-            </label>
-            <input
-              id="stock-adjust-delta"
-              type="number"
-              value={delta}
-              onChange={(e) => setDelta(e.target.value)}
-              className={FIELD_CLASS}
-            />
-          </div>
-
-          <div>
-            <label htmlFor="stock-adjust-note" className="block text-sm text-bambu-gray mb-1">
-              {t('stock.adjust.note')}
-            </label>
-            <input
-              id="stock-adjust-note"
-              type="text"
-              maxLength={500}
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              placeholder={t('stock.adjust.notePlaceholder')}
-              className={FIELD_CLASS}
-            />
-          </div>
+        <div>
+          <label htmlFor="stock-adjust-delta" className="block text-sm text-bambu-gray mb-1">
+            {t('stock.adjust.delta')}
+          </label>
+          <input
+            id="stock-adjust-delta"
+            type="number"
+            value={delta}
+            onChange={(e) => setDelta(e.target.value)}
+            className={FIELD_CLASS}
+          />
         </div>
 
-        <div className="p-4 border-t border-bambu-dark-tertiary flex gap-3">
-          <Button type="button" variant="secondary" onClick={onClose} className="flex-1">
-            {t('common.cancel')}
-          </Button>
-          <Button
-            type="button"
-            onClick={() => adjust.mutate()}
-            disabled={!valid || adjust.isPending}
-            className="flex-1"
-            data-testid="stock-adjust-submit"
-          >
-            {t('stock.adjust.submit')}
-          </Button>
+        <div>
+          <label htmlFor="stock-adjust-note" className="block text-sm text-bambu-gray mb-1">
+            {t('stock.adjust.note')}
+          </label>
+          <input
+            id="stock-adjust-note"
+            type="text"
+            maxLength={500}
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder={t('stock.adjust.notePlaceholder')}
+            className={FIELD_CLASS}
+          />
         </div>
       </div>
-    </div>
+
+      <div className="p-4 border-t border-bambu-dark-tertiary flex gap-3">
+        <Button type="button" variant="secondary" onClick={onClose} className="flex-1">
+          {t('common.cancel')}
+        </Button>
+        <Button
+          type="button"
+          onClick={() => adjust.mutate()}
+          disabled={!valid || adjust.isPending}
+          className="flex-1"
+          data-testid="stock-adjust-submit"
+        >
+          {t('stock.adjust.submit')}
+        </Button>
+      </div>
+    </Modal>
   );
 }
 

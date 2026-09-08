@@ -1,15 +1,14 @@
-import { useEffect, useId, useState } from 'react';
+import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Loader2, X } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../../api/client';
 import type { Product, ProductCreate, ProductListItem, ProductUpdate } from '../../api/client';
-import { Card, CardContent } from '../Card';
 import { Button } from '../Button';
+import { Modal } from '../Modal';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { ProductGallery } from './ProductGallery';
-import { useDialogFocus } from '../../hooks/useDialogFocus';
 import { useProductDetail } from '../../hooks/useProductDetail';
 import { invalidateOrderViews } from '../../utils/queryInvalidation';
 
@@ -27,51 +26,13 @@ function isFullProduct(product: Product | ProductListItem | null | undefined): p
   return !!product && 'description' in product;
 }
 
+/** The card's own frame, on the shared shell — one place for the two states
+ *  below (the fetch and the form) to agree on width and title. */
 function Shell({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
-  const { t } = useTranslation();
-  const titleId = useId();
-  // Mounted only while it is open, so "open" is simply `true`.
-  const dialog = useDialogFocus<HTMLDivElement>(true);
-
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      {/* ⚠️ The role, the name and the focus, as one unit — see
-          `useDialogFocus`, which lists every overlay that uses it and says
-          exactly what it does and does not do. Without them the overlay is an
-          anonymous `<div>` a screen reader never announces, and a keyboard user
-          opening it starts at the top of the PAGE behind.
-          They sit on a wrapper rather than on the `Card`, whose props are
-          `HTMLAttributes` and so admit no `ref`; giving the shared component
-          one would hand a `ref` to `CardHeader` and `CardContent` too, which
-          spread nothing — a prop that type-checks and does nothing. */}
-      <div
-        ref={dialog}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        tabIndex={-1}
-        className="w-full max-w-2xl outline-none"
-      >
-        <Card className="w-full max-h-[90vh] overflow-y-auto">
-          <CardContent className="p-0">
-            <div className="flex items-center justify-between p-4 border-b border-bambu-dark-tertiary">
-              <h2 id={titleId} className="text-xl font-semibold text-white">
-                {title}
-              </h2>
-              <button
-                type="button"
-                onClick={onClose}
-                aria-label={t('common.close')}
-                className="text-bambu-gray hover:text-white transition-colors"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            {children}
-          </CardContent>
-        </Card>
-      </div>
-    </div>
+    <Modal onClose={onClose} title={title} size="2xl">
+      {children}
+    </Modal>
   );
 }
 
@@ -106,29 +67,6 @@ export function ProductCardDialog({ product, onClose }: ProductCardDialogProps) 
   // underneath for as long as it was open — a failed background refetch then
   // said nothing on the page the flag exists for. See `useProductDetail`.
   const { data: fetched, error } = useProductDetail(needsFetch ? product!.id : null);
-  const [lightboxOpen, setLightboxOpen] = useState(false);
-
-  // ⚠️ **Escape belongs to the innermost overlay.** The gallery below opens a
-  // lightbox with its own Escape handler, and both listeners sit on `window` —
-  // ours is registered first (on mount; the gallery's only once a picture is
-  // enlarged), so it ran first and closed the whole dialog, discarding
-  // everything typed into the form, while the lightbox the user was actually
-  // dismissing went with it. Standing down while the gallery reports a lightbox
-  // open is the same ordering `ModelCardModal` writes as
-  // `if (lightbox) … else onClose()`; there the state is its own, here it lives
-  // one component down and comes back through `onLightboxOpenChange`.
-  //
-  // Reading `lightboxOpen` from the render closure is correct and not a race:
-  // the gallery's `setLightbox(null)` is queued, not applied, while this handler
-  // runs for the SAME key press — so the first Escape closes the lightbox and
-  // the second, off the next render, closes the dialog.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !lightboxOpen) onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose, lightboxOpen]);
 
   const loaded = needsFetch ? fetched : (product as Product | null | undefined);
   if (needsFetch && !loaded) {
@@ -147,20 +85,18 @@ export function ProductCardDialog({ product, onClose }: ProductCardDialogProps) 
     );
   }
 
-  return <ProductForm product={loaded ?? null} onClose={onClose} onLightboxOpenChange={setLightboxOpen} />;
+  return <ProductForm product={loaded ?? null} onClose={onClose} />;
 }
 
 interface ProductFormProps {
   product: Product | null;
   onClose: () => void;
-  /** Passed straight through to the gallery — see the Escape note above. */
-  onLightboxOpenChange: (open: boolean) => void;
 }
 
 /** Split out so every field can be seeded by `useState` from a record that is
  *  already in hand — a form whose initial values arrive later would have to
  *  re-seed itself and could overwrite what the user has already typed. */
-function ProductForm({ product, onClose, onLightboxOpenChange }: ProductFormProps) {
+function ProductForm({ product, onClose }: ProductFormProps) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const { showToast } = useToast();
@@ -321,7 +257,6 @@ function ProductForm({ product, onClose, onLightboxOpenChange }: ProductFormProp
                 canEdit={hasPermission('projects:update')}
                 testIdSuffix="-dialog"
                 headingKey="products.gallery.titleInDialog"
-                onLightboxOpenChange={onLightboxOpenChange}
               />
             </div>
           )}

@@ -208,6 +208,7 @@ export function ProductHeader({ product, onEdit, onDuplicate, onDelete, onToggle
               </Button>
               {rereadOpen && (
                 <>
+                  {/* not-a-modal: popover */}
                   <div className="fixed inset-0 z-10" onClick={() => setRereadOpen(false)} />
                   <div
                     role="menu"

@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { FileBox, Loader2, Search, X } from 'lucide-react';
+import { FileBox, Loader2, Search } from 'lucide-react';
 import { api } from '../../api/client';
 import type { LibraryFolderTree, Product } from '../../api/client';
 import { Button } from '../Button';
+import { Modal } from '../Modal';
 import { useToast } from '../../contexts/ToastContext';
 
 /** How long the search box waits before it becomes a request. */
@@ -55,6 +56,7 @@ export function FromFileDialog({ onClose, onCreated }: FromFileDialogProps) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const { showToast } = useToast();
+  const headingId = useId();
   const [typed, setTyped] = useState('');
   const [q, setQ] = useState('');
 
@@ -62,14 +64,6 @@ export function FromFileDialog({ onClose, onCreated }: FromFileDialogProps) {
     const timer = setTimeout(() => setQ(typed.trim()), DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [typed]);
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
 
   const { data: page, isLoading } = useQuery({
     queryKey: ['library-files', 'pick', q],
@@ -94,64 +88,65 @@ export function FromFileDialog({ onClose, onCreated }: FromFileDialogProps) {
   });
 
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-bambu-dark-secondary rounded-lg w-full max-w-2xl max-h-[80vh] flex flex-col">
-        <div className="flex items-center justify-between gap-3 p-4 border-b border-bambu-dark shrink-0">
-          <h2 className="text-lg font-semibold text-white truncate">{t('products.fromFile.title')}</h2>
-          <button onClick={onClose} className="p-1 hover:bg-bambu-dark rounded" aria-label={t('common.close')}>
-            <X className="w-5 h-5 text-bambu-gray" />
-          </button>
-        </div>
-
-        <div className="p-3 border-b border-bambu-dark shrink-0">
-          <div className="relative">
-            <Search className="w-4 h-4 text-bambu-gray absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-            <input
-              type="search"
-              value={typed}
-              onChange={(e) => setTyped(e.target.value)}
-              placeholder={t('products.fromFile.search')}
-              aria-label={t('products.fromFile.search')}
-              className="w-full pl-9 pr-3 py-2 rounded bg-bambu-dark text-sm text-white placeholder:text-bambu-gray focus:outline-none focus:ring-1 focus:ring-bambu-green"
-            />
-          </div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-3 space-y-2">
-          {isLoading ? (
-            <div className="py-8 flex items-center justify-center">
-              <Loader2 className="w-6 h-6 text-bambu-green animate-spin" />
-            </div>
-          ) : files.length === 0 ? (
-            <p className="text-sm text-bambu-gray italic p-4 text-center">{t('products.fromFile.empty')}</p>
-          ) : (
-            files.map((file) => {
-              const where = file.folder_id === null ? null : paths.get(file.folder_id);
-              return (
-                <div
-                  key={file.id}
-                  className="flex items-center gap-3 p-2 rounded border border-bambu-dark-tertiary bg-bambu-dark"
-                >
-                  <span className="w-10 h-10 shrink-0 rounded bg-bambu-dark-tertiary overflow-hidden flex items-center justify-center">
-                    {file.thumbnail_path ? (
-                      <img src={api.getLibraryFileThumbnailUrl(file.id)} alt="" className="w-full h-full object-contain" />
-                    ) : (
-                      <FileBox className="w-5 h-5 text-bambu-gray/50" />
-                    )}
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-sm text-white truncate">{file.filename}</span>
-                    {where && <span className="block text-xs text-bambu-gray truncate">{where}</span>}
-                  </span>
-                  <Button onClick={() => create.mutate(file.id)} disabled={create.isPending}>
-                    {t('products.fromFile.create')}
-                  </Button>
-                </div>
-              );
-            })
-          )}
+    <Modal
+      onClose={onClose}
+      labelledBy={headingId}
+      size="2xl"
+      bodyClassName="flex flex-col"
+      header={
+        <h2 id={headingId} className="text-lg font-semibold text-white truncate">
+          {t('products.fromFile.title')}
+        </h2>
+      }
+    >
+      <div className="p-3 border-b border-bambu-dark shrink-0">
+        <div className="relative">
+          <Search className="w-4 h-4 text-bambu-gray absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+          <input
+            type="search"
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+            placeholder={t('products.fromFile.search')}
+            aria-label={t('products.fromFile.search')}
+            className="w-full pl-9 pr-3 py-2 rounded bg-bambu-dark text-sm text-white placeholder:text-bambu-gray focus:outline-none focus:ring-1 focus:ring-bambu-green"
+          />
         </div>
       </div>
-    </div>
+
+      <div className="flex-1 overflow-y-auto p-3 space-y-2">
+        {isLoading ? (
+          <div className="py-8 flex items-center justify-center">
+            <Loader2 className="w-6 h-6 text-bambu-green animate-spin" />
+          </div>
+        ) : files.length === 0 ? (
+          <p className="text-sm text-bambu-gray italic p-4 text-center">{t('products.fromFile.empty')}</p>
+        ) : (
+          files.map((file) => {
+            const where = file.folder_id === null ? null : paths.get(file.folder_id);
+            return (
+              <div
+                key={file.id}
+                className="flex items-center gap-3 p-2 rounded border border-bambu-dark-tertiary bg-bambu-dark"
+              >
+                <span className="w-10 h-10 shrink-0 rounded bg-bambu-dark-tertiary overflow-hidden flex items-center justify-center">
+                  {file.thumbnail_path ? (
+                    <img src={api.getLibraryFileThumbnailUrl(file.id)} alt="" className="w-full h-full object-contain" />
+                  ) : (
+                    <FileBox className="w-5 h-5 text-bambu-gray/50" />
+                  )}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm text-white truncate">{file.filename}</span>
+                  {where && <span className="block text-xs text-bambu-gray truncate">{where}</span>}
+                </span>
+                <Button onClick={() => create.mutate(file.id)} disabled={create.isPending}>
+                  {t('products.fromFile.create')}
+                </Button>
+              </div>
+            );
+          })
+        )}
+      </div>
+    </Modal>
   );
 }

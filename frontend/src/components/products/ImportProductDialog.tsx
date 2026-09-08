@@ -1,14 +1,14 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { FileArchive, Loader2, Upload, X } from 'lucide-react';
+import { FileArchive, Loader2, Upload } from 'lucide-react';
 import { api, ApiError } from '../../api/client';
 import { useToast } from '../../contexts/ToastContext';
 import { FolderTreePicker } from '../FolderTreePicker';
 import { Button } from '../Button';
+import { Modal } from '../Modal';
 import { cardNotesText } from './cardNotes';
-import { useDialogFocus } from '../../hooks/useDialogFocus';
 
 interface ImportProductDialogProps {
   onClose: () => void;
@@ -43,19 +43,9 @@ export function ImportProductDialog({ onClose }: ImportProductDialogProps) {
   const queryClient = useQueryClient();
   const input = useRef<HTMLInputElement>(null);
   const titleId = useId();
-  // Mounted only while it is open, so "open" is simply `true`.
-  const dialog = useDialogFocus<HTMLDivElement>(true);
   const [file, setFile] = useState<File | null>(null);
   const [folderId, setFolderId] = useState<number | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [onClose]);
 
   const { data: folders } = useQuery({ queryKey: ['library-folders'], queryFn: api.getLibraryFolders });
 
@@ -87,83 +77,70 @@ export function ImportProductDialog({ onClose }: ImportProductDialogProps) {
   });
 
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      {/* ⚠️ The role, the name and the focus, as one unit — see
-          `useDialogFocus`, which lists every overlay that uses it and says
-          exactly what it does and does not do. Without them the overlay is an
-          anonymous `<div>` a screen reader never announces, and a keyboard user
-          opening it starts at the top of the PAGE behind. */}
-      <div
-        ref={dialog}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        tabIndex={-1}
-        className="bg-bambu-dark-secondary rounded-lg w-full max-w-lg max-h-[85vh] flex flex-col outline-none"
-      >
-        <div className="flex items-center justify-between gap-3 p-4 border-b border-bambu-dark shrink-0">
-          <h2 id={titleId} className="text-lg font-semibold text-white truncate">
-            {t('products.import.title')}
-          </h2>
-          <button onClick={onClose} className="p-1 hover:bg-bambu-dark rounded" aria-label={t('common.close')}>
-            <X className="w-5 h-5 text-bambu-gray" />
-          </button>
-        </div>
+    <Modal
+      onClose={onClose}
+      labelledBy={titleId}
+      size="lg"
+      bodyClassName="flex flex-col"
+      header={
+        <h2 id={titleId} className="text-lg font-semibold text-white truncate">
+          {t('products.import.title')}
+        </h2>
+      }
+    >
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <p className="text-sm text-bambu-gray">{t('products.import.hint')}</p>
 
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          <p className="text-sm text-bambu-gray">{t('products.import.hint')}</p>
-
-          <div className="space-y-2">
-            <label className="block text-sm font-medium text-white">{t('products.import.file')}</label>
-            <input
-              ref={input}
-              data-testid="import-file-input"
-              type="file"
-              accept=".zip,application/zip"
-              className="hidden"
-              onChange={(e) => {
-                setRefusal(null);
-                setFile(e.target.files?.[0] ?? null);
-              }}
-            />
-            <div className="flex items-center gap-3">
-              <Button type="button" variant="secondary" onClick={() => input.current?.click()} disabled={run.isPending}>
-                <FileArchive className="w-4 h-4" />
-                {t('products.import.choose')}
-              </Button>
-              {file && <span className="text-sm text-white truncate">{file.name}</span>}
-            </div>
+        <div className="space-y-2">
+          <label className="block text-sm font-medium text-white">{t('products.import.file')}</label>
+          <input
+            ref={input}
+            data-testid="import-file-input"
+            type="file"
+            accept=".zip,application/zip"
+            className="hidden"
+            onChange={(e) => {
+              setRefusal(null);
+              setFile(e.target.files?.[0] ?? null);
+            }}
+          />
+          <div className="flex items-center gap-3">
+            <Button type="button" variant="secondary" onClick={() => input.current?.click()} disabled={run.isPending}>
+              <FileArchive className="w-4 h-4" />
+              {t('products.import.choose')}
+            </Button>
+            {file && <span className="text-sm text-white truncate">{file.name}</span>}
           </div>
-
-          <div className="space-y-2">
-            <label className="block text-sm font-medium text-white">{t('products.import.folder')}</label>
-            <p className="text-xs text-bambu-gray">{t('products.import.folderHint')}</p>
-            <FolderTreePicker
-              folders={folders}
-              value={folderId}
-              onChange={setFolderId}
-              rootLabel={t('products.import.newFolder')}
-              className="max-h-48 rounded border border-bambu-dark-tertiary p-1"
-            />
-          </div>
-
-          {refusal && (
-            <p role="alert" className="text-sm text-status-error">
-              {refusal}
-            </p>
-          )}
         </div>
 
-        <div className="flex items-center justify-end gap-2 p-4 border-t border-bambu-dark shrink-0">
-          <Button type="button" variant="secondary" onClick={onClose} disabled={run.isPending}>
-            {t('common.cancel')}
-          </Button>
-          <Button type="button" onClick={() => file && run.mutate(file)} disabled={!file || run.isPending}>
-            {run.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-            {t('products.import.submit')}
-          </Button>
+        <div className="space-y-2">
+          <label className="block text-sm font-medium text-white">{t('products.import.folder')}</label>
+          <p className="text-xs text-bambu-gray">{t('products.import.folderHint')}</p>
+          <FolderTreePicker
+            folders={folders}
+            value={folderId}
+            onChange={setFolderId}
+            rootLabel={t('products.import.newFolder')}
+            className="max-h-48 rounded border border-bambu-dark-tertiary p-1"
+          />
         </div>
+
+        {refusal && (
+          <p role="alert" className="text-sm text-status-error">
+            {refusal}
+          </p>
+        )}
       </div>
-    </div>
+
+      <div className="flex items-center justify-end gap-2 p-4 border-t border-bambu-dark shrink-0">
+        <Button type="button" variant="secondary" onClick={onClose} disabled={run.isPending}>
+          {t('common.cancel')}
+        </Button>
+        <Button type="button" onClick={() => file && run.mutate(file)} disabled={!file || run.isPending}>
+          {run.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+          {t('products.import.submit')}
+        </Button>
+      </div>
+    </Modal>
   );
 }

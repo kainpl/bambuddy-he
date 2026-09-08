@@ -1,9 +1,10 @@
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { ChevronLeft, FolderKanban, Loader2, Search, X, XCircle } from 'lucide-react';
+import { ChevronLeft, FolderKanban, Loader2, Search, XCircle } from 'lucide-react';
 import { api } from '../../api/client';
 import type { Archive } from '../../api/client';
+import { Modal } from '../Modal';
 import { useToast } from '../../contexts/ToastContext';
 import { useOrderDetail } from '../../hooks/useOrderDetail';
 import { selectableProjects } from '../../utils/projects';
@@ -30,6 +31,7 @@ export function AddToOrderMenu({ archive, onDone }: AddToOrderMenuProps) {
   const { t } = useTranslation();
   const { showToast } = useToast();
   const queryClient = useQueryClient();
+  const headingId = useId();
   const [query, setQuery] = useState('');
   const [chosenOrderId, setChosenOrderId] = useState<number | null>(null);
 
@@ -85,9 +87,13 @@ export function AddToOrderMenu({ archive, onDone }: AddToOrderMenuProps) {
   const lines = chosenOrder?.lines ?? [];
 
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-bambu-dark-secondary rounded-lg w-full max-w-sm border border-bambu-dark-tertiary flex flex-col max-h-[80vh]">
-        <div className="p-3 border-b border-bambu-dark-tertiary flex items-center gap-2">
+    <Modal
+      onClose={onDone}
+      labelledBy={headingId}
+      size="sm"
+      bodyClassName="flex flex-col"
+      header={
+        <>
           {chosenOrderId != null && (
             <button
               type="button"
@@ -98,108 +104,100 @@ export function AddToOrderMenu({ archive, onDone }: AddToOrderMenuProps) {
               <ChevronLeft className="w-4 h-4" />
             </button>
           )}
-          <h2 className="text-sm font-semibold text-white flex-1 flex items-center gap-2">
+          <h2 id={headingId} className="text-sm font-semibold text-white flex-1 flex items-center gap-2">
             <FolderKanban className="w-4 h-4 text-bambu-green" />
             {t('archives.menu.addToOrder')}
           </h2>
-          <button
-            type="button"
-            onClick={onDone}
-            aria-label={t('common.close')}
-            className="p-1 rounded hover:bg-bambu-dark text-bambu-gray hover:text-white"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-
-        {chosenOrderId == null ? (
-          <>
-            <div className="p-2 border-b border-bambu-dark-tertiary">
-              <div className="relative">
-                <Search className="w-3.5 h-3.5 text-bambu-gray absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none" />
-                <input
-                  type="text"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder={t('archives.menu.searchOrders')}
-                  className="w-full pl-7 pr-2 py-1.5 text-xs bg-bambu-dark border border-bambu-dark-tertiary rounded text-white placeholder:text-bambu-gray focus:outline-none focus:border-bambu-green"
-                />
-              </div>
+        </>
+      }
+    >
+      {chosenOrderId == null ? (
+        <>
+          <div className="p-2 border-b border-bambu-dark-tertiary">
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 text-bambu-gray absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder={t('archives.menu.searchOrders')}
+                className="w-full pl-7 pr-2 py-1.5 text-xs bg-bambu-dark border border-bambu-dark-tertiary rounded text-white placeholder:text-bambu-gray focus:outline-none focus:border-bambu-green"
+              />
             </div>
+          </div>
 
-            <div className="overflow-y-auto py-1">
-              {archive.project_id != null && (
-                <button
-                  type="button"
-                  disabled={isPending}
-                  onClick={() => unbind.mutate()}
-                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left text-red-700 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-400/10 disabled:opacity-50"
-                >
-                  <XCircle className="w-4 h-4 flex-shrink-0" />
-                  {t('archives.menu.removeFromOrder')}
-                </button>
-              )}
-
-              {isLoading && (
-                <p className="flex items-center gap-2 px-3 py-2 text-sm text-bambu-gray">
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  {t('archives.menu.loading')}
-                </p>
-              )}
-
-              {!isLoading && offered.length === 0 && (
-                <p className="px-3 py-2 text-sm text-bambu-gray">{t('archives.menu.noOrdersAvailable')}</p>
-              )}
-
-              {offered.map((order) => (
-                <button
-                  key={order.id}
-                  type="button"
-                  disabled={isPending}
-                  onClick={() => setChosenOrderId(order.id)}
-                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left text-white hover:bg-bambu-dark-tertiary disabled:opacity-50"
-                >
-                  <span
-                    className="w-3 h-3 rounded-full flex-shrink-0"
-                    style={{ backgroundColor: order.color || '#888' }}
-                  />
-                  <span className="flex-1 min-w-0 truncate">{order.name}</span>
-                </button>
-              ))}
-            </div>
-          </>
-        ) : (
           <div className="overflow-y-auto py-1">
-            <button
-              type="button"
-              disabled={isPending}
-              onClick={() => assign.mutate({ orderId: chosenOrderId, lineId: null })}
-              className="w-full px-3 py-2 text-sm text-left text-white hover:bg-bambu-dark-tertiary disabled:opacity-50"
-            >
-              {t('archives.menu.noLine')}
-            </button>
+            {archive.project_id != null && (
+              <button
+                type="button"
+                disabled={isPending}
+                onClick={() => unbind.mutate()}
+                className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left text-red-700 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-400/10 disabled:opacity-50"
+              >
+                <XCircle className="w-4 h-4 flex-shrink-0" />
+                {t('archives.menu.removeFromOrder')}
+              </button>
+            )}
 
-            {linesLoading && (
+            {isLoading && (
               <p className="flex items-center gap-2 px-3 py-2 text-sm text-bambu-gray">
                 <Loader2 className="w-4 h-4 animate-spin" />
                 {t('archives.menu.loading')}
               </p>
             )}
 
-            {lines.map((line) => (
+            {!isLoading && offered.length === 0 && (
+              <p className="px-3 py-2 text-sm text-bambu-gray">{t('archives.menu.noOrdersAvailable')}</p>
+            )}
+
+            {offered.map((order) => (
               <button
-                key={line.id}
+                key={order.id}
                 type="button"
                 disabled={isPending}
-                onClick={() => assign.mutate({ orderId: chosenOrderId, lineId: line.id })}
-                className="w-full px-3 py-2 text-sm text-left text-white hover:bg-bambu-dark-tertiary disabled:opacity-50"
+                onClick={() => setChosenOrderId(order.id)}
+                className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left text-white hover:bg-bambu-dark-tertiary disabled:opacity-50"
               >
-                {`${line.product_name} × ${line.quantity}${line.material ? ` [${line.material}]` : ''}`}
+                <span
+                  className="w-3 h-3 rounded-full flex-shrink-0"
+                  style={{ backgroundColor: order.color || '#888' }}
+                />
+                <span className="flex-1 min-w-0 truncate">{order.name}</span>
               </button>
             ))}
           </div>
-        )}
-      </div>
-    </div>
+        </>
+      ) : (
+        <div className="overflow-y-auto py-1">
+          <button
+            type="button"
+            disabled={isPending}
+            onClick={() => assign.mutate({ orderId: chosenOrderId, lineId: null })}
+            className="w-full px-3 py-2 text-sm text-left text-white hover:bg-bambu-dark-tertiary disabled:opacity-50"
+          >
+            {t('archives.menu.noLine')}
+          </button>
+
+          {linesLoading && (
+            <p className="flex items-center gap-2 px-3 py-2 text-sm text-bambu-gray">
+              <Loader2 className="w-4 h-4 animate-spin" />
+              {t('archives.menu.loading')}
+            </p>
+          )}
+
+          {lines.map((line) => (
+            <button
+              key={line.id}
+              type="button"
+              disabled={isPending}
+              onClick={() => assign.mutate({ orderId: chosenOrderId, lineId: line.id })}
+              className="w-full px-3 py-2 text-sm text-left text-white hover:bg-bambu-dark-tertiary disabled:opacity-50"
+            >
+              {`${line.product_name} × ${line.quantity}${line.material ? ` [${line.material}]` : ''}`}
+            </button>
+          ))}
+        </div>
+      )}
+    </Modal>
   );
 }

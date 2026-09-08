@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { X, Loader2 } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../../api/client';
 import type { Order, OrderCreate, OrderListItem, OrderUpdate, ProjectPriority, ProjectStatus } from '../../api/client';
-import { Card, CardContent } from '../Card';
 import { Button } from '../Button';
+import { Modal } from '../Modal';
 import { CustomerPicker } from '../pickers/CustomerPicker';
 import { invalidateOrderViews } from '../../utils/queryInvalidation';
 import { useToast } from '../../contexts/ToastContext';
@@ -114,14 +114,6 @@ export function OrderModal({ order, defaultCustomerId, onClose }: OrderModalProp
   const [url, setUrl] = useState(initialUrl);
   const [status, setStatus] = useState<ProjectStatus>(initialStatus);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
   const mutation = useMutation({
     mutationFn: () => {
       if (order) {
@@ -173,202 +165,189 @@ export function OrderModal({ order, defaultCustomerId, onClose }: OrderModalProp
   const canSubmit = name.trim() !== '' && !mutation.isPending;
 
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <Card className="w-full max-w-lg max-h-[90vh] overflow-y-auto">
-        <CardContent className="p-0">
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (canSubmit) mutation.mutate();
-            }}
-          >
-            <div className="flex items-center justify-between p-4 border-b border-bambu-dark-tertiary">
-              <h2 className="text-xl font-semibold text-white">
-                {isEdit ? t('orders.modal.editTitle') : t('orders.modal.createTitle')}
-              </h2>
-              <button
-                type="button"
-                onClick={onClose}
-                className="text-bambu-gray hover:text-white transition-colors"
+    <Modal
+      onClose={onClose}
+      title={isEdit ? t('orders.modal.editTitle') : t('orders.modal.createTitle')}
+      size="lg"
+      closeDisabled={mutation.isPending}
+    >
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (canSubmit) mutation.mutate();
+        }}
+      >
+        <div className="p-4 space-y-4">
+          <div>
+            <label className={LABEL_CLASS} htmlFor="order-name">
+              {t('orders.modal.name')}
+            </label>
+            <input
+              id="order-name"
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className={FIELD_CLASS}
+              disabled={mutation.isPending}
+              required
+            />
+          </div>
+
+          <div>
+            <label className={LABEL_CLASS}>{t('orders.modal.customer')}</label>
+            <CustomerPicker value={customerId} onChange={setCustomerId} disabled={mutation.isPending} allowCreate />
+          </div>
+
+          {hasDescription && (
+            <div>
+              <label className={LABEL_CLASS} htmlFor="order-description">
+                {t('orders.modal.description')}
+              </label>
+              <textarea
+                id="order-description"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                className={`${FIELD_CLASS} min-h-[72px]`}
+                disabled={mutation.isPending}
+              />
+            </div>
+          )}
+
+          <div>
+            <label className={LABEL_CLASS}>{t('orders.modal.color')}</label>
+            <div className="flex gap-2 flex-wrap">
+              {ORDER_COLORS.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => setColor(c)}
+                  disabled={mutation.isPending}
+                  className={`w-8 h-8 rounded-full transition-transform ${
+                    color === c ? 'ring-2 ring-white ring-offset-2 ring-offset-bambu-dark-secondary scale-110' : ''
+                  }`}
+                  style={{ backgroundColor: c }}
+                />
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <label className={LABEL_CLASS} htmlFor="order-tags">
+              {t('orders.modal.tags')}
+            </label>
+            <input
+              id="order-tags"
+              type="text"
+              value={tags}
+              onChange={(e) => setTags(e.target.value)}
+              className={FIELD_CLASS}
+              disabled={mutation.isPending}
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className={LABEL_CLASS} htmlFor="order-due-date">
+                {t('orders.modal.dueDate')}
+              </label>
+              <input
+                id="order-due-date"
+                type="date"
+                value={dueDate}
+                onChange={(e) => setDueDate(e.target.value)}
+                className={FIELD_CLASS}
+                disabled={mutation.isPending}
+              />
+            </div>
+            <div>
+              <label className={LABEL_CLASS} htmlFor="order-priority">
+                {t('orders.modal.priority')}
+              </label>
+              <select
+                id="order-priority"
+                value={priority}
+                onChange={(e) => setPriority(e.target.value as ProjectPriority)}
+                className={FIELD_CLASS}
                 disabled={mutation.isPending}
               >
-                <X className="w-5 h-5" />
-              </button>
+                {(['low', 'normal', 'high', 'urgent'] as const).map((p) => (
+                  <option key={p} value={p}>
+                    {t(`orders.priority.${p}`)}
+                  </option>
+                ))}
+              </select>
             </div>
+          </div>
 
-            <div className="p-4 space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className={LABEL_CLASS} htmlFor="order-price">
+                {t('orders.modal.price')}
+              </label>
+              <input
+                id="order-price"
+                type="number"
+                min="0"
+                value={price}
+                onChange={(e) => setPrice(e.target.value)}
+                className={FIELD_CLASS}
+                disabled={mutation.isPending}
+              />
+            </div>
+            {isEdit && (
               <div>
-                <label className={LABEL_CLASS} htmlFor="order-name">
-                  {t('orders.modal.name')}
+                <label className={LABEL_CLASS} htmlFor="order-status">
+                  {t('orders.modal.status')}
                 </label>
-                <input
-                  id="order-name"
-                  type="text"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
+                <select
+                  id="order-status"
+                  value={status}
+                  onChange={(e) => setStatus(e.target.value as ProjectStatus)}
                   className={FIELD_CLASS}
                   disabled={mutation.isPending}
-                  required
-                />
-              </div>
-
-              <div>
-                <label className={LABEL_CLASS}>{t('orders.modal.customer')}</label>
-                <CustomerPicker value={customerId} onChange={setCustomerId} disabled={mutation.isPending} allowCreate />
-              </div>
-
-              {hasDescription && (
-                <div>
-                  <label className={LABEL_CLASS} htmlFor="order-description">
-                    {t('orders.modal.description')}
-                  </label>
-                  <textarea
-                    id="order-description"
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                    className={`${FIELD_CLASS} min-h-[72px]`}
-                    disabled={mutation.isPending}
-                  />
-                </div>
-              )}
-
-              <div>
-                <label className={LABEL_CLASS}>{t('orders.modal.color')}</label>
-                <div className="flex gap-2 flex-wrap">
-                  {ORDER_COLORS.map((c) => (
-                    <button
-                      key={c}
-                      type="button"
-                      onClick={() => setColor(c)}
-                      disabled={mutation.isPending}
-                      className={`w-8 h-8 rounded-full transition-transform ${
-                        color === c ? 'ring-2 ring-white ring-offset-2 ring-offset-bambu-dark-secondary scale-110' : ''
-                      }`}
-                      style={{ backgroundColor: c }}
-                    />
+                >
+                  {(['active', 'completed', 'cancelled'] as const).map((s) => (
+                    <option key={s} value={s}>
+                      {t(`orders.status.${s}`)}
+                    </option>
                   ))}
-                </div>
+                </select>
               </div>
+            )}
+          </div>
 
-              <div>
-                <label className={LABEL_CLASS} htmlFor="order-tags">
-                  {t('orders.modal.tags')}
-                </label>
-                <input
-                  id="order-tags"
-                  type="text"
-                  value={tags}
-                  onChange={(e) => setTags(e.target.value)}
-                  className={FIELD_CLASS}
-                  disabled={mutation.isPending}
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className={LABEL_CLASS} htmlFor="order-due-date">
-                    {t('orders.modal.dueDate')}
-                  </label>
-                  <input
-                    id="order-due-date"
-                    type="date"
-                    value={dueDate}
-                    onChange={(e) => setDueDate(e.target.value)}
-                    className={FIELD_CLASS}
-                    disabled={mutation.isPending}
-                  />
-                </div>
-                <div>
-                  <label className={LABEL_CLASS} htmlFor="order-priority">
-                    {t('orders.modal.priority')}
-                  </label>
-                  <select
-                    id="order-priority"
-                    value={priority}
-                    onChange={(e) => setPriority(e.target.value as ProjectPriority)}
-                    className={FIELD_CLASS}
-                    disabled={mutation.isPending}
-                  >
-                    {(['low', 'normal', 'high', 'urgent'] as const).map((p) => (
-                      <option key={p} value={p}>
-                        {t(`orders.priority.${p}`)}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className={LABEL_CLASS} htmlFor="order-price">
-                    {t('orders.modal.price')}
-                  </label>
-                  <input
-                    id="order-price"
-                    type="number"
-                    min="0"
-                    value={price}
-                    onChange={(e) => setPrice(e.target.value)}
-                    className={FIELD_CLASS}
-                    disabled={mutation.isPending}
-                  />
-                </div>
-                {isEdit && (
-                  <div>
-                    <label className={LABEL_CLASS} htmlFor="order-status">
-                      {t('orders.modal.status')}
-                    </label>
-                    <select
-                      id="order-status"
-                      value={status}
-                      onChange={(e) => setStatus(e.target.value as ProjectStatus)}
-                      className={FIELD_CLASS}
-                      disabled={mutation.isPending}
-                    >
-                      {(['active', 'completed', 'cancelled'] as const).map((s) => (
-                        <option key={s} value={s}>
-                          {t(`orders.status.${s}`)}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-              </div>
-
-              {hasUrl && (
-                <div>
-                  <label className={LABEL_CLASS} htmlFor="order-url">
-                    {t('orders.modal.url')}
-                  </label>
-                  <input
-                    id="order-url"
-                    type="url"
-                    value={url}
-                    onChange={(e) => setUrl(e.target.value)}
-                    className={FIELD_CLASS}
-                    disabled={mutation.isPending}
-                  />
-                </div>
-              )}
+          {hasUrl && (
+            <div>
+              <label className={LABEL_CLASS} htmlFor="order-url">
+                {t('orders.modal.url')}
+              </label>
+              <input
+                id="order-url"
+                type="url"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                className={FIELD_CLASS}
+                disabled={mutation.isPending}
+              />
             </div>
+          )}
+        </div>
 
-            <div className="flex justify-end gap-2 p-4 border-t border-bambu-dark-tertiary">
-              <Button type="button" variant="secondary" onClick={onClose} disabled={mutation.isPending}>
-                {t('common.cancel')}
-              </Button>
-              <Button type="submit" disabled={!canSubmit}>
-                {mutation.isPending ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : isEdit ? (
-                  t('orders.modal.save')
-                ) : (
-                  t('orders.modal.create')
-                )}
-              </Button>
-            </div>
-          </form>
-        </CardContent>
-      </Card>
-    </div>
+        <div className="flex justify-end gap-2 p-4 border-t border-bambu-dark-tertiary">
+          <Button type="button" variant="secondary" onClick={onClose} disabled={mutation.isPending}>
+            {t('common.cancel')}
+          </Button>
+          <Button type="submit" disabled={!canSubmit}>
+            {mutation.isPending ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : isEdit ? (
+              t('orders.modal.save')
+            ) : (
+              t('orders.modal.create')
+            )}
+          </Button>
+        </div>
+      </form>
+    </Modal>
   );
 }

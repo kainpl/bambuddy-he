@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { FolderKanban, Loader2, X } from 'lucide-react';
+import { FolderKanban, Loader2 } from 'lucide-react';
 import { api } from '../../api/client';
-import { Card, CardContent } from '../Card';
 import { Button } from '../Button';
+import { Modal } from '../Modal';
 import { useToast } from '../../contexts/ToastContext';
 import { OrderPicker } from '../pickers/OrderPicker';
 import { OrderLinePicker } from '../pickers/OrderLinePicker';
@@ -32,14 +32,6 @@ export function BatchAssignOrderModal({ archiveIds, onClose, onDone }: BatchAssi
   const [orderId, setOrderId] = useState<number | null>(null);
   const [lineId, setLineId] = useState<number | null>(null);
 
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [onClose]);
-
   const assign = useMutation({
     mutationFn: (target: number) => api.addArchivesToOrder(target, archiveIds, lineId),
     onSuccess: () => {
@@ -56,74 +48,60 @@ export function BatchAssignOrderModal({ archiveIds, onClose, onDone }: BatchAssi
   });
 
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <Card className="w-full max-w-md">
-        <CardContent className="p-0">
-          <div className="flex items-center justify-between p-4 border-b border-bambu-dark-tertiary">
-            <div className="flex items-center gap-2">
-              <FolderKanban className="w-5 h-5 text-bambu-green" />
-              <h2 className="text-xl font-semibold text-white">{t('archives.bulk.assignOrder.title')}</h2>
-            </div>
-            <button
-              type="button"
-              onClick={onClose}
-              aria-label={t('common.close')}
-              className="text-bambu-gray hover:text-white transition-colors"
-              disabled={assign.isPending}
-            >
-              <X className="w-5 h-5" />
-            </button>
-          </div>
+    <Modal
+      onClose={onClose}
+      title={t('archives.bulk.assignOrder.title')}
+      icon={<FolderKanban className="w-5 h-5 text-bambu-green" />}
+      size="md"
+      closeDisabled={assign.isPending}
+    >
+      <div className="p-4 space-y-4">
+        <p className="text-sm text-bambu-gray">
+          {t('archives.bulk.assignOrder.description', { count: archiveIds.length })}
+        </p>
 
-          <div className="p-4 space-y-4">
-            <p className="text-sm text-bambu-gray">
-              {t('archives.bulk.assignOrder.description', { count: archiveIds.length })}
-            </p>
+        <div>
+          <label htmlFor="batch-assign-order" className="block text-sm text-bambu-gray mb-1">
+            {t('archives.bulk.assignOrder.order')}
+          </label>
+          <OrderPicker
+            id="batch-assign-order"
+            value={orderId}
+            onChange={(next) => {
+              setOrderId(next);
+              setLineId(null);
+            }}
+            disabled={assign.isPending}
+          />
+        </div>
 
-            <div>
-              <label htmlFor="batch-assign-order" className="block text-sm text-bambu-gray mb-1">
-                {t('archives.bulk.assignOrder.order')}
-              </label>
-              <OrderPicker
-                id="batch-assign-order"
-                value={orderId}
-                onChange={(next) => {
-                  setOrderId(next);
-                  setLineId(null);
-                }}
-                disabled={assign.isPending}
-              />
-            </div>
+        <div>
+          <label htmlFor="batch-assign-line" className="block text-sm text-bambu-gray mb-1">
+            {t('archives.bulk.assignOrder.line')}
+          </label>
+          <OrderLinePicker
+            id="batch-assign-line"
+            orderId={orderId}
+            value={lineId}
+            onChange={setLineId}
+            disabled={assign.isPending}
+          />
+        </div>
+      </div>
 
-            <div>
-              <label htmlFor="batch-assign-line" className="block text-sm text-bambu-gray mb-1">
-                {t('archives.bulk.assignOrder.line')}
-              </label>
-              <OrderLinePicker
-                id="batch-assign-line"
-                orderId={orderId}
-                value={lineId}
-                onChange={setLineId}
-                disabled={assign.isPending}
-              />
-            </div>
-          </div>
-
-          <div className="flex gap-3 p-4 border-t border-bambu-dark-tertiary">
-            <Button variant="secondary" onClick={onClose} className="flex-1" disabled={assign.isPending}>
-              {t('common.cancel')}
-            </Button>
-            <Button
-              onClick={() => orderId != null && assign.mutate(orderId)}
-              className="flex-1"
-              disabled={orderId == null || assign.isPending}
-            >
-              {assign.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
-              {t('archives.bulk.assignOrder.assign')}
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-    </div>
+      <div className="flex gap-3 p-4 border-t border-bambu-dark-tertiary">
+        <Button variant="secondary" onClick={onClose} className="flex-1" disabled={assign.isPending}>
+          {t('common.cancel')}
+        </Button>
+        <Button
+          onClick={() => orderId != null && assign.mutate(orderId)}
+          className="flex-1"
+          disabled={orderId == null || assign.isPending}
+        >
+          {assign.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
+          {t('archives.bulk.assignOrder.assign')}
+        </Button>
+      </div>
+    </Modal>
   );
 }
