@@ -192,7 +192,10 @@ class ForgotPasswordConfirmRequest(BaseModel):
     out without ever reading the message.
     """
 
-    token: str = Field(..., max_length=512)
+    # 128 is what the docs have always promised, and three times what
+    # ``secrets.token_urlsafe(32)`` produces — a public, unauthenticated
+    # endpoint has no reason to accept more.
+    token: str = Field(..., max_length=128)
     new_password: str = Field(..., min_length=MIN_PASSWORD_LENGTH, max_length=256)
 
     @field_validator("new_password")
