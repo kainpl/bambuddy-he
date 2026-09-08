@@ -100,7 +100,14 @@ english.UrlPageDescription=Connection URL
 english.UrlPageSubCaption=The database must already exist - BamDude creates the tables, not the database.
 english.UrlPrompt=postgresql+asyncpg://user:password@host:5432/bamdude
 english.UrlRequired=Please enter the PostgreSQL connection URL, or go back and choose SQLite.
-english.UninstallDeleteData=Also delete all BamDude data (database, print archives, settings) in%n%1?%n%nChoose No to keep it for a future reinstall.
+english.UninstallDataTitle=BamDude data
+english.UninstallDataHeader=What should happen to your BamDude data?
+english.UninstallDataFolder=All of it lives in one folder:%n%1
+english.UninstallDataKeep=Keep it (recommended)
+english.UninstallDataKeepDetail=The database, every print archive and your settings stay on disk. Installing BamDude again later picks them up automatically — this is what you want for an upgrade or a reinstall.
+english.UninstallDataDelete=Delete everything
+english.UninstallDataDeleteDetail=Removes that folder for good: the database, every print archive, all settings, and the bundled PostgreSQL cluster if you use one. There is no undo and no copy left behind — make a backup first if you are not certain.
+english.UninstallDataContinue=Continue
 english.ServiceSetupFailed=BamDude was installed, but its Windows service could not be registered, so nothing is running yet.%n%nThe setup log is at:%n%1%n%nOpen it to see what failed, then re-run this installer.
 
 ukrainian.TaskDesktopIcon=Створити ярлик на робочому столі
@@ -124,7 +131,14 @@ ukrainian.UrlPageDescription=URL підключення
 ukrainian.UrlPageSubCaption=База вже має існувати — BamDude створює таблиці, а не базу.
 ukrainian.UrlPrompt=postgresql+asyncpg://user:password@host:5432/bamdude
 ukrainian.UrlRequired=Введіть URL підключення до PostgreSQL або поверніться назад і оберіть SQLite.
-ukrainian.UninstallDeleteData=Також видалити всі дані BamDude (база, архіви друку, налаштування) у%n%1?%n%nОберіть «Ні», щоб зберегти їх для наступного встановлення.
+ukrainian.UninstallDataTitle=Дані BamDude
+ukrainian.UninstallDataHeader=Що зробити з вашими даними BamDude?
+ukrainian.UninstallDataFolder=Усе це лежить в одній теці:%n%1
+ukrainian.UninstallDataKeep=Зберегти (рекомендовано)
+ukrainian.UninstallDataKeepDetail=База, всі архіви друку й ваші налаштування лишаються на диску. Наступне встановлення BamDude підхопить їх само — саме це потрібно при оновленні чи перевстановленні.
+ukrainian.UninstallDataDelete=Видалити все
+ukrainian.UninstallDataDeleteDetail=Ця тека зникає остаточно: база, всі архіви друку, всі налаштування і кластер вбудованого PostgreSQL, якщо ви ним користуєтесь. Скасувати це не можна, копії не лишиться — якщо не впевнені, спершу зробіть резервну копію.
+ukrainian.UninstallDataContinue=Продовжити
 ukrainian.ServiceSetupFailed=BamDude встановлено, але службу Windows зареєструвати не вдалося, тож зараз нічого не запущено.%n%nЖурнал встановлення:%n%1%n%nВідкрийте його, щоб побачити причину, потім запустіть інсталятор ще раз.
 
 [Tasks]
@@ -311,28 +325,82 @@ end;
 // upgrading over a running install fails with "permission denied" on every
 // file a service has open.
 //
-// On a fresh install {app}\bin\nssm.exe doesn't exist yet — FileExists guards
-// that path so the hook is a no-op for first-time installers. The Sleep gives
-// Windows a beat to finalize the unload before [Files] grabs exclusive handles.
-function PrepareToInstall(var NeedsRestart: Boolean): String;
+// The guard is the SERVICE, not a file on disk: ServiceExists returns at once
+// on a first-time install, where nothing is registered yet.
+function ServiceExists(const ServiceName: String): Boolean;
 var
   ResultCode: Integer;
-  NssmPath: string;
+begin
+  Result := Exec(ExpandConstant('{sys}\sc.exe'), 'query ' + ServiceName, '',
+    SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
+end;
+
+// Ask the SCM to stop a service and wait until it really is stopped.
+//
+// ⚠️ sc stop, never `net stop`. `net stop` asks whether to also stop the
+// services that depend on this one, and everything here runs hidden with no
+// console, so that question hangs the installer at "Preparing to install"
+// with the service still up. uninstall-service.bat carries the same warning —
+// it hit exactly this once; the install path was never updated to match.
+//
+// ⚠️ sc returns as soon as the control code is delivered, NOT when the service
+// has stopped, so the poll is the point of this function. `sc query | find
+// "STOPPED"` is the only state signal an Exec exit code can carry, since Inno
+// cannot read a process's output.
+function StopServiceAndWait(const ServiceName: String; TimeoutSeconds: Integer): Boolean;
+var
+  ResultCode, Waited: Integer;
+begin
+  if not ServiceExists(ServiceName) then
+  begin
+    Result := True;
+    Exit;
+  end;
+
+  Log('Stopping ' + ServiceName + ' before file copy...');
+  Exec(ExpandConstant('{sys}\sc.exe'), 'stop ' + ServiceName, '',
+    SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+  Waited := 0;
+  repeat
+    if Exec(ExpandConstant('{cmd}'),
+         '/c sc query ' + ServiceName + ' | find "STOPPED" >nul', '',
+         SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0) then
+    begin
+      Result := True;
+      Exit;
+    end;
+    Sleep(2000);
+    Waited := Waited + 2;
+  until Waited >= TimeoutSeconds;
+
+  Log(ServiceName + ' did not reach STOPPED within ' + IntToStr(TimeoutSeconds) + 's');
+  Result := False;
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   Result := '';
   NeedsRestart := False;
 
-  // Stop the bundled PostgreSQL service first (BamDude depends on it), then
-  // BamDude. Both are best-effort — a missing service just returns non-zero.
-  Exec(ExpandConstant('{cmd}'), '/c net stop BamDudePostgres', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  // ⚠️ BamDude FIRST — it depends on BamDudePostgres (DependOnService, set by
+  // install-service.bat). Stopping the dependency while its dependent is still
+  // running is exactly what makes the SCM ask about dependents, which is the
+  // question that must never be asked here.
+  //
+  // Both are best-effort: a service that is not installed returns at once, so
+  // this is a no-op on a first-time install.
+  StopServiceAndWait('BamDude', 60);
 
-  NssmPath := ExpandConstant('{app}\bin\nssm.exe');
-  if FileExists(NssmPath) then
-  begin
-    Log('Stopping BamDude service before file copy...');
-    Exec(NssmPath, 'stop BamDude', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-    Sleep(1500);
-  end;
+  if not StopServiceAndWait('BamDudePostgres', 90) then
+    // Not fatal on its own — say it in the log and let [Files] report the real
+    // failure if a binary is still held. Aborting here would strand an install
+    // that a second attempt would complete.
+    Log('BamDudePostgres is still running; the file copy may fail on its binaries');
+
+  // A beat for Windows to finalize the unload before [Files] takes exclusive
+  // handles on nssm.exe / postgres.exe.
+  Sleep(1500);
 end;
 
 // install-service.bat runs hidden and Inno does not abort on a non-zero [Run]
@@ -365,13 +433,131 @@ end;
 
 // --- Uninstall: optionally remove all data ----------------------------------
 
+// Ask about the data as its own step with two named choices, not as a yes/no
+// box. What "yes" destroys here is the whole database and every print archive,
+// and two identically-shaped buttons are the wrong control for a decision that
+// has no undo — the option the user picks should say what it does.
+//
+// ⚠️ The uninstaller has NO wizard, so the usual page API (CreateInputOptionPage
+// and friends) is unavailable: it builds on WizardForm, which does not exist at
+// uninstall time. CreateCustomForm is the documented way to get a page-shaped
+// window here, and the price is that the layout is positioned by hand.
+//
+// Returns False to abort the uninstall entirely (the user closed the window).
+function AskAboutData(var RemoveData: Boolean): Boolean;
+var
+  Form: TSetupForm;
+  Header, FolderLabel, KeepDetail, DeleteDetail: TNewStaticText;
+  KeepRadio, DeleteRadio: TNewRadioButton;
+  ContinueButton, CancelButton: TNewButton;
+  DataPath: String;
+  ButtonWidth: Integer;
+begin
+  RemoveData := False;
+  DataPath := ExpandConstant('{commonappdata}\BamDude');
+
+  Form := CreateCustomForm(ScaleX(470), ScaleY(320), False, True);
+  try
+    Form.Caption := CustomMessage('UninstallDataTitle');
+
+    Header := TNewStaticText.Create(Form);
+    Header.Parent := Form;
+    Header.Left := ScaleX(16);
+    Header.Top := ScaleY(16);
+    Header.Width := Form.ClientWidth - ScaleX(32);
+    Header.WordWrap := True;
+    Header.AutoSize := True;
+    Header.Font.Style := [fsBold];
+    Header.Caption := CustomMessage('UninstallDataHeader');
+
+    FolderLabel := TNewStaticText.Create(Form);
+    FolderLabel.Parent := Form;
+    FolderLabel.Left := ScaleX(16);
+    FolderLabel.Top := Header.Top + Header.Height + ScaleY(8);
+    FolderLabel.Width := Form.ClientWidth - ScaleX(32);
+    FolderLabel.WordWrap := True;
+    FolderLabel.AutoSize := True;
+    FolderLabel.Caption := FmtMessage(CustomMessage('UninstallDataFolder'), [DataPath]);
+
+    // Keep is first and pre-selected: the safe option should be the one the eye
+    // lands on and the one Enter takes.
+    KeepRadio := TNewRadioButton.Create(Form);
+    KeepRadio.Parent := Form;
+    KeepRadio.Left := ScaleX(16);
+    KeepRadio.Top := FolderLabel.Top + FolderLabel.Height + ScaleY(16);
+    KeepRadio.Width := Form.ClientWidth - ScaleX(32);
+    KeepRadio.Caption := CustomMessage('UninstallDataKeep');
+    KeepRadio.Checked := True;
+
+    KeepDetail := TNewStaticText.Create(Form);
+    KeepDetail.Parent := Form;
+    KeepDetail.Left := ScaleX(34);
+    KeepDetail.Top := KeepRadio.Top + KeepRadio.Height + ScaleY(4);
+    KeepDetail.Width := Form.ClientWidth - ScaleX(50);
+    KeepDetail.WordWrap := True;
+    KeepDetail.AutoSize := True;
+    KeepDetail.Caption := CustomMessage('UninstallDataKeepDetail');
+
+    DeleteRadio := TNewRadioButton.Create(Form);
+    DeleteRadio.Parent := Form;
+    DeleteRadio.Left := ScaleX(16);
+    DeleteRadio.Top := KeepDetail.Top + KeepDetail.Height + ScaleY(14);
+    DeleteRadio.Width := Form.ClientWidth - ScaleX(32);
+    DeleteRadio.Caption := CustomMessage('UninstallDataDelete');
+
+    DeleteDetail := TNewStaticText.Create(Form);
+    DeleteDetail.Parent := Form;
+    DeleteDetail.Left := ScaleX(34);
+    DeleteDetail.Top := DeleteRadio.Top + DeleteRadio.Height + ScaleY(4);
+    DeleteDetail.Width := Form.ClientWidth - ScaleX(50);
+    DeleteDetail.WordWrap := True;
+    DeleteDetail.AutoSize := True;
+    DeleteDetail.Caption := CustomMessage('UninstallDataDeleteDetail');
+
+    // ⚠️ KeepSizeX / KeepSizeY above only say whether the form may GROW with
+    // WizardSizePercent — they do not fit it to its contents. So the height is
+    // taken from the labels once they have wrapped: these texts are localized
+    // and are not the same number of lines in every language.
+    Form.ClientHeight := DeleteDetail.Top + DeleteDetail.Height + ScaleY(56);
+
+    ContinueButton := TNewButton.Create(Form);
+    ContinueButton.Parent := Form;
+    ContinueButton.Caption := CustomMessage('UninstallDataContinue');
+    ContinueButton.Height := ScaleY(23);
+    ContinueButton.Top := Form.ClientHeight - ScaleY(23 + 12);
+    ContinueButton.ModalResult := mrOk;
+    ContinueButton.Default := True;
+
+    CancelButton := TNewButton.Create(Form);
+    CancelButton.Parent := Form;
+    CancelButton.Caption := SetupMessage(msgButtonCancel);
+    CancelButton.Height := ScaleY(23);
+    CancelButton.Top := ContinueButton.Top;
+    CancelButton.ModalResult := mrCancel;
+    CancelButton.Cancel := True;
+
+    // One width for both, wide enough for the longer of the two labels — the
+    // Ukrainian captions are longer than the English ones.
+    ButtonWidth := Form.CalculateButtonWidth([ContinueButton.Caption, CancelButton.Caption]);
+    ContinueButton.Width := ButtonWidth;
+    CancelButton.Width := ButtonWidth;
+    CancelButton.Left := Form.ClientWidth - ScaleX(12) - ButtonWidth;
+    ContinueButton.Left := CancelButton.Left - ScaleX(6) - ButtonWidth;
+
+    // No FlipAndCenterIfNeeded here: it centers on WizardForm, which does not
+    // exist during uninstall. Left alone, the form centers on the screen.
+    Result := Form.ShowModal = mrOk;
+    if Result then
+      RemoveData := DeleteRadio.Checked;
+  finally
+    Form.Free;
+  end;
+end;
 function InitializeUninstall(): Boolean;
 begin
-  Result := True;
-  // Default is to KEEP data (database, archives, config). Ask explicitly.
-  RemoveDataOnUninstall :=
-    MsgBox(FmtMessage(CustomMessage('UninstallDeleteData'), [ExpandConstant('{commonappdata}\BamDude')]),
-      mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES;
+  // Keeping the data is the default and stays the default: an uninstall that
+  // silently took the archives with it would be unrecoverable.
+  Result := AskAboutData(RemoveDataOnUninstall);
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);

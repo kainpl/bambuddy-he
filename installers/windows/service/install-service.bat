@@ -132,8 +132,16 @@ REM auto-start service running as NetworkService. Returns non-zero on failure.
 REM Stop and unregister any previous instance so this build's config applies.
 REM sc delete needs no PostgreSQL binaries (they aren't located yet) and leaves
 REM the data directory untouched.
-"%NSSM%" stop BamDude 2>nul
-net stop %PG_SERVICE% 2>nul
+REM
+REM ⚠️ BamDude first — it depends on %PG_SERVICE% (DependOnService, below), and
+REM stopping a dependency while its dependent still runs is what makes the SCM
+REM ask about dependents. See :stop_service for why that question is fatal here.
+REM
+REM ⚠️ And WAIT for stopped before sc delete: deleting a service that is still
+REM running only marks it for deletion, and the name stays taken until reboot —
+REM so the register below would fail on a machine that looks idle.
+call :stop_service BamDude 60
+call :stop_service %PG_SERVICE% 90
 sc delete %PG_SERVICE% 2>nul
 
 REM Locate the PostgreSQL binaries inside the embedded Python's wheel. Written
@@ -197,6 +205,37 @@ echo [install-service] %PG_SERVICE% registered and started on 127.0.0.1:%PG_PORT
 exit /b 0
 
 REM ---------------------------------------------------------------------------
+REM Ask the SCM to stop a service and wait until it really is stopped.
+REM   %1 = service name, %2 = seconds to wait before giving up
+REM
+REM ⚠️ sc stop, never `net stop`. `net stop` asks whether to also stop the
+REM services that depend on this one, and this script runs hidden with no
+REM console input, so that question hangs the installer forever with the
+REM service still up. uninstall-service.bat carries the same warning — it hit
+REM this once already; the install path was simply never updated to match.
+REM
+REM ⚠️ sc returns as soon as the control code is delivered, NOT when the
+REM service has stopped, so the poll is the point of this routine rather than
+REM a nicety. `sc query | find "STOPPED"` is the only state signal an errorlevel
+REM can carry.
+:stop_service
+sc query %~1 >nul 2>&1
+if errorlevel 1 exit /b 0
+echo [install-service] stopping %~1
+sc stop %~1 >nul 2>&1
+set /a SVC_WAITED=0
+:stop_service_wait
+sc query %~1 | find "STOPPED" >nul
+if not errorlevel 1 exit /b 0
+set /a SVC_WAITED+=2
+if !SVC_WAITED! GEQ %~2 (
+    echo [install-service] %~1 still running after !SVC_WAITED!s
+    exit /b 1
+)
+REM ping as the sleep: `timeout` needs a console this script does not have.
+ping -n 3 127.0.0.1 >nul
+goto :stop_service_wait
+
 :pg_ctl
 "%PGBIN%\pg_ctl.exe" %*
 exit /b %errorlevel%
