@@ -1,8 +1,9 @@
-import { useState, useMemo, useRef, useEffect } from 'react';
+import { useState, useMemo, useRef, useEffect, useId } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { X, Loader2, Layers, ChevronDown } from 'lucide-react';
+import { Loader2, Layers, ChevronDown } from 'lucide-react';
 import { api, type InventorySpool, type SpoolCatalogEntry } from '../api/client';
+import { Modal } from './Modal';
 import { useToast } from '../contexts/ToastContext';
 import { MATERIALS, KNOWN_VARIANTS } from './spool-form/constants';
 import { buildFilamentOptions, extractBrandsFromPresets } from './spool-form/utils';
@@ -114,6 +115,7 @@ function Combobox({ value, options, onChange, disabled, placeholder }: {
 export function BulkEditSpoolsModal({ isOpen, spools, allSpools, catalogEntries, spoolDisplayTemplate, onClose, onSaved }: Props) {
   const { t } = useTranslation();
   const { showToast } = useToast();
+  const headingId = useId();
 
   // Every spool handed in is edited — the caller decided the set. Kept as a
   // derived value rather than state so re-opening with a different selection
@@ -363,71 +365,68 @@ export function BulkEditSpoolsModal({ isOpen, spools, allSpools, catalogEntries,
   const spoolLabel = (s: InventorySpool) => formatSpoolDisplayName(s, spoolDisplayTemplate) || `#${s.id}`;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center" onClick={onClose}>
-      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
-      <div
-        className="relative w-full max-w-3xl mx-4 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-xl shadow-2xl max-h-[90vh] flex flex-col"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between p-4 border-b border-bambu-dark-tertiary flex-shrink-0">
-          <div className="flex items-center gap-2">
-            <Layers className="w-4 h-4 text-bambu-green" />
-            <h2 className="text-lg font-semibold text-white">{t('inventory.bulkEdit.title')}</h2>
-            <span className="text-sm text-bambu-gray">{t('inventory.bulkEdit.selectedCount', { count: selected.length })}</span>
+    <Modal
+      onClose={onClose}
+      labelledBy={headingId}
+      header={
+        <>
+          <Layers className="w-4 h-4 text-bambu-green" />
+          <h2 id={headingId} className="text-lg font-semibold text-white">{t('inventory.bulkEdit.title')}</h2>
+          <span className="text-sm text-bambu-gray">{t('inventory.bulkEdit.selectedCount', { count: selected.length })}</span>
+        </>
+      }
+      size="3xl"
+      bodyClassName="flex flex-col"
+    >
+      <div className="flex flex-1 min-h-0">
+        {/* What is about to change — READ-ONLY (#1795).
+            This pane used to be the selection mechanism: it received the
+            whole filtered inventory, pre-ticked everything, and let you
+            narrow it here. Selection now lives on the page itself
+            (checkboxes + toolbar), so a second set of checkboxes in here
+            would be a competing source of truth for the same question.
+            The list stays, without them: it is the only thing between the
+            user and a mass edit of the wrong spools. */}
+        <div className="w-56 flex-shrink-0 border-r border-bambu-dark-tertiary flex flex-col">
+          <div className="px-3 py-2 text-xs text-bambu-gray border-b border-bambu-dark-tertiary flex-shrink-0">
+            {t('inventory.bulkEdit.willChange', { count: spools.length })}
           </div>
-          <button onClick={onClose} className="p-1 text-bambu-gray hover:text-white rounded"><X className="w-4 h-4" /></button>
-        </div>
-
-        <div className="flex flex-1 min-h-0">
-          {/* What is about to change — READ-ONLY (#1795).
-              This pane used to be the selection mechanism: it received the
-              whole filtered inventory, pre-ticked everything, and let you
-              narrow it here. Selection now lives on the page itself
-              (checkboxes + toolbar), so a second set of checkboxes in here
-              would be a competing source of truth for the same question.
-              The list stays, without them: it is the only thing between the
-              user and a mass edit of the wrong spools. */}
-          <div className="w-56 flex-shrink-0 border-r border-bambu-dark-tertiary flex flex-col">
-            <div className="px-3 py-2 text-xs text-bambu-gray border-b border-bambu-dark-tertiary flex-shrink-0">
-              {t('inventory.bulkEdit.willChange', { count: spools.length })}
-            </div>
-            <div className="overflow-y-auto flex-1">
-              {spools.map((s) => (
-                <div key={s.id} className="flex items-center gap-2 px-3 py-1.5 text-xs">
-                  <span className="w-3 h-3 rounded-full flex-shrink-0 border border-bambu-dark-tertiary"
-                    style={{ background: s.rgba ? `#${s.rgba.slice(0, 6)}` : '#666' }} />
-                  <span className="truncate text-bambu-gray">{spoolLabel(s)}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Field editor */}
-          <div className="flex-1 min-w-0 p-4 overflow-y-auto">
-            <p className="text-xs text-bambu-gray mb-3">{t('inventory.bulkEdit.hint')}</p>
-            {FIELDS.map((f) => (
-              <div key={f.key} className="flex items-center gap-3 py-1.5">
-                <input type="checkbox" checked={!!enabled[f.key]} onChange={() => toggle(f.key)}
-                  className="w-4 h-4 accent-bambu-green flex-shrink-0" aria-label={t(f.labelKey)} />
-                <span className={`text-sm w-40 flex-shrink-0 ${enabled[f.key] ? 'text-white' : 'text-bambu-gray'}`}>{t(f.labelKey)}</span>
-                <div className="flex-1 min-w-0">{renderInput(f)}</div>
+          <div className="overflow-y-auto flex-1">
+            {spools.map((s) => (
+              <div key={s.id} className="flex items-center gap-2 px-3 py-1.5 text-xs">
+                <span className="w-3 h-3 rounded-full flex-shrink-0 border border-bambu-dark-tertiary"
+                  style={{ background: s.rgba ? `#${s.rgba.slice(0, 6)}` : '#666' }} />
+                <span className="truncate text-bambu-gray">{spoolLabel(s)}</span>
               </div>
             ))}
           </div>
         </div>
 
-        <div className="flex items-center justify-end gap-2 p-4 border-t border-bambu-dark-tertiary flex-shrink-0">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-bambu-gray hover:text-white">{t('common.cancel')}</button>
-          <button
-            onClick={() => bulkMutation.mutate()}
-            disabled={!anyEnabled || selected.length === 0 || bulkMutation.isPending}
-            className="px-4 py-2 text-sm font-medium rounded-lg bg-bambu-green text-white hover:bg-bambu-green/90 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2"
-          >
-            {bulkMutation.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
-            {t('inventory.bulkEdit.apply', { count: selected.length })}
-          </button>
+        {/* Field editor */}
+        <div className="flex-1 min-w-0 p-4 overflow-y-auto">
+          <p className="text-xs text-bambu-gray mb-3">{t('inventory.bulkEdit.hint')}</p>
+          {FIELDS.map((f) => (
+            <div key={f.key} className="flex items-center gap-3 py-1.5">
+              <input type="checkbox" checked={!!enabled[f.key]} onChange={() => toggle(f.key)}
+                className="w-4 h-4 accent-bambu-green flex-shrink-0" aria-label={t(f.labelKey)} />
+              <span className={`text-sm w-40 flex-shrink-0 ${enabled[f.key] ? 'text-white' : 'text-bambu-gray'}`}>{t(f.labelKey)}</span>
+              <div className="flex-1 min-w-0">{renderInput(f)}</div>
+            </div>
+          ))}
         </div>
       </div>
-    </div>
+
+      <div className="flex items-center justify-end gap-2 p-4 border-t border-bambu-dark-tertiary flex-shrink-0">
+        <button onClick={onClose} className="px-4 py-2 text-sm text-bambu-gray hover:text-white">{t('common.cancel')}</button>
+        <button
+          onClick={() => bulkMutation.mutate()}
+          disabled={!anyEnabled || selected.length === 0 || bulkMutation.isPending}
+          className="px-4 py-2 text-sm font-medium rounded-lg bg-bambu-green text-white hover:bg-bambu-green/90 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2"
+        >
+          {bulkMutation.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
+          {t('inventory.bulkEdit.apply', { count: selected.length })}
+        </button>
+      </div>
+    </Modal>
   );
 }

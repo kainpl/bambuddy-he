@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { X, Loader2, Package, Search } from 'lucide-react';
+import { Loader2, Package, Search } from 'lucide-react';
 import { api } from '../api/client';
 import type { InventorySpool, SpoolAssignment } from '../api/client';
 import { Button } from './Button';
 import { ConfirmModal } from './ConfirmModal';
+import { Modal } from './Modal';
 import { useToast } from '../contexts/ToastContext';
 import { DEFAULT_SPOOL_DISPLAY_TEMPLATE, formatSpoolDisplayName, spoolDisplayNameMatches } from '../utils/spoolName';
 import { filterSpoolsByQuery } from '../utils/inventorySearch';
@@ -376,31 +377,12 @@ export function AssignSpoolModal({ isOpen, onClose, printerId, amsId, trayId, tr
 
   return (
     <>
-      {/* z-[100] so the mobile sidebar drawer (z-50) can't bleed over the
-          modal on narrow viewports — matches GitHubBackupSettings, the
-          Layout confirmation modal, and FilamentHoverCard's z-class
-          (upstream Bambuddy #1336). */}
-      <div className="fixed inset-0 z-[100] flex items-start sm:items-center justify-center overflow-y-auto p-4">
-        <div
-          className="absolute inset-0 bg-black/50 backdrop-blur-sm"
-          onClick={onClose}
-        />
-
-      <div className="relative w-full max-w-2xl bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-xl shadow-2xl max-h-[90vh] overflow-hidden flex flex-col my-auto">
-        {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-bambu-dark-tertiary">
-          <div className="flex items-center gap-2">
-            <Package className="w-5 h-5 text-bambu-green" />
-            <h2 className="text-lg font-semibold text-white">{t('inventory.assignSpool')}</h2>
-          </div>
-          <button
-            onClick={onClose}
-            className="p-1 text-bambu-gray hover:text-white rounded transition-colors"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-
+      <Modal
+        onClose={onClose}
+        title={t('inventory.assignSpool')}
+        icon={<Package className="w-5 h-5 text-bambu-green" />}
+        size="2xl"
+      >
         {/* Content */}
         <div className="p-4 space-y-4 overflow-y-auto">
           {/* Tray info */}
@@ -604,8 +586,7 @@ export function AssignSpoolModal({ isOpen, onClose, printerId, amsId, trayId, tr
           </div>
         )}
 
-      </div>
-      </div>
+      </Modal>
 
       {showMismatchConfirm && trayInfo && selectedSpoolId && mismatchDetails && (() => {
         let message = '';
@@ -670,9 +651,17 @@ export function AssignSpoolModal({ isOpen, onClose, printerId, amsId, trayId, tr
       })()}
 
       {replacementPrompt && (
-        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setReplacementPrompt(null)} />
-          <div className="relative w-full max-w-md bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-xl shadow-2xl p-5">
+        <Modal
+          onClose={() => setReplacementPrompt(null)}
+          hideClose
+          ariaLabel={
+            windowMode === 'optin'
+              ? t('inventory.midPrintReplacement.titleOptin')
+              : t('inventory.midPrintReplacement.title')
+          }
+          size="md"
+        >
+          <div className="p-5">
             <h3 className="text-lg font-semibold text-white">
               {windowMode === 'optin'
                 ? t('inventory.midPrintReplacement.titleOptin')
@@ -711,7 +700,7 @@ export function AssignSpoolModal({ isOpen, onClose, printerId, amsId, trayId, tr
               </Button>
             </div>
           </div>
-        </div>
+        </Modal>
       )}
     </>
   );
