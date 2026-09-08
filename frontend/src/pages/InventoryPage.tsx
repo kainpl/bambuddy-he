@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef, useCallback, type CSSProperties, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { buildFilamentBackground } from '../components/filamentSwatchHelpers';
-import { LoadingBlock } from '../components/LoadingBlock';
+import { SpoolTableSkeleton } from '../components/SpoolTableSkeleton';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import {
@@ -1133,7 +1133,7 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
   // refetchInterval — same as that feed: once per visit, then on window focus
   // and on mutations. Spoolman mode never calls it (the endpoint aggregates
   // OUR table; that mode computes from the array it already holds).
-  const { data: serverStats } = useQuery({
+  const { data: serverStats, isLoading: serverStatsLoading } = useQuery({
     queryKey: ['inventory-spools', 'stats'],
     queryFn: api.getInventoryStats,
     enabled: serverMode,
@@ -2022,6 +2022,14 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
     : showAll
       ? 1
       : Math.min(effectivePageIndex + 1, totalPages);
+  // The skeleton should be the size of the table it stands in for, so a cold
+  // load and a "Group similar" flip do not jump the page.
+  const lastRowCount = useRef(10);
+  useEffect(() => {
+    if (pagedItems.length > 0) lastRowCount.current = pagedItems.length;
+  }, [pagedItems.length]);
+  const skeletonRows = Math.min(Math.max(lastRowCount.current, 5), pageSize === -1 ? 25 : pageSize);
+
   // Ids on screen right now — what the header checkbox ticks. Groups are
   // flattened, because a collapsed group still represents its members.
   const visibleSpoolIds = useMemo(
@@ -2106,6 +2114,18 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
         : groupSimilar
           ? groupPageQuery.isLoading
           : flatPageQuery.isLoading;
+
+  // ⚠️ The farm summary has its own query and its own data — it must not wait
+  // for a page of rows it does not depend on. It used to be gated on
+  // `listLoading`, so the number an operator actually looks at first was held
+  // hostage by the slower half of the page. In Spoolman mode the list IS the
+  // stats, so there it keeps the single flag honestly.
+  const statsLoading = spoolmanMode ? isLoading : serverStatsLoading;
+
+  // A refetch behind `placeholderData` shows stale rows with no cue; on a big
+  // farm that is a second or more of wrong numbers under a correct filter bar.
+  const activeListQuery = groupSimilar ? groupPageQuery : flatPageQuery;
+  const isRefetching = !spoolmanMode && activeListQuery.isFetching && !activeListQuery.isLoading;
 
   /**
    * "Select all N matching the filter" — the EXPLICIT cross-page action the
@@ -2247,7 +2267,14 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
       </div>
 
       {/* Stats Bar */}
-      {stats && !listLoading && (
+      {statsLoading ? (
+        <div data-testid="inventory-stats-skeleton" className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+          {[0, 1, 2, 3, 4].map((i) => (
+            <div key={i} className="h-[88px] rounded-lg bg-bambu-dark-secondary border border-bambu-dark-tertiary animate-pulse" />
+          ))}
+        </div>
+      ) : null}
+      {stats && !statsLoading && (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
           {/* Total Inventory */}
           <div className="bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg p-4">
@@ -2784,7 +2811,14 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
         {/* Results count. Grouped server mode counts GROUPS (meta.total is
             what the list pages over) — the flat spool total would be a
             second count query for one label. */}
-        <span className="ml-auto text-xs text-bambu-gray">
+        <span className="ml-auto text-xs text-bambu-gray flex items-center gap-1.5">
+          {isRefetching && (
+            <RefreshCw
+              data-testid="inventory-refetching"
+              className="w-3 h-3 animate-spin text-bambu-gray"
+              aria-hidden
+            />
+          )}
           {spoolmanMode ? (
             <>
               {sortedSpools.length} {sortedSpools.length !== 1 ? t('inventory.spools') : t('inventory.spool')}
@@ -2804,8 +2838,13 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
       )}
 
       {/* Content */}
+      <div className={isRefetching ? 'opacity-60 transition-opacity' : 'transition-opacity'}>
       {listLoading ? (
-        <LoadingBlock label={t('common.loading')} />
+        <SpoolTableSkeleton
+          rows={skeletonRows}
+          view={viewMode === 'cards' ? 'cards' : 'table'}
+          columns={renderColumns.length}
+        />
       ) : viewMode === 'forecast' && canViewForecast ? (
         /* Forecast view (upstream #1184). Since the forecast-server-side
            rewrite (task 4) the panel renders SERVER-computed rows — it is
@@ -3106,6 +3145,7 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
           />
         )
       )}
+      </div>
 
       {/* Spool Form Modal */}
       {formModal !== null && (

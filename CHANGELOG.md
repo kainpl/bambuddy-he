@@ -90,6 +90,8 @@
 
 ### Fixed
 
+- **The inventory summary no longer waits for the spool list.** The farm-wide figures at the top of the page have their own query and their own data, but were hidden until a page of rows arrived — so the number you look at first was held up by the slower half of the page. A loading list now keeps the table'''s shape instead of replacing the whole thing with one spinner (which also covers the first flip of «Group similar», the one case that still genuinely reloads), and a filter change dims the rows and shows a small spinner so stale numbers cannot read as current.
+
 - **The staggered-start interval accepts 0.** Wanting the concurrent limit without any wait on top was not expressible: the field refused anything below one minute, and typing zero silently stored five. Zero now means what it reads as — printers are still capped, and still wait for the bed if that is switched on, but nothing is added after that.
 
 - **The statistics page no longer stalls the printers while it loads.** Archive statistics loaded every completed print as a full record — every column and its JSON blob — to read two flags and one number off each. On a farm with tens of thousands of prints that work happened on the same loop that talks to the printers, so opening the page held up every machine's MQTT for as long as it took. It now reads the three columns it actually uses.
