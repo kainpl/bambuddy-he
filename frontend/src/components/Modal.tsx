@@ -18,7 +18,7 @@
  * scanner cannot see a template string; `8xl` needs `--container-8xl` in
  * `index.css`.
  */
-import { useId, type MouseEvent, type ReactNode } from 'react';
+import { useId, type CSSProperties, type MouseEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { X } from 'lucide-react';
@@ -64,6 +64,8 @@ export interface ModalProps {
   hideClose?: boolean;
   footer?: ReactNode;
   panelClassName?: string;
+  /** Inline panel style for geometry that is computed, not a class — a width derived from an image size. Beats every class. */
+  panelStyle?: CSSProperties;
   bodyClassName?: string;
   /** Accessible name when there is no title (lightboxes, `hideClose` cards). */
   ariaLabel?: string;
@@ -83,6 +85,7 @@ export function Modal({
   hideClose = false,
   footer,
   panelClassName = '',
+  panelStyle,
   bodyClassName = '',
   ariaLabel,
   children,
@@ -137,6 +140,7 @@ export function Modal({
         aria-describedby={describedBy}
         aria-label={labelled ? undefined : ariaLabel}
         tabIndex={-1}
+        style={panelStyle}
         className={`relative flex w-full flex-col rounded-xl border border-bambu-dark-tertiary bg-bambu-dark-secondary shadow-2xl outline-none ${size === 'full' ? '' : 'max-h-[90vh]'} ${MODAL_SIZE_CLASS[size]} ${panelClassName}`}
       >
         {showHeader && (

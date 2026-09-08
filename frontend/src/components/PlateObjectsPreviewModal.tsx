@@ -24,6 +24,8 @@ import { Modal } from './Modal';
 import { PlateMarkers } from './PlateObjectMarkers';
 import {
   COLUMN_PX,
+  DIALOG_FRAME,
+  DIALOG_FRAME_STYLE,
   LIGHTBOX_SCALE,
   LIST_COLUMN,
   LIST_COLUMN_PX,
@@ -108,19 +110,12 @@ export function PlateObjectsPreviewModal({ source, id, isOpen, onClose }: PlateO
 
   return (
     <>
-      {/* ⚠️ The panel belongs to the shell now, so DIALOG_WIDTH_PX — an inline
-          width, and the reason plateDialogLayout cuts the dialog to its content
-          rather than to a share of the screen — has nowhere to go: the nearest
-          step of the shell's size table stands in, and the two fixed columns
-          leave a little background to their right. The height is still
-          DIALOG_FRAME's share of the viewport, spelled out here because the rest
-          of that constant (the viewport caps) is the shell's `p-4` + `max-h`
-          and repeating it would collide with the size class. */}
       <Modal
         onClose={onClose}
         labelledBy={headingId}
         size="4xl"
-        panelClassName="h-[60%] overflow-hidden"
+        panelClassName={`${DIALOG_FRAME} overflow-hidden`}
+        panelStyle={DIALOG_FRAME_STYLE}
         bodyClassName="flex flex-col"
         header={
           <>

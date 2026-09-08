@@ -171,6 +171,17 @@ describe('Modal', () => {
     expect(overlayOf('Inner').style.zIndex).toBe('51');
   });
 
+  it('panelStyle lands on the panel as inline style', () => {
+    render(
+      <Modal onClose={vi.fn()} title="T" panelStyle={{ width: 866, maxWidth: 'calc(100vw - 2rem)' }}>
+        x
+      </Modal>,
+    );
+    const panel = screen.getByRole('dialog');
+    expect(panel.style.width).toBe('866px');
+    expect(panel.style.maxWidth).toBe('calc(100vw - 2rem)');
+  });
+
   it('a click inside the modal does not reach a React ancestor onClick through the portal', async () => {
     const user = userEvent.setup();
     const ancestor = vi.fn();

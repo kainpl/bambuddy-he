@@ -96,7 +96,7 @@ export function SkipObjectsModal({ printerId, isOpen, onClose }: SkipObjectsModa
       {/* Modal */}
       <div
         style={{ width: DIALOG_WIDTH_PX }}
-        className={`relative z-10 bg-white dark:bg-bambu-dark border border-gray-200 dark:border-bambu-dark-tertiary rounded-xl shadow-2xl ${DIALOG_FRAME} flex flex-col overflow-hidden`}
+        className={`relative z-10 bg-white dark:bg-bambu-dark border border-gray-200 dark:border-bambu-dark-tertiary rounded-xl shadow-2xl ${DIALOG_FRAME} max-w-[calc(100vw-2rem)] max-h-[calc(100vh-2rem)] flex flex-col overflow-hidden`}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}

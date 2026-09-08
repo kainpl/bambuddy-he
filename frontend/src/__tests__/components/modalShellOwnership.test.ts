@@ -149,6 +149,8 @@ function openingTags(src: string): Tag[] {
 function offenders(file: string, src: string): string[] {
   const out: string[] = [];
   for (const t of openingTags(src)) {
+    // The shell's own tag: a header/children prop may carry a popover's click-catcher, which is that popover's to mark, not the shell's.
+    if (/^<Modal\b/.test(t.text)) continue;
     if (!/className=/.test(t.text) || !/\binset-0\b/.test(t.text)) continue;
     if (MARKER.test(t.lineBefore)) continue;
     const fullScreen = /\bfixed\b/.test(t.text);
