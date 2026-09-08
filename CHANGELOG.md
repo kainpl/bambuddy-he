@@ -94,7 +94,7 @@
 
 ### Fixed
 
-- **Camera snapshots no longer spawn a capture per poll.** Rapid Cam Wall polling of the same printer reuses a frame captured within the last five seconds instead of opening a fresh camera connection (and an ffmpeg process) for every request; a live stream's own buffer still wins when one is attached, and a failed capture is never cached. Contributed by [volnov](https://github.com/volnov) in #38.
+- **Camera snapshots no longer spawn a capture per poll.** Rapid Cam Wall polling of the same printer reuses a frame captured within the last five seconds instead of opening a fresh camera connection (and an ffmpeg process) for every request; a live stream's own buffer still wins when one is attached, and a failed capture is never cached. Contributed by @volnov in #38.
 
 - **The sensor-silence watchdog read the whole sensor history every minute.** To work out which quantities a sensor reports and when it last reported, it scanned every row that sensor had ever recorded — twice, once for each question — on every tick of the measurement loop. On a real installation that was 94 000 rows and 13 MB of reads a minute to produce four short words and one timestamp, and it grew in step with how much history you keep. It now asks about the quantities BamDude knows how to measure and looks each one up directly: the same answers, measured at 0.3 ms instead of 33 ms, using the index that was already there.
 
