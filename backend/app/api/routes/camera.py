@@ -4,6 +4,7 @@ import asyncio
 import logging
 import subprocess
 import sys
+import time
 import uuid
 from collections.abc import AsyncGenerator
 
@@ -61,6 +62,12 @@ _last_frame_times: dict[int, float] = {}
 
 # Track stream start times for each printer
 _stream_start_times: dict[int, float] = {}
+
+# Store recent one-shot snapshots to avoid opening a fresh camera connection
+# for every Cam Wall poll when no live stream is attached.
+_snapshot_frames: dict[int, bytes] = {}
+_snapshot_frame_times: dict[int, float] = {}
+_SNAPSHOT_CACHE_TTL_SECONDS = 5.0
 
 # Track active external camera streams by printer ID
 _active_external_streams: set[int] = set()
@@ -179,6 +186,38 @@ def _release_printer_frame_state(printer_id: int | None) -> None:
     _last_frames.pop(printer_id, None)
     _last_frame_times.pop(printer_id, None)
     _stream_start_times.pop(printer_id, None)
+    _snapshot_frames.pop(printer_id, None)
+    _snapshot_frame_times.pop(printer_id, None)
+
+
+def _snapshot_response(printer_id: int, image_data: bytes) -> Response:
+    return Response(
+        content=image_data,
+        media_type="image/jpeg",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Content-Disposition": f'inline; filename="snapshot_{printer_id}.jpg"',
+        },
+    )
+
+
+def _get_cached_snapshot(printer_id: int) -> bytes | None:
+    image_data = _snapshot_frames.get(printer_id)
+    if image_data is None:
+        return None
+
+    captured_at = _snapshot_frame_times.get(printer_id, 0.0)
+    if time.monotonic() - captured_at > _SNAPSHOT_CACHE_TTL_SECONDS:
+        _snapshot_frames.pop(printer_id, None)
+        _snapshot_frame_times.pop(printer_id, None)
+        return None
+
+    return image_data
+
+
+def _remember_snapshot(printer_id: int, image_data: bytes) -> None:
+    _snapshot_frames[printer_id] = image_data
+    _snapshot_frame_times[printer_id] = time.monotonic()
 
 
 def try_get_active_buffered_frame(printer_id: int) -> bytes | None:
@@ -1102,6 +1141,10 @@ async def camera_snapshot(
     if printer.external_camera_enabled and printer.external_camera_url:
         from backend.app.services.external_camera import capture_frame
 
+        cached = _get_cached_snapshot(printer_id)
+        if cached is not None:
+            return _snapshot_response(printer_id, cached)
+
         frame_data = await capture_frame(
             printer.external_camera_url,
             printer.external_camera_type,
@@ -1113,14 +1156,8 @@ async def camera_snapshot(
                 status_code=503,
                 detail="Failed to capture frame from external camera.",
             )
-        return Response(
-            content=frame_data,
-            media_type="image/jpeg",
-            headers={
-                "Cache-Control": "no-cache, no-store, must-revalidate",
-                "Content-Disposition": f'inline; filename="snapshot_{printer_id}.jpg"',
-            },
-        )
+        _remember_snapshot(printer_id, frame_data)
+        return _snapshot_response(printer_id, frame_data)
 
     # If a live fan-out stream is already running for this printer, reuse
     # the broadcaster's buffered frame instead of opening a competing RTSP
@@ -1131,14 +1168,11 @@ async def camera_snapshot(
     # Upstream Bambuddy #1271 / commit c097140e.
     buffered = try_get_active_buffered_frame(printer_id)
     if buffered is not None:
-        return Response(
-            content=buffered,
-            media_type="image/jpeg",
-            headers={
-                "Cache-Control": "no-cache, no-store, must-revalidate",
-                "Content-Disposition": f'inline; filename="snapshot_{printer_id}.jpg"',
-            },
-        )
+        return _snapshot_response(printer_id, buffered)
+
+    cached = _get_cached_snapshot(printer_id)
+    if cached is not None:
+        return _snapshot_response(printer_id, cached)
 
     # Create temporary file for the snapshot
     import os
@@ -1167,14 +1201,8 @@ async def camera_snapshot(
         with open(temp_path, "rb") as f:
             image_data = f.read()
 
-        return Response(
-            content=image_data,
-            media_type="image/jpeg",
-            headers={
-                "Cache-Control": "no-cache, no-store, must-revalidate",
-                "Content-Disposition": f'inline; filename="snapshot_{printer_id}.jpg"',
-            },
-        )
+        _remember_snapshot(printer_id, image_data)
+        return _snapshot_response(printer_id, image_data)
     finally:
         # Clean up temp file
         if temp_path.exists():
