@@ -2431,6 +2431,8 @@ export interface AppSettings {
   sensor_history_retention_days?: number;  // days to keep sensor measurement history
   plug_power_sample_seconds?: number;  // how often plugs that never report are read
   log_retention_days: number;  // days to keep historical bamdude-YYYY-MM-DD.log archives
+  slow_query_ms: number;  // log SQL statements slower than this (ms); 0 = off
+  slow_request_ms: number;  // log HTTP requests slower than this (ms); 0 = off
   // Queue auto-drying settings
   queue_drying_enabled: boolean;  // Auto-dry AMS between queued prints
   queue_drying_block: boolean;  // Block queue until drying completes

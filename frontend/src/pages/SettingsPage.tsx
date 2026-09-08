@@ -1251,6 +1251,8 @@ export function SettingsPage() {
       // user write) doesn't trigger an infinite save loop. Mirrors the
       // ``archive_3mf_retention_days`` pattern above.
       (baseline.log_retention_days ?? 7) !== (localSettings.log_retention_days ?? 7) ||
+      (baseline.slow_query_ms ?? 0) !== (localSettings.slow_query_ms ?? 0) ||
+      (baseline.slow_request_ms ?? 0) !== (localSettings.slow_request_ms ?? 0) ||
       baseline.disable_filament_warnings !== localSettings.disable_filament_warnings ||
       (baseline.prefer_lowest_filament ?? false) !== (localSettings.prefer_lowest_filament ?? false) ||
       (baseline.runout_zero_point_enabled ?? true) !== (localSettings.runout_zero_point_enabled ?? true) ||
@@ -1357,6 +1359,8 @@ export function SettingsPage() {
         ams_temp_fair: localSettings.ams_temp_fair,
         ams_history_retention_days: localSettings.ams_history_retention_days,
         log_retention_days: localSettings.log_retention_days,
+        slow_query_ms: localSettings.slow_query_ms,
+        slow_request_ms: localSettings.slow_request_ms,
         disable_filament_warnings: localSettings.disable_filament_warnings,
         prefer_lowest_filament: localSettings.prefer_lowest_filament,
         runout_zero_point_enabled: localSettings.runout_zero_point_enabled,
@@ -2914,6 +2918,59 @@ export function SettingsPage() {
                     className="w-20 px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
                   />
                   <span className="text-bambu-gray text-sm">{t('common.days')}</span>
+                </div>
+              </div>
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-white">{t('settings.slowQueryMs', 'Slow query log')}</p>
+                  <p className="text-sm text-bambu-gray">
+                    {t(
+                      'settings.slowQueryMsDescription',
+                      'Log a warning for any database statement slower than this. 0 turns it off. The log records the statement text only — never the values bound to it.',
+                    )}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <input
+                    type="number"
+                    min={0}
+                    max={60000}
+                    value={localSettings.slow_query_ms ?? 0}
+                    onChange={(e) => {
+                      // ⚠️ Never `parseInt(...) || 0` here: 0 is a meaningful
+                      // value (off), and `||` would swallow it the way it once
+                      // swallowed a stagger interval of 0.
+                      const parsed = parseInt(e.target.value, 10);
+                      updateSetting('slow_query_ms', Number.isNaN(parsed) ? 0 : Math.max(0, parsed));
+                    }}
+                    className="w-24 px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+                  />
+                  <span className="text-bambu-gray text-sm">{t('common.ms', 'ms')}</span>
+                </div>
+              </div>
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-white">{t('settings.slowRequestMs', 'Slow request log')}</p>
+                  <p className="text-sm text-bambu-gray">
+                    {t(
+                      'settings.slowRequestMsDescription',
+                      'Log a warning for any API request slower than this, with how many database statements it ran and how long they took. 0 turns it off.',
+                    )}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <input
+                    type="number"
+                    min={0}
+                    max={600000}
+                    value={localSettings.slow_request_ms ?? 0}
+                    onChange={(e) => {
+                      const parsed = parseInt(e.target.value, 10);
+                      updateSetting('slow_request_ms', Number.isNaN(parsed) ? 0 : Math.max(0, parsed));
+                    }}
+                    className="w-24 px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+                  />
+                  <span className="text-bambu-gray text-sm">{t('common.ms', 'ms')}</span>
                 </div>
               </div>
               <div className="pt-4 border-t border-bambu-dark-tertiary">
