@@ -338,7 +338,7 @@ describe('FileManagerModal', () => {
       }
     });
 
-    it('calls onClose when clicking outside the modal', () => {
+    it('does NOT close when the backdrop is clicked', () => {
       render(
         <FileManagerModal
           printerId={1}
@@ -347,12 +347,9 @@ describe('FileManagerModal', () => {
         />
       );
 
-      // Click on the backdrop
-      const backdrop = document.querySelector('.fixed.inset-0');
-      if (backdrop) {
-        fireEvent.click(backdrop);
-        expect(mockOnClose).toHaveBeenCalled();
-      }
+      const backdrop = screen.getByRole('dialog').parentElement as HTMLElement;
+      fireEvent.click(backdrop);
+      expect(mockOnClose).not.toHaveBeenCalled();
     });
 
     it('calls onClose when Escape key is pressed', () => {
