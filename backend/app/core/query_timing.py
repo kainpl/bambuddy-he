@@ -107,6 +107,32 @@ def current_timing() -> RequestTiming | None:
     return _timing_var.get()
 
 
+def log_slow_request(method: str, path: str, elapsed_ms: float, timing: RequestTiming, trace_id: str) -> bool:
+    """Log one request that ran over ``slow_request_ms``. Returns whether it did.
+
+    Lives here rather than in the middleware so that «slow query» and «slow
+    request» share a logger name and can be filtered and levelled together —
+    ``main.py`` forces ``sqlalchemy.engine`` to WARNING outside debug, and ours
+    stays ours.
+
+    ⚠️ The path only, never ``request.url.query``: a query string carries filter
+    values and, on the camera routes, a stream token.
+    """
+    threshold = _request_threshold_ms
+    if not threshold or elapsed_ms < threshold:
+        return False
+    logger.warning(
+        "slow request %.0fms %s %s (db %d queries, %.0fms) [%s]",
+        elapsed_ms,
+        method,
+        path,
+        timing.count,
+        timing.total_ms,
+        trace_id,
+    )
+    return True
+
+
 @dataclass
 class SlowStatement:
     statement: str

@@ -88,6 +88,7 @@ from backend.app.api.routes import (
 )
 from backend.app.api.routes.maintenance import _get_printer_maintenance_internal, ensure_default_types
 from backend.app.api.routes.support import init_debug_logging
+from backend.app.core import query_timing
 from backend.app.core.config import APP_VERSION, settings as app_settings
 from backend.app.core.database import async_session, engine, init_db
 from backend.app.core.tasks import spawn_background_task
@@ -9794,6 +9795,42 @@ async def trace_id_middleware(request, call_next):
         trace_id_var.reset(token)
 
     response.headers["X-Trace-Id"] = trace_id
+    return response
+
+
+@app.middleware("http")
+async def request_timing_middleware(request, call_next):
+    """Time every request and say how much of it was the database.
+
+    ⚠️ Decorated LAST, so it is the OUTERMOST layer — the only position that
+    measures auth_middleware's early 401/503 returns, and a 503 setup_required
+    storm is a real symptom. The cost of being outermost is that it runs outside
+    trace_id_middleware, so this record's own ``trace_id`` field is "-"; the
+    trace is read back from the response header instead.
+
+    The accumulator is set BEFORE call_next because BaseHTTPMiddleware runs the
+    inner app in a child task, which copies the context — see query_timing.
+
+    Both halves are off unless slow_request_ms is set; the Server-Timing header
+    is always sent, because it costs nothing and a browser's Network panel
+    renders it.
+    """
+    timing, token = query_timing.begin_request()
+    started = time.perf_counter()
+    try:
+        response = await call_next(request)
+    finally:
+        query_timing.end_request(token)
+    elapsed_ms = (time.perf_counter() - started) * 1000
+    response.headers["Server-Timing"] = f"db;dur={timing.total_ms:.1f}, total;dur={elapsed_ms:.1f}"
+
+    query_timing.log_slow_request(
+        request.method,
+        request.url.path,
+        elapsed_ms,
+        timing,
+        response.headers.get("X-Trace-Id", "-"),
+    )
     return response
 
 
