@@ -149,7 +149,7 @@ class LDAPProvisionRequest(BaseModel):
 
 class ChangePasswordRequest(BaseModel):
     current_password: str = Field(..., max_length=256)  # M-NEW-3: cap before pbkdf2
-    new_password: str = Field(..., min_length=8, max_length=256)
+    new_password: str = Field(..., min_length=MIN_PASSWORD_LENGTH, max_length=256)
 
     @field_validator("new_password")
     @classmethod
@@ -159,7 +159,7 @@ class ChangePasswordRequest(BaseModel):
 
 class SetupRequest(BaseModel):
     admin_username: str = Field(..., max_length=150)
-    admin_password: str = Field(..., min_length=8, max_length=256)
+    admin_password: str = Field(..., min_length=MIN_PASSWORD_LENGTH, max_length=256)
     admin_email: str | None = Field(default=None, max_length=254)
 
     @field_validator("admin_password")

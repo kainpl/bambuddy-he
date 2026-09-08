@@ -7541,7 +7541,7 @@ export function SettingsPage() {
                     setChangePasswordLoading(false);
                   }
                 }}
-                disabled={changePasswordLoading || !changePasswordData.currentPassword || !changePasswordData.newPassword || changePasswordData.newPassword !== changePasswordData.confirmPassword || changePasswordData.newPassword.length < 6}
+                disabled={changePasswordLoading || !changePasswordData.currentPassword || !changePasswordData.newPassword || changePasswordData.newPassword !== changePasswordData.confirmPassword || !isPasswordValid(changePasswordData.newPassword)}
               >
                 {changePasswordLoading ? (
                   <>
