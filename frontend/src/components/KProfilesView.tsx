@@ -25,6 +25,7 @@ import type { KProfile, KProfileCreate, KProfileDelete, Permission } from '../ap
 import { Card, CardContent } from './Card';
 import { Button } from './Button';
 import { Modal } from './Modal';
+import { isAnyModalOpen } from './modalStack';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 import { MAX_PA_K_VALUE, MIN_PA_K_VALUE, formatKForDisplay, isValidKValue } from '../utils/kValue';
@@ -988,6 +989,10 @@ export function KProfilesView() {
       }
       // Don't trigger when modal is open
       if (editingProfile || showAddModal || copyingProfile) {
+        return;
+      }
+      // Page shortcuts stay quiet under a modal — the stack owns Esc there.
+      if (isAnyModalOpen()) {
         return;
       }
 
