@@ -27,11 +27,7 @@ const NOT_YET_MIGRATED: string[] = [
   'components/KeyboardShortcutsModal.tsx',
   'components/Layout.tsx',
   'pages/ArchivesPage.tsx',
-  'pages/FileManagerPage.tsx',
-  'pages/LoginPage.tsx',
-  'pages/MakerworldPage.tsx',
   'pages/PrintersPage.tsx',
-  'pages/ProfilesPage.tsx',
   'pages/SettingsPage.tsx',
   'pages/StatsPage.tsx',
 ];

@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useMemo, useEffect, type DragEvent } from 'react';
+import { useState, useRef, useCallback, useId, useMemo, useEffect, type DragEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -62,6 +62,7 @@ import type {
 } from '../api/client';
 import { useLibraryScanProgress, type LibraryScanState } from '../hooks/useLibraryScanProgress';
 import { Button } from '../components/Button';
+import { Modal } from '../components/Modal';
 import { PaginationBar } from '../components/PaginationBar';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { LibraryPlateGalleryModal } from '../components/LibraryPlateGallery';
@@ -148,6 +149,7 @@ interface NewFolderModalProps {
 
 function NewFolderModal({ parentId, parentName, externalRedirected, onClose, onSave, isLoading, t }: NewFolderModalProps) {
   const [name, setName] = useState('');
+  const headingId = useId();
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -155,10 +157,12 @@ function NewFolderModal({ parentId, parentName, externalRedirected, onClose, onS
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-bambu-dark-secondary rounded-lg w-full max-w-sm border border-bambu-dark-tertiary">
-        <div className="p-4 border-b border-bambu-dark-tertiary">
-          <h2 className="text-lg font-semibold text-white">{t('fileManager.newFolder')}</h2>
+    <Modal
+      onClose={onClose}
+      labelledBy={headingId}
+      header={
+        <div className="min-w-0">
+          <h2 id={headingId} className="text-lg font-semibold text-white">{t('fileManager.newFolder')}</h2>
           <p className="text-xs text-bambu-gray mt-1">
             {t('fileManager.newFolderDestination', {
               destination: parentId !== null && parentName ? parentName : t('fileManager.allFiles'),
@@ -170,32 +174,34 @@ function NewFolderModal({ parentId, parentName, externalRedirected, onClose, onS
             </p>
           )}
         </div>
-        <form onSubmit={handleSubmit} className="p-4 space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-white mb-1">
-              {t('fileManager.folderName')}
-            </label>
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="w-full bg-bambu-dark border border-bambu-dark-tertiary rounded px-3 py-2 text-white placeholder-bambu-gray focus:outline-none focus:border-bambu-green"
-              placeholder={t('fileManager.folderNamePlaceholder')}
-              autoFocus
-              required
-            />
-          </div>
-          <div className="flex justify-end gap-2 pt-2">
-            <Button type="button" variant="secondary" onClick={onClose}>
-              {t('common.cancel')}
-            </Button>
-            <Button type="submit" disabled={!name.trim() || isLoading}>
-              {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : t('common.create')}
-            </Button>
-          </div>
-        </form>
-      </div>
-    </div>
+      }
+      size="sm"
+    >
+      <form onSubmit={handleSubmit} className="p-4 space-y-4">
+        <div>
+          <label className="block text-sm font-medium text-white mb-1">
+            {t('fileManager.folderName')}
+          </label>
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            className="w-full bg-bambu-dark border border-bambu-dark-tertiary rounded px-3 py-2 text-white placeholder-bambu-gray focus:outline-none focus:border-bambu-green"
+            placeholder={t('fileManager.folderNamePlaceholder')}
+            autoFocus
+            required
+          />
+        </div>
+        <div className="flex justify-end gap-2 pt-2">
+          <Button type="button" variant="secondary" onClick={onClose}>
+            {t('common.cancel')}
+          </Button>
+          <Button type="submit" disabled={!name.trim() || isLoading}>
+            {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : t('common.create')}
+          </Button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 
@@ -212,6 +218,7 @@ function ExternalFolderModal({ onClose, onSave, isLoading, t }: ExternalFolderMo
   const [path, setPath] = useState('');
   const [readonly, setReadonly] = useState(true);
   const [showHidden, setShowHidden] = useState(false);
+  const headingId = useId();
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -224,76 +231,80 @@ function ExternalFolderModal({ onClose, onSave, isLoading, t }: ExternalFolderMo
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-bambu-dark-secondary rounded-lg w-full max-w-md border border-bambu-dark-tertiary">
-        <div className="p-4 border-b border-bambu-dark-tertiary">
-          <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+    <Modal
+      onClose={onClose}
+      labelledBy={headingId}
+      header={
+        <div className="min-w-0">
+          <h2 id={headingId} className="text-lg font-semibold text-white flex items-center gap-2">
             <FolderSymlink className="w-5 h-5 text-bambu-green" />
             {t('fileManager.linkExternalFolder')}
           </h2>
           <p className="text-sm text-bambu-gray mt-1">{t('fileManager.linkExternalFolderDescription')}</p>
         </div>
-        <form onSubmit={handleSubmit} className="p-4 space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-white mb-1">
-              {t('fileManager.folderName')}
-            </label>
+      }
+      size="md"
+    >
+      <form onSubmit={handleSubmit} className="p-4 space-y-4">
+        <div>
+          <label className="block text-sm font-medium text-white mb-1">
+            {t('fileManager.folderName')}
+          </label>
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            className="w-full bg-bambu-dark border border-bambu-dark-tertiary rounded px-3 py-2 text-white placeholder-bambu-gray focus:outline-none focus:border-bambu-green"
+            placeholder={t('fileManager.externalFolderNamePlaceholder')}
+            autoFocus
+            required
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-white mb-1">
+            {t('fileManager.externalPath')}
+          </label>
+          <input
+            type="text"
+            value={path}
+            onChange={(e) => setPath(e.target.value)}
+            className="accent-bambu-green w-full bg-bambu-dark border border-bambu-dark-tertiary rounded px-3 py-2 text-white placeholder-bambu-gray focus:outline-none focus:border-bambu-green font-mono text-sm"
+            placeholder="/mnt/nas/3d-prints"
+            required
+          />
+          <p className="text-xs text-bambu-gray mt-1">{t('fileManager.externalPathHelp')}</p>
+        </div>
+        <div className="space-y-2">
+          <label className="flex items-center gap-2 cursor-pointer">
             <input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="w-full bg-bambu-dark border border-bambu-dark-tertiary rounded px-3 py-2 text-white placeholder-bambu-gray focus:outline-none focus:border-bambu-green"
-              placeholder={t('fileManager.externalFolderNamePlaceholder')}
-              autoFocus
-              required
+              type="checkbox"
+              checked={readonly}
+              onChange={(e) => setReadonly(e.target.checked)}
+              className="accent-bambu-green rounded border-bambu-dark-tertiary bg-bambu-dark text-bambu-green focus:ring-bambu-green"
             />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-white mb-1">
-              {t('fileManager.externalPath')}
-            </label>
+            <span className="text-sm text-white">{t('fileManager.readOnly')}</span>
+            <span className="text-xs text-bambu-gray">({t('fileManager.readOnlyHelp')})</span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer">
             <input
-              type="text"
-              value={path}
-              onChange={(e) => setPath(e.target.value)}
-              className="accent-bambu-green w-full bg-bambu-dark border border-bambu-dark-tertiary rounded px-3 py-2 text-white placeholder-bambu-gray focus:outline-none focus:border-bambu-green font-mono text-sm"
-              placeholder="/mnt/nas/3d-prints"
-              required
+              type="checkbox"
+              checked={showHidden}
+              onChange={(e) => setShowHidden(e.target.checked)}
+              className="accent-bambu-green rounded border-bambu-dark-tertiary bg-bambu-dark text-bambu-green focus:ring-bambu-green"
             />
-            <p className="text-xs text-bambu-gray mt-1">{t('fileManager.externalPathHelp')}</p>
-          </div>
-          <div className="space-y-2">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={readonly}
-                onChange={(e) => setReadonly(e.target.checked)}
-                className="accent-bambu-green rounded border-bambu-dark-tertiary bg-bambu-dark text-bambu-green focus:ring-bambu-green"
-              />
-              <span className="text-sm text-white">{t('fileManager.readOnly')}</span>
-              <span className="text-xs text-bambu-gray">({t('fileManager.readOnlyHelp')})</span>
-            </label>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={showHidden}
-                onChange={(e) => setShowHidden(e.target.checked)}
-                className="accent-bambu-green rounded border-bambu-dark-tertiary bg-bambu-dark text-bambu-green focus:ring-bambu-green"
-              />
-              <span className="text-sm text-white">{t('fileManager.showHiddenFiles')}</span>
-            </label>
-          </div>
-          <div className="flex justify-end gap-2 pt-2">
-            <Button type="button" variant="secondary" onClick={onClose}>
-              {t('common.cancel')}
-            </Button>
-            <Button type="submit" disabled={!name.trim() || !path.trim() || isLoading}>
-              {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : t('fileManager.linkFolder')}
-            </Button>
-          </div>
-        </form>
-      </div>
-    </div>
+            <span className="text-sm text-white">{t('fileManager.showHiddenFiles')}</span>
+          </label>
+        </div>
+        <div className="flex justify-end gap-2 pt-2">
+          <Button type="button" variant="secondary" onClick={onClose}>
+            {t('common.cancel')}
+          </Button>
+          <Button type="submit" disabled={!name.trim() || !path.trim() || isLoading}>
+            {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : t('fileManager.linkFolder')}
+          </Button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 
@@ -334,46 +345,45 @@ function RenameModal({ type, currentName, onClose, onSave, isLoading, t }: Renam
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-bambu-dark-secondary rounded-lg w-full max-w-sm border border-bambu-dark-tertiary">
-        <div className="p-4 border-b border-bambu-dark-tertiary">
-          <h2 className="text-lg font-semibold text-white">{type === 'file' ? t('fileManager.renameFile') : t('fileManager.renameFolder')}</h2>
-        </div>
-        <form onSubmit={handleSubmit} className="p-4 space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-white mb-1">
-              {t('common.name')}
-            </label>
-            <div className="flex items-center bg-bambu-dark border border-bambu-dark-tertiary rounded focus-within:border-bambu-green">
-              <input
-                type="text"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                className="flex-1 bg-transparent px-3 py-2 text-white placeholder-bambu-gray focus:outline-none min-w-0"
-                autoFocus
-                required
-              />
-              {fileExtension && (
-                <span className="pr-3 text-bambu-gray text-sm select-none whitespace-nowrap">{fileExtension}</span>
-              )}
-            </div>
-            {invalidChar && (
-              <p className="mt-1 text-sm text-red-700 dark:text-red-400">
-                {t('fileManager.invalidFilenameChar', { char: invalidChar })}
-              </p>
+    <Modal
+      onClose={onClose}
+      title={type === 'file' ? t('fileManager.renameFile') : t('fileManager.renameFolder')}
+      size="sm"
+    >
+      <form onSubmit={handleSubmit} className="p-4 space-y-4">
+        <div>
+          <label className="block text-sm font-medium text-white mb-1">
+            {t('common.name')}
+          </label>
+          <div className="flex items-center bg-bambu-dark border border-bambu-dark-tertiary rounded focus-within:border-bambu-green">
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className="flex-1 bg-transparent px-3 py-2 text-white placeholder-bambu-gray focus:outline-none min-w-0"
+              autoFocus
+              required
+            />
+            {fileExtension && (
+              <span className="pr-3 text-bambu-gray text-sm select-none whitespace-nowrap">{fileExtension}</span>
             )}
           </div>
-          <div className="flex justify-end gap-2 pt-2">
-            <Button type="button" variant="secondary" onClick={onClose}>
-              {t('common.cancel')}
-            </Button>
-            <Button type="submit" disabled={!name.trim() || name.trim() === baseName || isLoading || !!invalidChar}>
-              {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : t('common.rename')}
-            </Button>
-          </div>
-        </form>
-      </div>
-    </div>
+          {invalidChar && (
+            <p className="mt-1 text-sm text-red-700 dark:text-red-400">
+              {t('fileManager.invalidFilenameChar', { char: invalidChar })}
+            </p>
+          )}
+        </div>
+        <div className="flex justify-end gap-2 pt-2">
+          <Button type="button" variant="secondary" onClick={onClose}>
+            {t('common.cancel')}
+          </Button>
+          <Button type="submit" disabled={!name.trim() || name.trim() === baseName || isLoading || !!invalidChar}>
+            {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : t('common.rename')}
+          </Button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 
@@ -392,31 +402,30 @@ function MoveFilesModal({ folders, selectedFiles, currentFolderId, onClose, onMo
   const [targetFolder, setTargetFolder] = useState<number | null>(null);
 
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-bambu-dark-secondary rounded-lg w-full max-w-sm border border-bambu-dark-tertiary">
-        <div className="p-4 border-b border-bambu-dark-tertiary">
-          <h2 className="text-lg font-semibold text-white">{t('fileManager.moveFiles', { count: selectedFiles.length })}</h2>
-        </div>
-        <div className="p-4 space-y-4">
-          <FolderTreePicker
-            folders={folders}
-            value={targetFolder}
-            onChange={setTargetFolder}
-            rootLabel={t('fileManager.rootNoFolder')}
-            disabledId={currentFolderId}
-            disabledLabel={t('fileManager.current')}
-          />
-          <div className="flex justify-end gap-2 pt-2">
-            <Button type="button" variant="secondary" onClick={onClose}>
-              {t('common.cancel')}
-            </Button>
-            <Button onClick={() => onMove(targetFolder)} disabled={isLoading}>
-              {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : t('common.move')}
-            </Button>
-          </div>
+    <Modal
+      onClose={onClose}
+      title={t('fileManager.moveFiles', { count: selectedFiles.length })}
+      size="sm"
+    >
+      <div className="p-4 space-y-4">
+        <FolderTreePicker
+          folders={folders}
+          value={targetFolder}
+          onChange={setTargetFolder}
+          rootLabel={t('fileManager.rootNoFolder')}
+          disabledId={currentFolderId}
+          disabledLabel={t('fileManager.current')}
+        />
+        <div className="flex justify-end gap-2 pt-2">
+          <Button type="button" variant="secondary" onClick={onClose}>
+            {t('common.cancel')}
+          </Button>
+          <Button onClick={() => onMove(targetFolder)} disabled={isLoading}>
+            {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : t('common.move')}
+          </Button>
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -530,6 +539,7 @@ function FolderTreeItem({ folder, selectedFolderId, onSelect, onDelete, onLink, 
             </button>
             {showActions && (
               <>
+                {/* not-a-modal: menu */}
                 <div className="fixed inset-0 z-10" onClick={() => setShowActions(false)} />
                 <div className="absolute right-0 top-full mt-1 z-20 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg shadow-xl py-1 min-w-[120px]">
                 <button
@@ -728,6 +738,7 @@ function FileListActions({ file, t, hasPermission, canModify, onPrint, onSchedul
       </button>
       {open && createPortal(
         <>
+          {/* not-a-modal: menu */}
           <div className="fixed inset-0 z-[55]" onClick={() => setOpen(false)} />
           <div
             style={{
@@ -1143,6 +1154,7 @@ function FileCard({ file, isSelected, isMobile, onSelect, onOpenArchives, onDele
         </button>
         {showActions && createPortal(
           <>
+            {/* not-a-modal: menu */}
             <div className="fixed inset-0 z-[55]" onClick={() => setShowActions(false)} />
             <div
               style={{
