@@ -14,6 +14,7 @@ vi.mock('../../api/client', () => ({
   getAuthToken: vi.fn(() => 'test-admin-token'),
   api: {
     getSystemInfo: vi.fn(),
+    getDatabaseHealth: vi.fn(),
     getSettings: vi.fn().mockResolvedValue({}),
     updateSettings: vi.fn().mockResolvedValue({}),
     // Defaults to disabled so the existing tests see the page they always saw:
@@ -33,6 +34,44 @@ vi.mock('../../api/client', () => ({
     downloadSupportBundle: vi.fn().mockResolvedValue(undefined),
   },
 }));
+
+/** GET /system/database — a healthy bundled PostgreSQL with one slow query. */
+const mockDbHealth = {
+  engine: 'PostgreSQL',
+  version: '18.6',
+  mode: 'embedded' as const,
+  size_bytes: 734_003_200,
+  pool: {
+    dialect: 'postgresql',
+    config: {},
+    current_size: 20,
+    checked_out: 3,
+    checked_in: 17,
+    overflow: 0,
+  },
+  instrumentation: {
+    query_threshold_ms: 500,
+    request_threshold_ms: 3000,
+    source: 'pg_stat_statements' as const,
+    reason: null,
+    slowest: [
+      { statement: 'SELECT * FROM print_archives WHERE printer_id = $1', count: 42, total_ms: 51_200, mean_ms: 1219 },
+    ],
+  },
+  sqlite: null,
+  postgres: {
+    connections: { used: 12, max: 200 },
+    cache_hit_ratio: 0.9932,
+    commits: 100,
+    rollbacks: 1,
+    deadlocks: 0,
+    temp_files: 0,
+    temp_bytes: 0,
+  },
+  largest_tables: null,
+  scans: null,
+  probes_failed: [],
+};
 
 // Mock system info response
 const mockSystemInfo = {
@@ -346,6 +385,7 @@ describe('SystemInfoPage Zigbee diagnostics', () => {
    */
   beforeEach(() => {
     vi.mocked(api.getSystemInfo).mockResolvedValue(mockSystemInfo as never);
+    vi.mocked(api.getDatabaseHealth).mockResolvedValue(mockDbHealth);
   });
 
   it('shows the radio identity when the coordinator is up', async () => {
@@ -400,5 +440,51 @@ describe('SystemInfoPage Zigbee diagnostics', () => {
     // install does not use.
     await screen.findByText(/0\.1\.5b/);
     expect(screen.queryByText(/zigbee/i)).not.toBeInTheDocument();
+  });
+
+  describe('database health', () => {
+    it('shows the engine, the mode and the pool', async () => {
+      render(<SystemInfoPage />);
+
+      expect(await screen.findByText('PostgreSQL 18.6')).toBeInTheDocument();
+      // ⚠️ The mode is not the dialect: DATABASE_URL=embedded reaches the engine
+      // as a postgresql:// URL, so this line is the only place the difference
+      // between "BamDude runs it" and "somebody else does" is visible.
+      expect(screen.getByText(/run by BamDude/i)).toBeInTheDocument();
+      expect(screen.getByText('3 / 20')).toBeInTheDocument();
+      expect(screen.getByText('99.3%')).toBeInTheDocument();
+    });
+
+    it('lists the slowest statements', async () => {
+      render(<SystemInfoPage />);
+      expect(
+        await screen.findByText('SELECT * FROM print_archives WHERE printer_id = $1'),
+      ).toBeInTheDocument();
+    });
+
+    it('says instrumentation is off instead of showing an empty table', async () => {
+      vi.mocked(api.getDatabaseHealth).mockResolvedValue({
+        ...mockDbHealth,
+        instrumentation: {
+          query_threshold_ms: 0,
+          request_threshold_ms: 0,
+          source: 'in_process' as const,
+          reason: 'Slow-query logging is off. Set slow_query_ms in Settings to start collecting.',
+          slowest: [],
+        },
+      });
+      render(<SystemInfoPage />);
+      expect(await screen.findByText(/slow_query_ms/)).toBeInTheDocument();
+    });
+
+    it('names the probes that could not be read', async () => {
+      vi.mocked(api.getDatabaseHealth).mockResolvedValue({
+        ...mockDbHealth,
+        size_bytes: null,
+        probes_failed: ['size_bytes'],
+      });
+      render(<SystemInfoPage />);
+      expect(await screen.findByText(/size_bytes/)).toBeInTheDocument();
+    });
   });
 });

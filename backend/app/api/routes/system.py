@@ -24,6 +24,8 @@ from backend.app.models.project import Project
 from backend.app.models.smart_plug import SmartPlug
 from backend.app.models.spool import Spool
 from backend.app.models.user import User
+from backend.app.schemas.system import DbHealth
+from backend.app.services import db_health
 from backend.app.services.log_health import ScanResult, scan_logs
 from backend.app.services.log_reader import collect_sensitive_strings
 from backend.app.services.printer_manager import printer_manager
@@ -593,6 +595,21 @@ async def get_system_health(
     """
     sensitive_strings = await collect_sensitive_strings(db)
     return await asyncio.to_thread(scan_logs, sensitive_strings=sensitive_strings)
+
+
+@router.get("/database", response_model=DbHealth)
+async def get_database_health(
+    db: AsyncSession = Depends(get_db),
+    _: User | None = RequirePermission(Permission.SYSTEM_READ),
+):
+    """What the database can say about itself, on either backend.
+
+    Separate from ``/system/info`` because that one is polled every 30 s by a
+    page that also wants disk and CPU, while this is heavier, dialect-branched
+    and interesting at a slower cadence. Reuses ``SYSTEM_READ``, so it needs no
+    new permission, no API-key scope edit and no migration.
+    """
+    return await db_health.collect(db)
 
 
 @router.get("/db-pool")

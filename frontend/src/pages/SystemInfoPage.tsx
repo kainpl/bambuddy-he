@@ -5,6 +5,7 @@ import {
   Server,
   Database,
   Radio,
+  Activity,
   HardDrive,
   Cpu,
   MemoryStick,
@@ -120,6 +121,14 @@ export function SystemInfoPage() {
     queryKey: ['systemInfo'],
     queryFn: api.getSystemInfo,
     refetchInterval: 30000, // Auto-refresh every 30 seconds
+  });
+
+  // ⚠️ Slower cadence than /system/info on purpose: this one is dialect-branched
+  // and heavier, and its numbers do not move between two 30-second ticks.
+  const { data: dbHealth } = useQuery({
+    queryKey: ['system-database'],
+    queryFn: api.getDatabaseHealth,
+    refetchInterval: 60000,
   });
 
   const { data: debugLoggingState } = useQuery({
@@ -658,6 +667,109 @@ export function SystemInfoPage() {
           />
         </div>
       </Section>
+
+      {/* Database health — engine, mode, pool and the slowest statements.
+          This is also the first UI for GET /system/db-pool, which has existed
+          since #2572 with no client function at all; collect() already carries
+          the pool, so it is rendered here rather than fetched twice. */}
+      {dbHealth && (
+        <Section title={t('system.databaseHealth', 'Database health')} icon={Activity}>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <StatCard
+              icon={Database}
+              label={t('system.databaseEngine', 'Database Engine')}
+              value={dbHealth.version ? `${dbHealth.engine} ${dbHealth.version}` : dbHealth.engine}
+              subValue={t(`system.dbMode.${dbHealth.mode}`, dbHealth.mode)}
+            />
+            {dbHealth.size_bytes !== null && (
+              <StatCard
+                icon={HardDrive}
+                label={t('system.databaseSize', 'Database size')}
+                value={formatBytes(dbHealth.size_bytes)}
+              />
+            )}
+            {dbHealth.pool && (
+              <StatCard
+                icon={Plug}
+                label={t('system.connectionPool', 'Connection pool')}
+                value={`${dbHealth.pool.checked_out ?? 0} / ${dbHealth.pool.current_size ?? 0}`}
+                subValue={t('system.poolOverflow', '{{n}} overflow', { n: dbHealth.pool.overflow ?? 0 })}
+              />
+            )}
+            {dbHealth.postgres && (
+              <StatCard
+                icon={Activity}
+                label={t('system.cacheHitRatio', 'Cache hit ratio')}
+                value={
+                  dbHealth.postgres.cache_hit_ratio === null
+                    ? '—'
+                    : `${(dbHealth.postgres.cache_hit_ratio * 100).toFixed(1)}%`
+                }
+                subValue={t('system.deadlocks', '{{n}} deadlocks', { n: dbHealth.postgres.deadlocks })}
+                color={
+                  dbHealth.postgres.cache_hit_ratio !== null && dbHealth.postgres.cache_hit_ratio < 0.9
+                    ? 'text-yellow-500'
+                    : 'text-bambu-green'
+                }
+              />
+            )}
+            {dbHealth.sqlite && (
+              <StatCard
+                icon={Activity}
+                label={t('system.journalMode', 'Journal mode')}
+                value={dbHealth.sqlite.journal_mode ?? '—'}
+                subValue={t('system.walSize', 'WAL {{size}}', {
+                  size: formatBytes(dbHealth.sqlite.wal_bytes ?? 0),
+                })}
+              />
+            )}
+          </div>
+
+          <div className="mt-4">
+            <h3 className="text-sm font-medium text-bambu-gray mb-2">
+              {t('system.slowestStatements', 'Slowest statements')}
+            </h3>
+            {dbHealth.instrumentation.slowest.length > 0 ? (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-bambu-gray text-xs">
+                      <th className="text-left font-medium py-1">{t('system.statement', 'Statement')}</th>
+                      <th className="text-right font-medium py-1">{t('system.calls', 'Calls')}</th>
+                      <th className="text-right font-medium py-1">{t('system.totalMs', 'Total')}</th>
+                      <th className="text-right font-medium py-1">{t('system.meanMs', 'Mean')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {dbHealth.instrumentation.slowest.map((row, i) => (
+                      <tr key={i} className="border-t border-bambu-dark-tertiary">
+                        <td className="py-1 pr-3 font-mono text-xs text-white break-all">{row.statement}</td>
+                        <td className="py-1 text-right text-bambu-gray tabular-nums">{row.count}</td>
+                        <td className="py-1 text-right text-bambu-gray tabular-nums">{Math.round(row.total_ms)} ms</td>
+                        <td className="py-1 text-right text-bambu-gray tabular-nums">{Math.round(row.mean_ms)} ms</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              /* Never an empty table on its own: that would read as "no slow
+                 queries" rather than "nobody was counting". */
+              <p className="text-sm text-bambu-gray">
+                {dbHealth.instrumentation.reason ?? t('system.noSlowStatements', 'Nothing over the threshold yet.')}
+              </p>
+            )}
+          </div>
+
+          {dbHealth.probes_failed.length > 0 && (
+            <p className="mt-3 text-xs text-bambu-gray">
+              {t('system.probesFailed', 'Could not read: {{list}}', {
+                list: dbHealth.probes_failed.join(', '),
+              })}
+            </p>
+          )}
+        </Section>
+      )}
 
       {/* Connected Printers */}
       <Section title={t('system.connectedPrinters', 'Connected Printers')} icon={Printer}>

@@ -10306,6 +10306,7 @@ export const api = {
   },
 
   // System Info
+  getDatabaseHealth: () => request<DbHealth>('/system/database'),
   getSystemInfo: () => request<SystemInfo>('/system/info'),
   getSystemHealth: () => request<SystemHealthResult>('/system/health'),
   getStorageUsage: (options?: { refresh?: boolean }) => {
@@ -11097,6 +11098,76 @@ export interface AMSHistoryResponse {
 }
 
 // System Info types
+/**
+ * GET /system/database — what the database can say about itself.
+ *
+ * ⚠️ `mode` is not the dialect: `DATABASE_URL=embedded` reaches the engine as a
+ * PostgreSQL URL, so "BamDude runs this server" / "a Windows service runs it" /
+ * "somebody else's server" can only come from the backend's own settings.
+ *
+ * Every field is nullable because every probe is guarded on its own; the ones
+ * that failed are named in `probes_failed` rather than silently reading as
+ * "no data".
+ */
+export interface DbPoolStatus {
+  dialect: string | null;
+  config: Record<string, unknown> | null;
+  current_size: number | null;
+  checked_out: number | null;
+  checked_in: number | null;
+  overflow: number | null;
+}
+
+export interface DbSlowStatement {
+  statement: string;
+  count: number;
+  total_ms: number;
+  mean_ms: number;
+}
+
+export interface DbInstrumentation {
+  query_threshold_ms: number;
+  request_threshold_ms: number;
+  source: 'pg_stat_statements' | 'in_process';
+  reason: string | null;
+  slowest: DbSlowStatement[];
+}
+
+export interface DbSqliteHealth {
+  journal_mode: string | null;
+  page_size: number | null;
+  page_count: number | null;
+  freelist_count: number | null;
+  busy_timeout_ms: number | null;
+  cache_size: number | null;
+  wal_bytes: number | null;
+  shm_bytes: number | null;
+}
+
+export interface DbPostgresHealth {
+  connections: { used: number; max: number };
+  cache_hit_ratio: number | null;
+  commits: number;
+  rollbacks: number;
+  deadlocks: number;
+  temp_files: number;
+  temp_bytes: number;
+}
+
+export interface DbHealth {
+  engine: string;
+  version: string | null;
+  mode: 'sqlite' | 'embedded' | 'embedded_service' | 'external';
+  size_bytes: number | null;
+  pool: DbPoolStatus | null;
+  instrumentation: DbInstrumentation;
+  sqlite: DbSqliteHealth | null;
+  postgres: DbPostgresHealth | null;
+  largest_tables: { table: string; bytes: number; rows: number }[] | null;
+  scans: { table: string; seq_scan: number; idx_scan: number }[] | null;
+  probes_failed: string[];
+}
+
 export interface SystemInfo {
   app: {
     version: string;

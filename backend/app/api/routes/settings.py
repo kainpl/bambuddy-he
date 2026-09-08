@@ -1076,30 +1076,55 @@ async def restore_backup(
 async def optimize_database(
     _: User | None = RequirePermission(Permission.SETTINGS_BACKUP),
 ):
-    """Optimize the SQLite database: ANALYZE + WAL checkpoint + VACUUM."""
+    """Run the maintenance the active backend actually supports.
+
+    ⚠️ This used to run ANALYZE, then ``PRAGMA wal_checkpoint(TRUNCATE)``, then
+    VACUUM with no dialect branch — so on **PostgreSQL the PRAGMA is a syntax
+    error** and the button had never done anything but return a failure there.
+    It also derived a file path by stripping the SQLite URL prefix, which on any
+    other URL produces nonsense.
+
+    On PostgreSQL only ANALYZE is run: VACUUM cannot execute inside a
+    transaction block, and reclaiming space is autovacuum's job. On SQLite all
+    three still run — measured 2026-09-08, they do work through the async
+    engine.
+    """
     from sqlalchemy import text
 
     from backend.app.core.database import engine
+    from backend.app.core.db_dialect import is_postgres
+    from backend.app.services import db_health
 
+    postgres = is_postgres()
     try:
         async with engine.connect() as conn:
-            # Update query planner statistics
+            # Update query planner statistics — valid on both backends.
             await conn.execute(text("ANALYZE"))
-            # Flush WAL journal to main database file
-            await conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
-            # Rebuild and compact database (defragmentation)
-            await conn.execute(text("VACUUM"))
+            if not postgres:
+                # Flush WAL journal to main database file
+                await conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
+                # Rebuild and compact database (defragmentation)
+                await conn.execute(text("VACUUM"))
             await conn.commit()
 
-        # Get database file size after optimization
-        db_path = Path(app_settings.database_url.replace("sqlite+aiosqlite:///", ""))
-        db_size = db_path.stat().st_size if db_path.exists() else 0
-        wal_path = Path(str(db_path) + "-wal")
-        wal_size = wal_path.stat().st_size if wal_path.exists() else 0
+            # Sizes off the SAME connection: opening a second session here
+            # would be one more thing that can fail after the work succeeded.
+            if postgres:
+                db_size = int((await conn.execute(text("SELECT pg_database_size(current_database())"))).scalar() or 0)
+                wal_size = 0
+            else:
+                main, wal, shm = db_health._sqlite_files()
+                db_size = sum(db_health._size_of(p) for p in (main, wal, shm))
+                wal_size = db_health._size_of(wal)
 
         return {
             "success": True,
-            "message": "Database optimized successfully",
+            "mode": "postgresql" if postgres else "sqlite",
+            "message": (
+                "Statistics updated (ANALYZE). PostgreSQL reclaims space with autovacuum."
+                if postgres
+                else "Database optimized successfully"
+            ),
             "db_size": db_size,
             "wal_size": wal_size,
         }
