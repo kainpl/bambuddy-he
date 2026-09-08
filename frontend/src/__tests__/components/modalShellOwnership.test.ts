@@ -10,24 +10,15 @@
  *    menu, popover, drawer, loading or viewer overlay may have one, and it says
  *    so on the line above: `// not-a-modal: menu` (or `{/* not-a-modal: menu *\/}`).
  *
- * `NOT_YET_MIGRATED` is the migration's allowlist. It shrinks to [] and is then
- * deleted; a file that no longer trips a rule but is still listed FAILS, so a
- * finished file cannot linger here.
+ * Migration finished 2026-09 — there is no allowlist; a new offender is a new bug.
  */
 import { describe, it, expect } from 'vitest';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 
 const SRC = join(process.cwd(), 'src');
 const SHELL = 'components/Modal.tsx';
 const MARKER = /(\/\/|\{\/\*)\s*not-a-modal:\s*(menu|popover|drawer|loading|viewer)\b/;
-
-/** Files still on hand-rolled overlays. Remove a file the moment it is migrated. */
-const NOT_YET_MIGRATED: string[] = [
-  'pages/ArchivesPage.tsx',
-  'pages/SettingsPage.tsx',
-  'pages/StatsPage.tsx',
-];
 
 function walk(dir: string, out: string[] = []): string[] {
   for (const d of readdirSync(dir, { withFileTypes: true })) {
@@ -113,12 +104,7 @@ describe('modal shell ownership', () => {
   const byFile = new Map(files.map((f) => [f, offenders(f, readFileSync(join(SRC, f), 'utf8'))]));
 
   it('every full-screen overlay outside the shell is a <Modal>, or is marked as not a modal', () => {
-    const bad = files.filter((f) => !NOT_YET_MIGRATED.includes(f)).flatMap((f) => byFile.get(f) ?? []);
+    const bad = files.flatMap((f) => byFile.get(f) ?? []);
     expect(bad).toEqual([]);
-  });
-
-  it('NOT_YET_MIGRATED lists only files that still need migrating', () => {
-    const stale = NOT_YET_MIGRATED.filter((f) => !existsSync(join(SRC, f)) || (byFile.get(f) ?? []).length === 0);
-    expect(stale).toEqual([]);
   });
 });

@@ -13,6 +13,7 @@ import { Card, CardContent, CardHeader } from '../components/Card';
 import { LoadingBlock } from '../components/LoadingBlock';
 import { CopyButton } from '../components/CopyButton';
 import { Button } from '../components/Button';
+import { Modal } from '../components/Modal';
 import { LdapUserPicker } from '../components/LdapUserPicker';
 import { ZigbeeCoordinatorCard } from '../components/zigbee/ZigbeeCoordinatorCard';
 import { SensorsSection } from '../components/zigbee/SensorsSection';
@@ -51,7 +52,7 @@ import { defaultNavItems, getDefaultView, setDefaultView } from '../components/L
 import { availableLanguages } from '../i18n';
 import { useToast } from '../contexts/ToastContext';
 import { useTheme, type ThemeStyle, type DarkBackground, type LightBackground, type ThemeAccent } from '../contexts/ThemeContext';
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useId, useRef, useCallback, useMemo } from 'react';
 import { Palette, Search, Settings } from 'lucide-react';
 import { registerSettingsSearch, getSettingsSearchEntries } from '../lib/settingsSearch';
 import { SlicerHealthIndicator } from '../components/SlicerHealthIndicator';
@@ -256,6 +257,8 @@ export function SettingsPage() {
     setLightStyle, setLightBackground, setLightAccent,
     setProgressInTitle,
   } = useTheme();
+  const releaseNotesHeadingId = useId();
+  const macroHeadingId = useId();
   const [localSettings, setLocalSettings] = useState<AppSettings | null>(null);
   // Transient typed strings for the per-filament humidity threshold inputs
   // (#1605). Committed back to localSettings.ams_humidity_thresholds on blur so
@@ -4434,8 +4437,13 @@ export function SettingsPage() {
 
       {/* Home Assistant Test Connection Modal */}
       {haTestResult && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-bambu-dark-secondary rounded-lg p-6 max-w-md w-full mx-4">
+        <Modal
+          onClose={() => setHaTestResult(null)}
+          hideClose
+          ariaLabel={haTestResult.success ? t('settings.connectionSuccessful') : t('settings.connectionFailed')}
+          size="md"
+        >
+          <div className="p-6">
             <div className="flex items-center gap-3 mb-4">
               {haTestResult.success ? (
                 <CheckCircle className="w-8 h-8 text-green-600 dark:text-green-400" />
@@ -4460,7 +4468,7 @@ export function SettingsPage() {
               </Button>
             </div>
           </div>
-        </div>
+        </Modal>
       )}
 
       {/* ══════ SMART PLUGS TAB ══════ */}
@@ -6143,55 +6151,48 @@ export function SettingsPage() {
 
       {/* Release Notes Modal */}
       {showReleaseNotes && updateCheck?.release_notes && (
-        <div
-          className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
-          onClick={() => setShowReleaseNotes(false)}
-        >
-          <Card className="w-full max-w-2xl max-h-[80vh] flex flex-col" onClick={(e: React.MouseEvent) => e.stopPropagation()}>
-            <CardHeader className="flex flex-row items-center justify-between shrink-0">
-              <div>
-                <h2 className="text-lg font-semibold text-white">
-                  Release Notes - v{updateCheck.latest_version}
-                </h2>
-                {updateCheck.release_name && updateCheck.release_name !== updateCheck.latest_version && (
-                  <p className="text-sm text-bambu-gray">{updateCheck.release_name}</p>
-                )}
-              </div>
-              <button
-                onClick={() => setShowReleaseNotes(false)}
-                className="p-1 rounded hover:bg-bambu-dark-tertiary text-bambu-gray hover:text-white"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </CardHeader>
-            <CardContent className="overflow-y-auto flex-1">
-              <pre className="text-sm text-bambu-gray whitespace-pre-wrap font-sans">
-                {updateCheck.release_notes}
-              </pre>
-            </CardContent>
-            <div className="p-4 border-t border-bambu-dark-tertiary shrink-0 flex gap-2">
-              {updateCheck.release_url && (
-                <a
-                  href={updateCheck.release_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex-1"
-                >
-                  <Button variant="secondary" className="w-full">
-                    <ExternalLink className="w-4 h-4" />
-                    View on GitHub
-                  </Button>
-                </a>
+        <Modal
+          onClose={() => setShowReleaseNotes(false)}
+          labelledBy={releaseNotesHeadingId}
+          header={
+            <div className="min-w-0">
+              <h2 id={releaseNotesHeadingId} className="text-lg font-semibold text-white">
+                Release Notes - v{updateCheck.latest_version}
+              </h2>
+              {updateCheck.release_name && updateCheck.release_name !== updateCheck.latest_version && (
+                <p className="text-sm text-bambu-gray">{updateCheck.release_name}</p>
               )}
-              <Button
-                onClick={() => setShowReleaseNotes(false)}
+            </div>
+          }
+          size="2xl"
+        >
+          <CardContent className="overflow-y-auto flex-1">
+            <pre className="text-sm text-bambu-gray whitespace-pre-wrap font-sans">
+              {updateCheck.release_notes}
+            </pre>
+          </CardContent>
+          <div className="p-4 border-t border-bambu-dark-tertiary shrink-0 flex gap-2">
+            {updateCheck.release_url && (
+              <a
+                href={updateCheck.release_url}
+                target="_blank"
+                rel="noopener noreferrer"
                 className="flex-1"
               >
-                Close
-              </Button>
-            </div>
-          </Card>
-        </div>
+                <Button variant="secondary" className="w-full">
+                  <ExternalLink className="w-4 h-4" />
+                  View on GitHub
+                </Button>
+              </a>
+            )}
+            <Button
+              onClick={() => setShowReleaseNotes(false)}
+              className="flex-1"
+            >
+              Close
+            </Button>
+          </div>
+        </Modal>
       )}
 
       {/* ══════ FAILURE DETECTION TAB (Obico AI, §19) ══════ */}
@@ -6678,179 +6679,158 @@ export function SettingsPage() {
 
       {/* Create User Modal */}
       {showCreateUserModal && !advancedAuthStatus?.advanced_auth_enabled && (
-        <div
-          className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
-          onClick={() => {
+        <Modal
+          onClose={() => {
             setShowCreateUserModal(false);
             setUserFormData({ username: '', password: '', email: '', confirmPassword: '', role: 'user', group_ids: [] });
           }}
+          title={t('settings.createUser')}
+          icon={<Users className="w-5 h-5 text-bambu-green" />}
+          size="md"
         >
-          <Card
-            className="w-full max-w-md"
-            onClick={(e: React.MouseEvent) => e.stopPropagation()}
-          >
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Users className="w-5 h-5 text-bambu-green" />
-                  <h2 className="text-lg font-semibold text-white">{t('settings.createUser')}</h2>
-                </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    setShowCreateUserModal(false);
-                    setUserFormData({ username: '', password: '', email: '', confirmPassword: '', role: 'user', group_ids: [] });
-                  }}
+          <CardContent>
+            {/* Local / LDAP tab toggle — only when LDAP is enabled.
+                Upstream Bambuddy #1298. When LDAP tab is active the rest
+                of the local-create form is hidden and replaced by the
+                directory picker; the picker calls our onSuccess handler
+                to close the modal + invalidate the users query. */}
+            {ldapStatus?.ldap_enabled && (
+              <div className="flex gap-2 mb-4 border-b border-bambu-dark-tertiary">
+                <button
+                  type="button"
+                  onClick={() => setCreateUserAuthSource('local')}
+                  className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                    createUserAuthSource === 'local'
+                      ? 'border-bambu-green text-white'
+                      : 'border-transparent text-bambu-gray hover:text-white'
+                  }`}
                 >
-                  <X className="w-5 h-5" />
-                </Button>
+                  {t('users.modal.tabLocal')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCreateUserAuthSource('ldap')}
+                  className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                    createUserAuthSource === 'ldap'
+                      ? 'border-bambu-green text-white'
+                      : 'border-transparent text-bambu-gray hover:text-white'
+                  }`}
+                >
+                  {t('users.modal.tabLdap')}
+                </button>
               </div>
-            </CardHeader>
-            <CardContent>
-              {/* Local / LDAP tab toggle — only when LDAP is enabled.
-                  Upstream Bambuddy #1298. When LDAP tab is active the rest
-                  of the local-create form is hidden and replaced by the
-                  directory picker; the picker calls our onSuccess handler
-                  to close the modal + invalidate the users query. */}
-              {ldapStatus?.ldap_enabled && (
-                <div className="flex gap-2 mb-4 border-b border-bambu-dark-tertiary">
-                  <button
-                    type="button"
-                    onClick={() => setCreateUserAuthSource('local')}
-                    className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-                      createUserAuthSource === 'local'
-                        ? 'border-bambu-green text-white'
-                        : 'border-transparent text-bambu-gray hover:text-white'
-                    }`}
-                  >
-                    {t('users.modal.tabLocal')}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setCreateUserAuthSource('ldap')}
-                    className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-                      createUserAuthSource === 'ldap'
-                        ? 'border-bambu-green text-white'
-                        : 'border-transparent text-bambu-gray hover:text-white'
-                    }`}
-                  >
-                    {t('users.modal.tabLdap')}
-                  </button>
-                </div>
-              )}
+            )}
 
-              {createUserAuthSource === 'ldap' ? (
-                <LdapUserPicker
-                  onSuccess={() => {
-                    setShowCreateUserModal(false);
-                    setCreateUserAuthSource('local');
-                    queryClient.invalidateQueries({ queryKey: ['users'] });
-                  }}
+            {createUserAuthSource === 'ldap' ? (
+              <LdapUserPicker
+                onSuccess={() => {
+                  setShowCreateUserModal(false);
+                  setCreateUserAuthSource('local');
+                  queryClient.invalidateQueries({ queryKey: ['users'] });
+                }}
+              />
+            ) : (
+            <>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-white mb-2">{t('settings.username')}</label>
+                <input
+                  type="text"
+                  value={userFormData.username}
+                  onChange={(e) => setUserFormData({ ...userFormData, username: e.target.value })}
+                  className="w-full px-4 py-3 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors"
+                  placeholder={t('settings.enterUsername')}
+                  autoComplete="username"
                 />
-              ) : (
-              <>
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-white mb-2">{t('settings.username')}</label>
-                  <input
-                    type="text"
-                    value={userFormData.username}
-                    onChange={(e) => setUserFormData({ ...userFormData, username: e.target.value })}
-                    className="w-full px-4 py-3 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors"
-                    placeholder={t('settings.enterUsername')}
-                    autoComplete="username"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-white mb-2">{t('settings.password')}</label>
-                  <input
-                    type="password"
-                    value={userFormData.password}
-                    onChange={(e) => setUserFormData({ ...userFormData, password: e.target.value })}
-                    className="w-full px-4 py-3 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors"
-                    placeholder={t('settings.enterPassword')}
-                    autoComplete="new-password"
-                    minLength={6}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-white mb-2">{t('settings.confirmPassword')}</label>
-                  <input
-                    type="password"
-                    value={userFormData.confirmPassword}
-                    onChange={(e) => setUserFormData({ ...userFormData, confirmPassword: e.target.value })}
-                    className={`w-full px-4 py-3 bg-bambu-dark-secondary border rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors ${
-                      userFormData.confirmPassword && userFormData.password !== userFormData.confirmPassword
-                        ? 'border-red-500'
-                        : 'border-bambu-dark-tertiary'
-                    }`}
-                    placeholder={t('settings.confirmPasswordPlaceholder')}
-                    autoComplete="new-password"
-                    minLength={6}
-                  />
-                  {userFormData.confirmPassword && userFormData.password !== userFormData.confirmPassword && (
-                    <p className="text-red-700 dark:text-red-400 text-xs mt-1">{t('settings.passwordsDoNotMatch')}</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-white mb-2">{t('settings.password')}</label>
+                <input
+                  type="password"
+                  value={userFormData.password}
+                  onChange={(e) => setUserFormData({ ...userFormData, password: e.target.value })}
+                  className="w-full px-4 py-3 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors"
+                  placeholder={t('settings.enterPassword')}
+                  autoComplete="new-password"
+                  minLength={6}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-white mb-2">{t('settings.confirmPassword')}</label>
+                <input
+                  type="password"
+                  value={userFormData.confirmPassword}
+                  onChange={(e) => setUserFormData({ ...userFormData, confirmPassword: e.target.value })}
+                  className={`w-full px-4 py-3 bg-bambu-dark-secondary border rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors ${
+                    userFormData.confirmPassword && userFormData.password !== userFormData.confirmPassword
+                      ? 'border-red-500'
+                      : 'border-bambu-dark-tertiary'
+                  }`}
+                  placeholder={t('settings.confirmPasswordPlaceholder')}
+                  autoComplete="new-password"
+                  minLength={6}
+                />
+                {userFormData.confirmPassword && userFormData.password !== userFormData.confirmPassword && (
+                  <p className="text-red-700 dark:text-red-400 text-xs mt-1">{t('settings.passwordsDoNotMatch')}</p>
+                )}
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-white mb-2">{t('settings.groups')}</label>
+                <div className="space-y-2 max-h-40 overflow-y-auto p-2 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg">
+                  {groupsData.map(group => (
+                    <label
+                      key={group.id}
+                      className="flex items-center gap-3 px-2 py-1.5 rounded hover:bg-bambu-dark-tertiary cursor-pointer"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={userFormData.group_ids.includes(group.id)}
+                        onChange={() => toggleUserGroup(group.id)}
+                        className="accent-bambu-green w-4 h-4 rounded border-bambu-gray text-bambu-green focus:ring-bambu-green focus:ring-offset-0 bg-bambu-dark"
+                      />
+                      <span className="text-sm text-white">{getGroupName(group.name, t)}</span>
+                      {group.is_system && (
+                        <span className="text-xs text-yellow-700 dark:text-yellow-400">{t('settings.systemBadge')}</span>
+                      )}
+                    </label>
+                  ))}
+                  {groupsData.length === 0 && (
+                    <p className="text-sm text-bambu-gray">{t('settings.noGroupsAvailable')}</p>
                   )}
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-white mb-2">{t('settings.groups')}</label>
-                  <div className="space-y-2 max-h-40 overflow-y-auto p-2 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg">
-                    {groupsData.map(group => (
-                      <label
-                        key={group.id}
-                        className="flex items-center gap-3 px-2 py-1.5 rounded hover:bg-bambu-dark-tertiary cursor-pointer"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={userFormData.group_ids.includes(group.id)}
-                          onChange={() => toggleUserGroup(group.id)}
-                          className="accent-bambu-green w-4 h-4 rounded border-bambu-gray text-bambu-green focus:ring-bambu-green focus:ring-offset-0 bg-bambu-dark"
-                        />
-                        <span className="text-sm text-white">{getGroupName(group.name, t)}</span>
-                        {group.is_system && (
-                          <span className="text-xs text-yellow-700 dark:text-yellow-400">{t('settings.systemBadge')}</span>
-                        )}
-                      </label>
-                    ))}
-                    {groupsData.length === 0 && (
-                      <p className="text-sm text-bambu-gray">{t('settings.noGroupsAvailable')}</p>
-                    )}
-                  </div>
-                </div>
               </div>
-              <div className="mt-6 flex justify-end gap-3">
-                <Button
-                  variant="secondary"
-                  onClick={() => {
-                    setShowCreateUserModal(false);
-                    setUserFormData({ username: '', password: '', email: '', confirmPassword: '', role: 'user', group_ids: [] });
-                  }}
-                >
-                  {t('common.cancel')}
-                </Button>
-                <Button
-                  onClick={handleCreateUser}
-                  disabled={createUserMutation.isPending || !userFormData.username || !userFormData.password || userFormData.password !== userFormData.confirmPassword || !isPasswordValid(userFormData.password)}
-                >
-                  {createUserMutation.isPending ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      {t('settings.creating')}
-                    </>
-                  ) : (
-                    <>
-                      <Plus className="w-4 h-4" />
-                      {t('settings.createUser')}
-                    </>
-                  )}
-                </Button>
-              </div>
-              </>
-              )}
-            </CardContent>
-          </Card>
-        </div>
+            </div>
+            <div className="mt-6 flex justify-end gap-3">
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setShowCreateUserModal(false);
+                  setUserFormData({ username: '', password: '', email: '', confirmPassword: '', role: 'user', group_ids: [] });
+                }}
+              >
+                {t('common.cancel')}
+              </Button>
+              <Button
+                onClick={handleCreateUser}
+                disabled={createUserMutation.isPending || !userFormData.username || !userFormData.password || userFormData.password !== userFormData.confirmPassword || !isPasswordValid(userFormData.password)}
+              >
+                {createUserMutation.isPending ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    {t('settings.creating')}
+                  </>
+                ) : (
+                  <>
+                    <Plus className="w-4 h-4" />
+                    {t('settings.createUser')}
+                  </>
+                )}
+              </Button>
+            </div>
+            </>
+            )}
+          </CardContent>
+        </Modal>
       )}
 
       {/* Create User Modal - Advanced Authentication */}
@@ -6871,297 +6851,272 @@ export function SettingsPage() {
 
       {/* Edit User Modal */}
       {showEditUserModal && editingUserId !== null && (
-        <div
-          className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
-          onClick={() => {
+        <Modal
+          onClose={() => {
             setShowEditUserModal(false);
             setEditingUserId(null);
             setUserFormData({ username: '', password: '', email: '', confirmPassword: '', role: 'user', group_ids: [] });
           }}
+          title={t('settings.editUser')}
+          icon={<Edit2 className="w-5 h-5 text-bambu-green" />}
+          size="md"
         >
-          <Card
-            className="w-full max-w-md"
-            onClick={(e: React.MouseEvent) => e.stopPropagation()}
-          >
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Edit2 className="w-5 h-5 text-bambu-green" />
-                  <h2 className="text-lg font-semibold text-white">{t('settings.editUser')}</h2>
-                </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    setShowEditUserModal(false);
-                    setEditingUserId(null);
-                    setUserFormData({ username: '', password: '', email: '', confirmPassword: '', role: 'user', group_ids: [] });
-                  }}
-                >
-                  <X className="w-5 h-5" />
-                </Button>
+          <CardContent>
+            <div className="space-y-4">
+              {/* Username Field */}
+              <div>
+                <label className="block text-sm font-medium text-white mb-2">
+                  {t('settings.username')} {advancedAuthStatus?.advanced_auth_enabled && <span className="text-red-700 dark:text-red-400">*</span>}
+                </label>
+                <input
+                  type="text"
+                  value={userFormData.username}
+                  onChange={(e) => setUserFormData({ ...userFormData, username: e.target.value })}
+                  className="w-full px-4 py-3 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors"
+                  placeholder={t('settings.enterUsername')}
+                  autoComplete="username"
+                />
               </div>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                {/* Username Field */}
-                <div>
-                  <label className="block text-sm font-medium text-white mb-2">
-                    {t('settings.username')} {advancedAuthStatus?.advanced_auth_enabled && <span className="text-red-700 dark:text-red-400">*</span>}
-                  </label>
-                  <input
-                    type="text"
-                    value={userFormData.username}
-                    onChange={(e) => setUserFormData({ ...userFormData, username: e.target.value })}
-                    className="w-full px-4 py-3 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors"
-                    placeholder={t('settings.enterUsername')}
-                    autoComplete="username"
-                  />
-                </div>
 
-                {/* Email Field */}
-                <div>
-                  <label className="block text-sm font-medium text-white mb-2">
-                    {t('users.form.email') || 'Email'} {advancedAuthStatus?.advanced_auth_enabled ? <span className="text-red-700 dark:text-red-400">*</span> : <span className="text-bambu-gray font-normal">({t('users.form.optional') || 'optional'})</span>}
-                  </label>
-                  <input
-                    type="email"
-                    value={userFormData.email}
-                    onChange={(e) => setUserFormData({ ...userFormData, email: e.target.value })}
-                    className="w-full px-4 py-3 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors"
-                    placeholder={t('users.form.emailPlaceholder') || 'user@example.com'}
-                    required={advancedAuthStatus?.advanced_auth_enabled}
-                  />
-                </div>
+              {/* Email Field */}
+              <div>
+                <label className="block text-sm font-medium text-white mb-2">
+                  {t('users.form.email') || 'Email'} {advancedAuthStatus?.advanced_auth_enabled ? <span className="text-red-700 dark:text-red-400">*</span> : <span className="text-bambu-gray font-normal">({t('users.form.optional') || 'optional'})</span>}
+                </label>
+                <input
+                  type="email"
+                  value={userFormData.email}
+                  onChange={(e) => setUserFormData({ ...userFormData, email: e.target.value })}
+                  className="w-full px-4 py-3 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors"
+                  placeholder={t('users.form.emailPlaceholder') || 'user@example.com'}
+                  required={advancedAuthStatus?.advanced_auth_enabled}
+                />
+              </div>
 
-                {/* Password Fields - only show when Advanced Auth is disabled */}
-                {!advancedAuthStatus?.advanced_auth_enabled && (
-                  <>
+              {/* Password Fields - only show when Advanced Auth is disabled */}
+              {!advancedAuthStatus?.advanced_auth_enabled && (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-white mb-2">
+                      {t('users.form.password') || 'Password'} <span className="text-bambu-gray font-normal">({t('users.form.leaveBlankToKeep') || 'leave blank to keep current'})</span>
+                    </label>
+                    <input
+                      type="password"
+                      value={userFormData.password}
+                      onChange={(e) => setUserFormData({ ...userFormData, password: e.target.value, confirmPassword: '' })}
+                      className="w-full px-4 py-3 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors"
+                      placeholder={t('settings.enterNewPassword')}
+                      autoComplete="new-password"
+                      minLength={6}
+                    />
+                  </div>
+                  {userFormData.password && (
                     <div>
-                      <label className="block text-sm font-medium text-white mb-2">
-                        {t('users.form.password') || 'Password'} <span className="text-bambu-gray font-normal">({t('users.form.leaveBlankToKeep') || 'leave blank to keep current'})</span>
-                      </label>
+                      <label className="block text-sm font-medium text-white mb-2">{t('settings.confirmPassword')}</label>
                       <input
                         type="password"
-                        value={userFormData.password}
-                        onChange={(e) => setUserFormData({ ...userFormData, password: e.target.value, confirmPassword: '' })}
-                        className="w-full px-4 py-3 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors"
-                        placeholder={t('settings.enterNewPassword')}
+                        value={userFormData.confirmPassword}
+                        onChange={(e) => setUserFormData({ ...userFormData, confirmPassword: e.target.value })}
+                        className={`w-full px-4 py-3 bg-bambu-dark-secondary border rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors ${
+                          userFormData.confirmPassword && userFormData.password !== userFormData.confirmPassword
+                            ? 'border-red-500'
+                            : 'border-bambu-dark-tertiary'
+                        }`}
+                        placeholder={t('settings.confirmNewPassword')}
                         autoComplete="new-password"
                         minLength={6}
                       />
-                    </div>
-                    {userFormData.password && (
-                      <div>
-                        <label className="block text-sm font-medium text-white mb-2">{t('settings.confirmPassword')}</label>
-                        <input
-                          type="password"
-                          value={userFormData.confirmPassword}
-                          onChange={(e) => setUserFormData({ ...userFormData, confirmPassword: e.target.value })}
-                          className={`w-full px-4 py-3 bg-bambu-dark-secondary border rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors ${
-                            userFormData.confirmPassword && userFormData.password !== userFormData.confirmPassword
-                              ? 'border-red-500'
-                              : 'border-bambu-dark-tertiary'
-                          }`}
-                          placeholder={t('settings.confirmNewPassword')}
-                          autoComplete="new-password"
-                          minLength={6}
-                        />
-                        {userFormData.confirmPassword && userFormData.password !== userFormData.confirmPassword && (
-                          <p className="text-red-700 dark:text-red-400 text-xs mt-1">{t('settings.passwordsDoNotMatch')}</p>
-                        )}
-                      </div>
-                    )}
-                  </>
-                )}
-
-                {/* Info box about auto-generated password when Advanced Auth is enabled */}
-                {advancedAuthStatus?.advanced_auth_enabled && (
-                  <div className="bg-bambu-dark-secondary/50 border border-bambu-green/20 rounded-lg p-3 space-y-3">
-                    <p className="text-sm text-bambu-gray">
-                      {t('users.form.passwordManagedByAdvancedAuth') || 'Password is managed by Advanced Authentication. Use "Reset Password" to send a new password to the user via email.'}
-                    </p>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => editingUserId && resetPasswordMutation.mutate(editingUserId)}
-                      disabled={resetPasswordMutation.isPending || !userFormData.email}
-                      className="w-full"
-                    >
-                      {resetPasswordMutation.isPending ? (
-                        <>
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                          {t('users.form.resettingPassword') || 'Resetting Password...'}
-                        </>
-                      ) : (
-                        <>
-                          <RotateCcw className="w-4 h-4" />
-                          {t('users.form.resetPassword') || 'Reset Password'}
-                        </>
+                      {userFormData.confirmPassword && userFormData.password !== userFormData.confirmPassword && (
+                        <p className="text-red-700 dark:text-red-400 text-xs mt-1">{t('settings.passwordsDoNotMatch')}</p>
                       )}
-                    </Button>
-                  </div>
-                )}
+                    </div>
+                  )}
+                </>
+              )}
 
-                {/* Groups Field */}
-                <div>
-                  <label className="block text-sm font-medium text-white mb-2">{t('users.form.groups') || 'Groups'}</label>
-                  <div className="space-y-2 max-h-40 overflow-y-auto p-2 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg">
-                    {groupsData.map(group => (
-                      <label
-                        key={group.id}
-                        className="flex items-center gap-3 px-2 py-1.5 rounded hover:bg-bambu-dark-tertiary cursor-pointer"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={userFormData.group_ids.includes(group.id)}
-                          onChange={() => toggleUserGroup(group.id)}
-                          className="accent-bambu-green w-4 h-4 rounded border-bambu-gray text-bambu-green focus:ring-bambu-green focus:ring-offset-0 bg-bambu-dark"
-                        />
-                        <span className="text-sm text-white">{getGroupName(group.name, t)}</span>
-                        {group.is_system && (
-                          <span className="text-xs text-yellow-700 dark:text-yellow-400">({t('users.system') || 'System'})</span>
-                        )}
-                      </label>
-                    ))}
-                  </div>
+              {/* Info box about auto-generated password when Advanced Auth is enabled */}
+              {advancedAuthStatus?.advanced_auth_enabled && (
+                <div className="bg-bambu-dark-secondary/50 border border-bambu-green/20 rounded-lg p-3 space-y-3">
+                  <p className="text-sm text-bambu-gray">
+                    {t('users.form.passwordManagedByAdvancedAuth') || 'Password is managed by Advanced Authentication. Use "Reset Password" to send a new password to the user via email.'}
+                  </p>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => editingUserId && resetPasswordMutation.mutate(editingUserId)}
+                    disabled={resetPasswordMutation.isPending || !userFormData.email}
+                    className="w-full"
+                  >
+                    {resetPasswordMutation.isPending ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        {t('users.form.resettingPassword') || 'Resetting Password...'}
+                      </>
+                    ) : (
+                      <>
+                        <RotateCcw className="w-4 h-4" />
+                        {t('users.form.resetPassword') || 'Reset Password'}
+                      </>
+                    )}
+                  </Button>
+                </div>
+              )}
+
+              {/* Groups Field */}
+              <div>
+                <label className="block text-sm font-medium text-white mb-2">{t('users.form.groups') || 'Groups'}</label>
+                <div className="space-y-2 max-h-40 overflow-y-auto p-2 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg">
+                  {groupsData.map(group => (
+                    <label
+                      key={group.id}
+                      className="flex items-center gap-3 px-2 py-1.5 rounded hover:bg-bambu-dark-tertiary cursor-pointer"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={userFormData.group_ids.includes(group.id)}
+                        onChange={() => toggleUserGroup(group.id)}
+                        className="accent-bambu-green w-4 h-4 rounded border-bambu-gray text-bambu-green focus:ring-bambu-green focus:ring-offset-0 bg-bambu-dark"
+                      />
+                      <span className="text-sm text-white">{getGroupName(group.name, t)}</span>
+                      {group.is_system && (
+                        <span className="text-xs text-yellow-700 dark:text-yellow-400">({t('users.system') || 'System'})</span>
+                      )}
+                    </label>
+                  ))}
                 </div>
               </div>
-              <div className="mt-6 flex justify-end gap-3">
-                <Button
-                  variant="secondary"
-                  onClick={() => {
-                    setShowEditUserModal(false);
-                    setEditingUserId(null);
-                    setUserFormData({ username: '', password: '', email: '', confirmPassword: '', role: 'user', group_ids: [] });
-                  }}
-                >
-                  {t('users.modal.cancel') || 'Cancel'}
-                </Button>
-                <Button
-                  onClick={() => handleUpdateUser(editingUserId)}
-                  disabled={
-                    updateUserMutation.isPending ||
-                    !userFormData.username ||
-                    (advancedAuthStatus?.advanced_auth_enabled && !userFormData.email) ||
-                    Boolean(!advancedAuthStatus?.advanced_auth_enabled && userFormData.password && (userFormData.password !== userFormData.confirmPassword || !isPasswordValid(userFormData.password)))
-                  }
-                >
-                  {updateUserMutation.isPending ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      {t('users.modal.saving') || 'Saving...'}
-                    </>
-                  ) : (
-                    <>
-                      <Save className="w-4 h-4" />
-                      {t('users.modal.saveChanges') || 'Save Changes'}
-                    </>
-                  )}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+            </div>
+            <div className="mt-6 flex justify-end gap-3">
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setShowEditUserModal(false);
+                  setEditingUserId(null);
+                  setUserFormData({ username: '', password: '', email: '', confirmPassword: '', role: 'user', group_ids: [] });
+                }}
+              >
+                {t('users.modal.cancel') || 'Cancel'}
+              </Button>
+              <Button
+                onClick={() => handleUpdateUser(editingUserId)}
+                disabled={
+                  updateUserMutation.isPending ||
+                  !userFormData.username ||
+                  (advancedAuthStatus?.advanced_auth_enabled && !userFormData.email) ||
+                  Boolean(!advancedAuthStatus?.advanced_auth_enabled && userFormData.password && (userFormData.password !== userFormData.confirmPassword || !isPasswordValid(userFormData.password)))
+                }
+              >
+                {updateUserMutation.isPending ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    {t('users.modal.saving') || 'Saving...'}
+                  </>
+                ) : (
+                  <>
+                    <Save className="w-4 h-4" />
+                    {t('users.modal.saveChanges') || 'Save Changes'}
+                  </>
+                )}
+              </Button>
+            </div>
+          </CardContent>
+        </Modal>
       )}
 
       {/* Delete User Confirmation Modal */}
       {deleteUserId !== null && (
-        <div
-          className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
-          onClick={() => {
+        <Modal
+          onClose={() => {
             setDeleteUserId(null);
             setDeleteUserItemCounts(null);
           }}
+          hideClose
+          ariaLabel={t('settings.deleteUserTitle')}
+          size="md"
         >
-          <Card
-            className="w-full max-w-md"
-            onClick={(e: React.MouseEvent) => e.stopPropagation()}
-          >
-            <CardHeader>
-              <div className="flex items-center gap-2 text-red-700 dark:text-red-400">
-                <Trash2 className="w-5 h-5" />
-                <h3 className="text-lg font-semibold">{t('settings.deleteUserTitle')}</h3>
+          <CardHeader>
+            <div className="flex items-center gap-2 text-red-700 dark:text-red-400">
+              <Trash2 className="w-5 h-5" />
+              <h3 className="text-lg font-semibold">{t('settings.deleteUserTitle')}</h3>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {deleteUserLoading ? (
+              <div className="flex items-center justify-center py-4">
+                <div className="animate-spin rounded-full h-6 w-6 border-2 border-bambu-green border-t-transparent" />
               </div>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {deleteUserLoading ? (
-                <div className="flex items-center justify-center py-4">
-                  <div className="animate-spin rounded-full h-6 w-6 border-2 border-bambu-green border-t-transparent" />
+            ) : deleteUserItemCounts && (deleteUserItemCounts.archives + deleteUserItemCounts.queue_items + deleteUserItemCounts.library_files > 0) ? (
+              <>
+                <p className="text-white">{t('settings.userHasCreated')}</p>
+                <ul className="list-disc list-inside text-bambu-gray space-y-1">
+                  {deleteUserItemCounts.archives > 0 && (
+                    <li>{deleteUserItemCounts.archives} archive{deleteUserItemCounts.archives !== 1 ? 's' : ''}</li>
+                  )}
+                  {deleteUserItemCounts.queue_items > 0 && (
+                    <li>{deleteUserItemCounts.queue_items} queue item{deleteUserItemCounts.queue_items !== 1 ? 's' : ''}</li>
+                  )}
+                  {deleteUserItemCounts.library_files > 0 && (
+                    <li>{deleteUserItemCounts.library_files} library file{deleteUserItemCounts.library_files !== 1 ? 's' : ''}</li>
+                  )}
+                </ul>
+                <p className="text-bambu-gray text-sm">{t('settings.userItemsQuestion')}</p>
+                <div className="flex flex-col gap-2">
+                  <Button
+                    variant="danger"
+                    onClick={() => deleteUserMutation.mutate({ id: deleteUserId, deleteItems: true })}
+                    disabled={deleteUserMutation.isPending}
+                    className="justify-center"
+                  >
+                    {t('settings.deleteUserAndItems')}
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    onClick={() => deleteUserMutation.mutate({ id: deleteUserId, deleteItems: false })}
+                    disabled={deleteUserMutation.isPending}
+                    className="justify-center"
+                  >
+                    {t('settings.deleteUserKeepItems')}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    onClick={() => {
+                      setDeleteUserId(null);
+                      setDeleteUserItemCounts(null);
+                    }}
+                    disabled={deleteUserMutation.isPending}
+                    className="justify-center"
+                  >
+                    {t('common.cancel')}
+                  </Button>
                 </div>
-              ) : deleteUserItemCounts && (deleteUserItemCounts.archives + deleteUserItemCounts.queue_items + deleteUserItemCounts.library_files > 0) ? (
-                <>
-                  <p className="text-white">{t('settings.userHasCreated')}</p>
-                  <ul className="list-disc list-inside text-bambu-gray space-y-1">
-                    {deleteUserItemCounts.archives > 0 && (
-                      <li>{deleteUserItemCounts.archives} archive{deleteUserItemCounts.archives !== 1 ? 's' : ''}</li>
-                    )}
-                    {deleteUserItemCounts.queue_items > 0 && (
-                      <li>{deleteUserItemCounts.queue_items} queue item{deleteUserItemCounts.queue_items !== 1 ? 's' : ''}</li>
-                    )}
-                    {deleteUserItemCounts.library_files > 0 && (
-                      <li>{deleteUserItemCounts.library_files} library file{deleteUserItemCounts.library_files !== 1 ? 's' : ''}</li>
-                    )}
-                  </ul>
-                  <p className="text-bambu-gray text-sm">{t('settings.userItemsQuestion')}</p>
-                  <div className="flex flex-col gap-2">
-                    <Button
-                      variant="danger"
-                      onClick={() => deleteUserMutation.mutate({ id: deleteUserId, deleteItems: true })}
-                      disabled={deleteUserMutation.isPending}
-                      className="justify-center"
-                    >
-                      {t('settings.deleteUserAndItems')}
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      onClick={() => deleteUserMutation.mutate({ id: deleteUserId, deleteItems: false })}
-                      disabled={deleteUserMutation.isPending}
-                      className="justify-center"
-                    >
-                      {t('settings.deleteUserKeepItems')}
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      onClick={() => {
-                        setDeleteUserId(null);
-                        setDeleteUserItemCounts(null);
-                      }}
-                      disabled={deleteUserMutation.isPending}
-                      className="justify-center"
-                    >
-                      {t('common.cancel')}
-                    </Button>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <p className="text-white">{t('settings.deleteUserConfirm')}</p>
-                  <p className="text-bambu-gray text-sm">{t('settings.actionCannotBeUndone')}</p>
-                  <div className="flex gap-2 justify-end">
-                    <Button
-                      variant="ghost"
-                      onClick={() => {
-                        setDeleteUserId(null);
-                        setDeleteUserItemCounts(null);
-                      }}
-                      disabled={deleteUserMutation.isPending}
-                    >
-                      {t('common.cancel')}
-                    </Button>
-                    <Button
-                      variant="danger"
-                      onClick={() => deleteUserMutation.mutate({ id: deleteUserId, deleteItems: false })}
-                      disabled={deleteUserMutation.isPending}
-                    >
-                      {t('settings.deleteUserTitle')}
-                    </Button>
-                  </div>
-                </>
-              )}
-            </CardContent>
-          </Card>
-        </div>
+              </>
+            ) : (
+              <>
+                <p className="text-white">{t('settings.deleteUserConfirm')}</p>
+                <p className="text-bambu-gray text-sm">{t('settings.actionCannotBeUndone')}</p>
+                <div className="flex gap-2 justify-end">
+                  <Button
+                    variant="ghost"
+                    onClick={() => {
+                      setDeleteUserId(null);
+                      setDeleteUserItemCounts(null);
+                    }}
+                    disabled={deleteUserMutation.isPending}
+                  >
+                    {t('common.cancel')}
+                  </Button>
+                  <Button
+                    variant="danger"
+                    onClick={() => deleteUserMutation.mutate({ id: deleteUserId, deleteItems: false })}
+                    disabled={deleteUserMutation.isPending}
+                  >
+                    {t('settings.deleteUserTitle')}
+                  </Button>
+                </div>
+              </>
+            )}
+          </CardContent>
+        </Modal>
       )}
 
       {/* Delete Group Confirmation Modal */}
@@ -7188,331 +7143,318 @@ export function SettingsPage() {
       {/* Change Password Modal */}
       {/* Macro Add/Edit Modal */}
       {showMacroModal && (
-        <div
-          className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
-          onClick={() => { setShowMacroModal(false); setEditingMacro(null); }}
+        <Modal
+          onClose={() => { setShowMacroModal(false); setEditingMacro(null); }}
+          labelledBy={macroHeadingId}
+          header={
+            <>
+              <Code className="w-5 h-5 text-amber-600 dark:text-amber-400" />
+              <h2 id={macroHeadingId} className="text-lg font-semibold text-white">
+                {editingMacro ? t('settings.editMacro') : t('settings.addMacro')}
+              </h2>
+              {editingMacro && !editingMacro.is_custom && (
+                <span className="text-xs text-bambu-gray flex items-center gap-1">
+                  <Lock className="w-3 h-3" />
+                  {t('settings.macroBuiltIn')}
+                </span>
+              )}
+            </>
+          }
+          size="5xl"
         >
-          <Card
-            className="w-full max-w-5xl"
-            onClick={(e: React.MouseEvent) => e.stopPropagation()}
-          >
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Code className="w-5 h-5 text-amber-600 dark:text-amber-400" />
-                  <h2 className="text-lg font-semibold text-white">
-                    {editingMacro ? t('settings.editMacro') : t('settings.addMacro')}
-                  </h2>
-                  {editingMacro && !editingMacro.is_custom && (
-                    <span className="text-xs text-bambu-gray flex items-center gap-1">
-                      <Lock className="w-3 h-3" />
-                      {t('settings.macroBuiltIn')}
-                    </span>
-                  )}
+          <CardContent>
+            <div className="flex flex-col lg:flex-row gap-4">
+              {/* Left - metadata */}
+              <div className="lg:w-1/4 space-y-3">
+                <div>
+                  <label className="block text-sm text-bambu-gray mb-1">{t('settings.macroName')}</label>
+                  <input
+                    type="text"
+                    value={macroForm.name}
+                    onChange={(e) => setMacroForm(prev => ({ ...prev, name: e.target.value }))}
+                    className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none text-sm"
+                  />
                 </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => { setShowMacroModal(false); setEditingMacro(null); }}
-                >
-                  <X className="w-5 h-5" />
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="flex flex-col lg:flex-row gap-4">
-                {/* Left - metadata */}
-                <div className="lg:w-1/4 space-y-3">
+                <div>
+                  <label className="block text-sm text-bambu-gray mb-1">{t('settings.macroDescription')}</label>
+                  <textarea
+                    value={macroForm.description ?? ''}
+                    onChange={(e) => setMacroForm(prev => ({ ...prev, description: e.target.value || null }))}
+                    rows={3}
+                    placeholder={t('settings.macroDescriptionPlaceholder')}
+                    className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none text-sm resize-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-bambu-gray mb-1">{t('settings.macroEvent')}</label>
+                  <select
+                    value={macroForm.event}
+                    onChange={(e) => setMacroForm(prev => ({ ...prev, event: e.target.value }))}
+                    className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none text-sm"
+                  >
+                    {macroMeta?.events ? (
+                      Object.entries(macroMeta.events).map(([code, label]) => (
+                        <option key={code} value={code}>
+                          {t(`settings.macroEvents.${code}`, { defaultValue: label })}
+                        </option>
+                      ))
+                    ) : (
+                      <>
+                        <option value="swap_mode_start">{t('settings.macroEvents.swap_mode_start')}</option>
+                        <option value="swap_mode_change_table">{t('settings.macroEvents.swap_mode_change_table')}</option>
+                      </>
+                    )}
+                  </select>
+                </div>
+                {macroForm.event === 'layer_reached' && (
                   <div>
-                    <label className="block text-sm text-bambu-gray mb-1">{t('settings.macroName')}</label>
-                    <input
-                      type="text"
-                      value={macroForm.name}
-                      onChange={(e) => setMacroForm(prev => ({ ...prev, name: e.target.value }))}
-                      className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm text-bambu-gray mb-1">{t('settings.macroDescription')}</label>
-                    <textarea
-                      value={macroForm.description ?? ''}
-                      onChange={(e) => setMacroForm(prev => ({ ...prev, description: e.target.value || null }))}
-                      rows={3}
-                      placeholder={t('settings.macroDescriptionPlaceholder')}
-                      className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none text-sm resize-none"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm text-bambu-gray mb-1">{t('settings.macroEvent')}</label>
-                    <select
-                      value={macroForm.event}
-                      onChange={(e) => setMacroForm(prev => ({ ...prev, event: e.target.value }))}
-                      className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none text-sm"
-                    >
-                      {macroMeta?.events ? (
-                        Object.entries(macroMeta.events).map(([code, label]) => (
-                          <option key={code} value={code}>
-                            {t(`settings.macroEvents.${code}`, { defaultValue: label })}
-                          </option>
-                        ))
-                      ) : (
-                        <>
-                          <option value="swap_mode_start">{t('settings.macroEvents.swap_mode_start')}</option>
-                          <option value="swap_mode_change_table">{t('settings.macroEvents.swap_mode_change_table')}</option>
-                        </>
-                      )}
-                    </select>
-                  </div>
-                  {macroForm.event === 'layer_reached' && (
-                    <div>
-                      <label className="block text-sm text-bambu-gray mb-1">{t('settings.macroTriggerLayer')}</label>
-                      <input
-                        type="number"
-                        min={1}
-                        value={macroForm.trigger_layer ?? 1}
-                        onChange={(e) => setMacroForm(prev => ({
-                          ...prev,
-                          trigger_layer: Math.max(1, parseInt(e.target.value, 10) || 1),
-                        }))}
-                        className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none text-sm"
-                      />
-                      <p className="text-xs text-bambu-gray mt-1">{t('settings.macroTriggerLayerHint')}</p>
-                    </div>
-                  )}
-                  {/* Action-type selector: gcode (default, sends gcode to printer) vs
-                      mqtt_action (invokes a named MQTT command like chamber_light). */}
-                  <div>
-                    <label className="block text-sm text-bambu-gray mb-1">{t('settings.macroActionType')}</label>
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setMacroForm(prev => ({
-                          ...prev,
-                          action_type: 'gcode',
-                          mqtt_action: null,
-                        }))}
-                        className={`flex-1 px-3 py-2 rounded-lg border text-sm transition-colors ${
-                          (macroForm.action_type ?? 'gcode') === 'gcode'
-                            ? 'border-bambu-green bg-bambu-green/10 text-bambu-green'
-                            : 'border-bambu-dark-tertiary text-bambu-gray hover:text-white'
-                        }`}
-                      >
-                        {t('settings.macroActionTypeGcode')}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setMacroForm(prev => ({
-                          ...prev,
-                          action_type: 'mqtt_action',
-                          mqtt_action: prev.mqtt_action ?? (macroMeta?.mqtt_actions?.[0]?.id ?? null),
-                        }))}
-                        className={`flex-1 px-3 py-2 rounded-lg border text-sm transition-colors ${
-                          macroForm.action_type === 'mqtt_action'
-                            ? 'border-bambu-green bg-bambu-green/10 text-bambu-green'
-                            : 'border-bambu-dark-tertiary text-bambu-gray hover:text-white'
-                        }`}
-                      >
-                        {t('settings.macroActionTypeMqtt')}
-                      </button>
-                    </div>
-                  </div>
-                  {macroForm.action_type === 'mqtt_action' && (
-                    <div>
-                      <label className="block text-sm text-bambu-gray mb-1">{t('settings.macroMqttAction')}</label>
-                      <select
-                        value={macroForm.mqtt_action ?? ''}
-                        onChange={(e) => {
-                          const nextId = e.target.value || null;
-                          const nextSpec = (macroMeta?.mqtt_actions ?? []).find(a => a.id === nextId)?.param ?? null;
-                          setMacroForm(prev => ({
-                            ...prev,
-                            mqtt_action: nextId,
-                            mqtt_action_param: nextSpec?.default ?? null,
-                          }));
-                        }}
-                        className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none text-sm"
-                      >
-                        {(macroMeta?.mqtt_actions ?? []).map((a) => (
-                          <option key={a.id} value={a.id}>
-                            {t(`settings.mqttActions.${a.i18n_key}`, { defaultValue: a.label })}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-                  {/* The parameter control is described by the server, so this
-                      block never learns that print_speed in particular has four
-                      levels — a new action with a value renders here for free. */}
-                  {(() => {
-                    if (macroForm.action_type !== 'mqtt_action') return null;
-                    const spec = (macroMeta?.mqtt_actions ?? []).find(a => a.id === macroForm.mqtt_action)?.param;
-                    if (!spec) return null;
-                    return (
-                      <div>
-                        <label className="block text-sm text-bambu-gray mb-1">
-                          {t(`settings.mqttActionParams.${spec.i18n_key}`, { defaultValue: spec.i18n_key })}
-                        </label>
-                        <select
-                          value={macroForm.mqtt_action_param ?? spec.default ?? ''}
-                          onChange={(e) => setMacroForm(prev => ({ ...prev, mqtt_action_param: e.target.value }))}
-                          className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none text-sm"
-                        >
-                          {spec.choices.map((c) => (
-                            <option key={c.value} value={c.value}>
-                              {t(`settings.mqttActionValues.${c.i18n_key}`, { defaultValue: c.label })}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    );
-                  })()}
-                  <div>
-                    <label className="block text-sm text-bambu-gray mb-1">
-                      {t('settings.macroDelaySeconds')}
-                    </label>
+                    <label className="block text-sm text-bambu-gray mb-1">{t('settings.macroTriggerLayer')}</label>
                     <input
                       type="number"
-                      min={0}
-                      max={3600}
-                      value={macroForm.delay_seconds ?? 0}
+                      min={1}
+                      value={macroForm.trigger_layer ?? 1}
                       onChange={(e) => setMacroForm(prev => ({
                         ...prev,
-                        delay_seconds: Math.max(0, Math.min(3600, parseInt(e.target.value, 10) || 0)),
+                        trigger_layer: Math.max(1, parseInt(e.target.value, 10) || 1),
                       }))}
                       className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none text-sm"
                     />
-                    <p className="text-xs text-bambu-gray mt-1">{t('settings.macroDelayHint')}</p>
+                    <p className="text-xs text-bambu-gray mt-1">{t('settings.macroTriggerLayerHint')}</p>
                   </div>
-                  <div className="space-y-1">
-                    <label className="block text-sm text-bambu-gray">{t('settings.macroModel')}</label>
-                    <div className="flex flex-wrap gap-1 mb-1.5">
-                      {macroForm.printer_models.map(code => (
-                        <span key={code} className="text-xs px-1.5 py-0.5 bg-bambu-dark-tertiary text-white rounded flex items-center gap-1">
-                          {code === '*' ? t('settings.macroAllModels') : (macroMeta?.printer_models?.[code] || code)}
-                          <button
-                            type="button"
-                            onClick={() => setMacroForm(prev => ({
-                              ...prev,
-                              printer_models: prev.printer_models.filter(m => m !== code),
-                            }))}
-                            className="hover:text-red-600 dark:hover:text-red-400 transition-colors"
-                          >
-                            <X className="w-3 h-3" />
-                          </button>
-                        </span>
-                      ))}
-                    </div>
-                    <select
-                      value=""
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        if (!val) return;
-                        setMacroForm(prev => {
-                          if (val === '*') return { ...prev, printer_models: ['*'] };
-                          const without_wildcard = prev.printer_models.filter(m => m !== '*');
-                          if (without_wildcard.includes(val)) return prev;
-                          return { ...prev, printer_models: [...without_wildcard, val] };
-                        });
-                      }}
-                      className="w-full px-2 py-1.5 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none text-sm"
+                )}
+                {/* Action-type selector: gcode (default, sends gcode to printer) vs
+                    mqtt_action (invokes a named MQTT command like chamber_light). */}
+                <div>
+                  <label className="block text-sm text-bambu-gray mb-1">{t('settings.macroActionType')}</label>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setMacroForm(prev => ({
+                        ...prev,
+                        action_type: 'gcode',
+                        mqtt_action: null,
+                      }))}
+                      className={`flex-1 px-3 py-2 rounded-lg border text-sm transition-colors ${
+                        (macroForm.action_type ?? 'gcode') === 'gcode'
+                          ? 'border-bambu-green bg-bambu-green/10 text-bambu-green'
+                          : 'border-bambu-dark-tertiary text-bambu-gray hover:text-white'
+                      }`}
                     >
-                      <option value="">{t('settings.macroAddModel')}</option>
-                      <option value="*" disabled={macroForm.printer_models.includes('*')}>{t('settings.macroAllModels')}</option>
-                      {macroMeta?.printer_models && Object.entries(macroMeta.printer_models).filter(([code]) => code !== '*').map(([code, name]) => (
-                        <option key={code} value={code} disabled={macroForm.printer_models.includes(code) || macroForm.printer_models.includes('*')}>
-                          {name}
+                      {t('settings.macroActionTypeGcode')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMacroForm(prev => ({
+                        ...prev,
+                        action_type: 'mqtt_action',
+                        mqtt_action: prev.mqtt_action ?? (macroMeta?.mqtt_actions?.[0]?.id ?? null),
+                      }))}
+                      className={`flex-1 px-3 py-2 rounded-lg border text-sm transition-colors ${
+                        macroForm.action_type === 'mqtt_action'
+                          ? 'border-bambu-green bg-bambu-green/10 text-bambu-green'
+                          : 'border-bambu-dark-tertiary text-bambu-gray hover:text-white'
+                      }`}
+                    >
+                      {t('settings.macroActionTypeMqtt')}
+                    </button>
+                  </div>
+                </div>
+                {macroForm.action_type === 'mqtt_action' && (
+                  <div>
+                    <label className="block text-sm text-bambu-gray mb-1">{t('settings.macroMqttAction')}</label>
+                    <select
+                      value={macroForm.mqtt_action ?? ''}
+                      onChange={(e) => {
+                        const nextId = e.target.value || null;
+                        const nextSpec = (macroMeta?.mqtt_actions ?? []).find(a => a.id === nextId)?.param ?? null;
+                        setMacroForm(prev => ({
+                          ...prev,
+                          mqtt_action: nextId,
+                          mqtt_action_param: nextSpec?.default ?? null,
+                        }));
+                      }}
+                      className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none text-sm"
+                    >
+                      {(macroMeta?.mqtt_actions ?? []).map((a) => (
+                        <option key={a.id} value={a.id}>
+                          {t(`settings.mqttActions.${a.i18n_key}`, { defaultValue: a.label })}
                         </option>
                       ))}
                     </select>
                   </div>
-                  {/* Swap-only toggle is only relevant for swap events. Other
-                      event types (e.g. print_started) get their own trigger path
-                      and should not be gated on swap mode. */}
-                  {macroMeta?.swap_events?.includes(macroForm.event) && (
-                    <div className="flex items-center justify-between">
-                      <label className="text-sm text-white">{t('settings.macroSwapOnly')}</label>
-                      <Toggle
-                        checked={macroForm.swap_mode_only}
-                        onChange={(checked) => setMacroForm(prev => ({ ...prev, swap_mode_only: checked }))}
-                      />
-                    </div>
-                  )}
-                  {/* Swap profile binding - only relevant for the two swap events.
-                      Dropdown options are filtered by the printer_models already
-                      selected (a profile's "models" must intersect). Value "" = generic. */}
-                  {macroMeta?.swap_events?.includes(macroForm.event) && (
+                )}
+                {/* The parameter control is described by the server, so this
+                    block never learns that print_speed in particular has four
+                    levels — a new action with a value renders here for free. */}
+                {(() => {
+                  if (macroForm.action_type !== 'mqtt_action') return null;
+                  const spec = (macroMeta?.mqtt_actions ?? []).find(a => a.id === macroForm.mqtt_action)?.param;
+                  if (!spec) return null;
+                  return (
                     <div>
                       <label className="block text-sm text-bambu-gray mb-1">
-                        {t('settings.macroSwapProfile')}
+                        {t(`settings.mqttActionParams.${spec.i18n_key}`, { defaultValue: spec.i18n_key })}
                       </label>
                       <select
-                        value={macroForm.swap_profile ?? ''}
-                        onChange={(e) => setMacroForm(prev => ({ ...prev, swap_profile: e.target.value || null }))}
+                        value={macroForm.mqtt_action_param ?? spec.default ?? ''}
+                        onChange={(e) => setMacroForm(prev => ({ ...prev, mqtt_action_param: e.target.value }))}
                         className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none text-sm"
                       >
-                        <option value="">{t('settings.macroSwapProfileGeneric')}</option>
-                        {(macroMeta?.swap_profiles ?? [])
-                          .filter((p) =>
-                            macroForm.printer_models.includes('*') ||
-                            p.models.some((m) => macroForm.printer_models.includes(m))
-                          )
-                          .map((p) => (
-                            <option key={p.id} value={p.id}>{p.label}</option>
-                          ))}
+                        {spec.choices.map((c) => (
+                          <option key={c.value} value={c.value}>
+                            {t(`settings.mqttActionValues.${c.i18n_key}`, { defaultValue: c.label })}
+                          </option>
+                        ))}
                       </select>
-                      {macroForm.swap_profile && (
-                        <p className="text-xs text-bambu-gray mt-1">
-                          {macroMeta?.swap_profiles?.find((p) => p.id === macroForm.swap_profile)?.description}
-                        </p>
-                      )}
                     </div>
-                  )}
+                  );
+                })()}
+                <div>
+                  <label className="block text-sm text-bambu-gray mb-1">
+                    {t('settings.macroDelaySeconds')}
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={3600}
+                    value={macroForm.delay_seconds ?? 0}
+                    onChange={(e) => setMacroForm(prev => ({
+                      ...prev,
+                      delay_seconds: Math.max(0, Math.min(3600, parseInt(e.target.value, 10) || 0)),
+                    }))}
+                    className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none text-sm"
+                  />
+                  <p className="text-xs text-bambu-gray mt-1">{t('settings.macroDelayHint')}</p>
+                </div>
+                <div className="space-y-1">
+                  <label className="block text-sm text-bambu-gray">{t('settings.macroModel')}</label>
+                  <div className="flex flex-wrap gap-1 mb-1.5">
+                    {macroForm.printer_models.map(code => (
+                      <span key={code} className="text-xs px-1.5 py-0.5 bg-bambu-dark-tertiary text-white rounded flex items-center gap-1">
+                        {code === '*' ? t('settings.macroAllModels') : (macroMeta?.printer_models?.[code] || code)}
+                        <button
+                          type="button"
+                          onClick={() => setMacroForm(prev => ({
+                            ...prev,
+                            printer_models: prev.printer_models.filter(m => m !== code),
+                          }))}
+                          className="hover:text-red-600 dark:hover:text-red-400 transition-colors"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                  <select
+                    value=""
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (!val) return;
+                      setMacroForm(prev => {
+                        if (val === '*') return { ...prev, printer_models: ['*'] };
+                        const without_wildcard = prev.printer_models.filter(m => m !== '*');
+                        if (without_wildcard.includes(val)) return prev;
+                        return { ...prev, printer_models: [...without_wildcard, val] };
+                      });
+                    }}
+                    className="w-full px-2 py-1.5 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none text-sm"
+                  >
+                    <option value="">{t('settings.macroAddModel')}</option>
+                    <option value="*" disabled={macroForm.printer_models.includes('*')}>{t('settings.macroAllModels')}</option>
+                    {macroMeta?.printer_models && Object.entries(macroMeta.printer_models).filter(([code]) => code !== '*').map(([code, name]) => (
+                      <option key={code} value={code} disabled={macroForm.printer_models.includes(code) || macroForm.printer_models.includes('*')}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {/* Swap-only toggle is only relevant for swap events. Other
+                    event types (e.g. print_started) get their own trigger path
+                    and should not be gated on swap mode. */}
+                {macroMeta?.swap_events?.includes(macroForm.event) && (
                   <div className="flex items-center justify-between">
-                    <label className="text-sm text-white">{t('settings.macroEnabled')}</label>
+                    <label className="text-sm text-white">{t('settings.macroSwapOnly')}</label>
                     <Toggle
-                      checked={macroForm.enabled}
-                      onChange={(checked) => setMacroForm(prev => ({ ...prev, enabled: checked }))}
+                      checked={macroForm.swap_mode_only}
+                      onChange={(checked) => setMacroForm(prev => ({ ...prev, swap_mode_only: checked }))}
                     />
                   </div>
-                </div>
-                {/* Right - G-code editor (only for action_type='gcode'; mqtt_action
-                    macros have no gcode body, so we show a placeholder panel instead). */}
-                <div className="lg:w-3/4 flex flex-col">
-                  {macroForm.action_type === 'mqtt_action' ? (
-                    <div className="flex-1 flex items-center justify-center p-8 border border-dashed border-bambu-dark-tertiary rounded-lg text-sm text-bambu-gray text-center">
-                      {t('settings.macroMqttActionDescription')}
-                    </div>
-                  ) : (
-                    <>
-                      <label className="block text-sm text-bambu-gray mb-1">{t('settings.macroGcode')}</label>
-                      <GcodeEditor
-                        value={macroForm.gcode}
-                        onChange={(val) => setMacroForm(prev => ({ ...prev, gcode: val }))}
-                      />
-                    </>
-                  )}
+                )}
+                {/* Swap profile binding - only relevant for the two swap events.
+                    Dropdown options are filtered by the printer_models already
+                    selected (a profile's "models" must intersect). Value "" = generic. */}
+                {macroMeta?.swap_events?.includes(macroForm.event) && (
+                  <div>
+                    <label className="block text-sm text-bambu-gray mb-1">
+                      {t('settings.macroSwapProfile')}
+                    </label>
+                    <select
+                      value={macroForm.swap_profile ?? ''}
+                      onChange={(e) => setMacroForm(prev => ({ ...prev, swap_profile: e.target.value || null }))}
+                      className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none text-sm"
+                    >
+                      <option value="">{t('settings.macroSwapProfileGeneric')}</option>
+                      {(macroMeta?.swap_profiles ?? [])
+                        .filter((p) =>
+                          macroForm.printer_models.includes('*') ||
+                          p.models.some((m) => macroForm.printer_models.includes(m))
+                        )
+                        .map((p) => (
+                          <option key={p.id} value={p.id}>{p.label}</option>
+                        ))}
+                    </select>
+                    {macroForm.swap_profile && (
+                      <p className="text-xs text-bambu-gray mt-1">
+                        {macroMeta?.swap_profiles?.find((p) => p.id === macroForm.swap_profile)?.description}
+                      </p>
+                    )}
+                  </div>
+                )}
+                <div className="flex items-center justify-between">
+                  <label className="text-sm text-white">{t('settings.macroEnabled')}</label>
+                  <Toggle
+                    checked={macroForm.enabled}
+                    onChange={(checked) => setMacroForm(prev => ({ ...prev, enabled: checked }))}
+                  />
                 </div>
               </div>
-              <div className="flex justify-end gap-2 pt-4">
-                <Button
-                  variant="ghost"
-                  onClick={() => { setShowMacroModal(false); setEditingMacro(null); }}
-                >
-                  {t('common.cancel')}
-                </Button>
-                <Button
-                  onClick={handleSaveMacro}
-                  disabled={createMacroMutation.isPending || updateMacroMutation.isPending}
-                >
-                  {(createMacroMutation.isPending || updateMacroMutation.isPending) && (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  )}
-                  {t('common.save')}
-                </Button>
+              {/* Right - G-code editor (only for action_type='gcode'; mqtt_action
+                  macros have no gcode body, so we show a placeholder panel instead). */}
+              <div className="lg:w-3/4 flex flex-col">
+                {macroForm.action_type === 'mqtt_action' ? (
+                  <div className="flex-1 flex items-center justify-center p-8 border border-dashed border-bambu-dark-tertiary rounded-lg text-sm text-bambu-gray text-center">
+                    {t('settings.macroMqttActionDescription')}
+                  </div>
+                ) : (
+                  <>
+                    <label className="block text-sm text-bambu-gray mb-1">{t('settings.macroGcode')}</label>
+                    <GcodeEditor
+                      value={macroForm.gcode}
+                      onChange={(val) => setMacroForm(prev => ({ ...prev, gcode: val }))}
+                    />
+                  </>
+                )}
               </div>
-            </CardContent>
-          </Card>
-        </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-4">
+              <Button
+                variant="ghost"
+                onClick={() => { setShowMacroModal(false); setEditingMacro(null); }}
+              >
+                {t('common.cancel')}
+              </Button>
+              <Button
+                onClick={handleSaveMacro}
+                disabled={createMacroMutation.isPending || updateMacroMutation.isPending}
+              >
+                {(createMacroMutation.isPending || updateMacroMutation.isPending) && (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                )}
+                {t('common.save')}
+              </Button>
+            </div>
+          </CardContent>
+        </Modal>
       )}
 
       {/* Delete Macro Confirm */}
@@ -7528,137 +7470,116 @@ export function SettingsPage() {
       )}
 
       {showChangePasswordModal && (
-        <div
-          className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
-          onClick={() => {
+        <Modal
+          onClose={() => {
             setShowChangePasswordModal(false);
             setChangePasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
           }}
+          title={t('settings.changePassword')}
+          icon={<Key className="w-5 h-5 text-bambu-green" />}
+          size="md"
         >
-          <Card
-            className="w-full max-w-md"
-            onClick={(e: React.MouseEvent) => e.stopPropagation()}
-          >
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Key className="w-5 h-5 text-bambu-green" />
-                  <h2 className="text-lg font-semibold text-white">{t('settings.changePassword')}</h2>
-                </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
+          <CardContent>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-white mb-2">
+                  Current Password
+                </label>
+                <input
+                  type="password"
+                  value={changePasswordData.currentPassword}
+                  onChange={(e) => setChangePasswordData({ ...changePasswordData, currentPassword: e.target.value })}
+                  className="w-full px-4 py-3 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors"
+                  placeholder={t('settings.enterCurrentPassword')}
+                  autoComplete="current-password"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-white mb-2">
+                  New Password
+                </label>
+                <input
+                  type="password"
+                  value={changePasswordData.newPassword}
+                  onChange={(e) => setChangePasswordData({ ...changePasswordData, newPassword: e.target.value })}
+                  className="w-full px-4 py-3 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors"
+                  placeholder={t('settings.enterNewPasswordMin6')}
+                  autoComplete="new-password"
+                  minLength={6}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-white mb-2">
+                  Confirm New Password
+                </label>
+                <input
+                  type="password"
+                  value={changePasswordData.confirmPassword}
+                  onChange={(e) => setChangePasswordData({ ...changePasswordData, confirmPassword: e.target.value })}
+                  className={`w-full px-4 py-3 bg-bambu-dark-secondary border rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors ${
+                    changePasswordData.confirmPassword && changePasswordData.newPassword !== changePasswordData.confirmPassword
+                      ? 'border-red-500'
+                      : 'border-bambu-dark-tertiary'
+                  }`}
+                  placeholder={t('settings.confirmNewPassword')}
+                  autoComplete="new-password"
+                  minLength={6}
+                />
+                {changePasswordData.confirmPassword && changePasswordData.newPassword !== changePasswordData.confirmPassword && (
+                  <p className="text-red-700 dark:text-red-400 text-xs mt-1">{t('settings.passwordsDoNotMatch')}</p>
+                )}
+              </div>
+            </div>
+            <div className="mt-6 flex justify-end gap-3">
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setShowChangePasswordModal(false);
+                  setChangePasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
+                }}
+              >
+                {t('common.cancel')}
+              </Button>
+              <Button
+                onClick={async () => {
+                  if (changePasswordData.newPassword !== changePasswordData.confirmPassword) {
+                    showToast(t('settings.toast.passwordsDoNotMatch'), 'error');
+                    return;
+                  }
+                  if (changePasswordData.newPassword.length < 6) {
+                    showToast(t('settings.toast.passwordTooShort'), 'error');
+                    return;
+                  }
+                  setChangePasswordLoading(true);
+                  try {
+                    await api.changePassword(changePasswordData.currentPassword, changePasswordData.newPassword);
+                    showToast(t('settings.toast.passwordChanged'), 'success');
                     setShowChangePasswordModal(false);
                     setChangePasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
-                  }}
-                >
-                  <X className="w-5 h-5" />
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-white mb-2">
-                    Current Password
-                  </label>
-                  <input
-                    type="password"
-                    value={changePasswordData.currentPassword}
-                    onChange={(e) => setChangePasswordData({ ...changePasswordData, currentPassword: e.target.value })}
-                    className="w-full px-4 py-3 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors"
-                    placeholder={t('settings.enterCurrentPassword')}
-                    autoComplete="current-password"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-white mb-2">
-                    New Password
-                  </label>
-                  <input
-                    type="password"
-                    value={changePasswordData.newPassword}
-                    onChange={(e) => setChangePasswordData({ ...changePasswordData, newPassword: e.target.value })}
-                    className="w-full px-4 py-3 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors"
-                    placeholder={t('settings.enterNewPasswordMin6')}
-                    autoComplete="new-password"
-                    minLength={6}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-white mb-2">
-                    Confirm New Password
-                  </label>
-                  <input
-                    type="password"
-                    value={changePasswordData.confirmPassword}
-                    onChange={(e) => setChangePasswordData({ ...changePasswordData, confirmPassword: e.target.value })}
-                    className={`w-full px-4 py-3 bg-bambu-dark-secondary border rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors ${
-                      changePasswordData.confirmPassword && changePasswordData.newPassword !== changePasswordData.confirmPassword
-                        ? 'border-red-500'
-                        : 'border-bambu-dark-tertiary'
-                    }`}
-                    placeholder={t('settings.confirmNewPassword')}
-                    autoComplete="new-password"
-                    minLength={6}
-                  />
-                  {changePasswordData.confirmPassword && changePasswordData.newPassword !== changePasswordData.confirmPassword && (
-                    <p className="text-red-700 dark:text-red-400 text-xs mt-1">{t('settings.passwordsDoNotMatch')}</p>
-                  )}
-                </div>
-              </div>
-              <div className="mt-6 flex justify-end gap-3">
-                <Button
-                  variant="secondary"
-                  onClick={() => {
-                    setShowChangePasswordModal(false);
-                    setChangePasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
-                  }}
-                >
-                  {t('common.cancel')}
-                </Button>
-                <Button
-                  onClick={async () => {
-                    if (changePasswordData.newPassword !== changePasswordData.confirmPassword) {
-                      showToast(t('settings.toast.passwordsDoNotMatch'), 'error');
-                      return;
-                    }
-                    if (changePasswordData.newPassword.length < 6) {
-                      showToast(t('settings.toast.passwordTooShort'), 'error');
-                      return;
-                    }
-                    setChangePasswordLoading(true);
-                    try {
-                      await api.changePassword(changePasswordData.currentPassword, changePasswordData.newPassword);
-                      showToast(t('settings.toast.passwordChanged'), 'success');
-                      setShowChangePasswordModal(false);
-                      setChangePasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
-                    } catch (error: unknown) {
-                      const message = error instanceof Error ? error.message : 'Failed to change password';
-                      showToast(message, 'error');
-                    } finally {
-                      setChangePasswordLoading(false);
-                    }
-                  }}
-                  disabled={changePasswordLoading || !changePasswordData.currentPassword || !changePasswordData.newPassword || changePasswordData.newPassword !== changePasswordData.confirmPassword || changePasswordData.newPassword.length < 6}
-                >
-                  {changePasswordLoading ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      {t('settings.changing')}
-                    </>
-                  ) : (
-                    <>
-                      <Key className="w-4 h-4" />
-                      {t('settings.changePassword')}
-                    </>
-                  )}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+                  } catch (error: unknown) {
+                    const message = error instanceof Error ? error.message : 'Failed to change password';
+                    showToast(message, 'error');
+                  } finally {
+                    setChangePasswordLoading(false);
+                  }
+                }}
+                disabled={changePasswordLoading || !changePasswordData.currentPassword || !changePasswordData.newPassword || changePasswordData.newPassword !== changePasswordData.confirmPassword || changePasswordData.newPassword.length < 6}
+              >
+                {changePasswordLoading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    {t('settings.changing')}
+                  </>
+                ) : (
+                  <>
+                    <Key className="w-4 h-4" />
+                    {t('settings.changePassword')}
+                  </>
+                )}
+              </Button>
+            </div>
+          </CardContent>
+        </Modal>
       )}
     </div>
   );

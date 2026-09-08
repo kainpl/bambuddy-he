@@ -1308,6 +1308,7 @@ export function StatsPage() {
 
             {showTimeframePicker && (
               <>
+                {/* not-a-modal: popover */}
                 <div
                   className="fixed inset-0 z-10"
                   onClick={() => setShowTimeframePicker(false)}
