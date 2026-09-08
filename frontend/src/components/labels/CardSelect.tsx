@@ -120,7 +120,11 @@ export function CardSelect({ label, options, value, onChange, disabled }: CardSe
       setOpen(false);
     };
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false);
+      // Escape stops at this dropdown — the modal stack must not also close the dialog behind it.
+      if (event.key === 'Escape') {
+        event.stopPropagation();
+        setOpen(false);
+      }
     };
     // Capture: a scroll inside the dialog does not bubble to the window, and
     // that is exactly the scroll that moves the trigger out from under us.

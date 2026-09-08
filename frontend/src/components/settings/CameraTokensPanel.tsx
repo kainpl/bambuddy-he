@@ -151,7 +151,7 @@ function ConfirmRevokeModal({ token, onConfirm, onCancel }: ConfirmRevokeModalPr
       hideClose
       ariaLabel={t('cameraTokens.confirmRevoke.title')}
       size="md"
-      panelClassName="border-red-500/40"
+      panelStyle={{ borderColor: 'color-mix(in oklab, var(--color-red-500) 40%, transparent)' }}
     >
       <div className="p-6">
         <div className="flex items-start gap-3 mb-4">
@@ -229,7 +229,7 @@ function JustCreatedModal({ token, onClose }: JustCreatedModalProps) {
       hideClose
       ariaLabel={t('cameraTokens.created.title')}
       size="2xl"
-      panelClassName="border-bambu-green/40"
+      panelStyle={{ borderColor: 'color-mix(in oklab, var(--color-bambu-green) 40%, transparent)' }}
     >
       <div className="p-6">
         <div className="flex items-start gap-3 mb-4">

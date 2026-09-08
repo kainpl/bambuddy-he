@@ -122,7 +122,9 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
     };
 
     const handleEscape = (e: KeyboardEvent) => {
+      // Escape stops at this menu — the modal stack must not also close the dialog behind it.
       if (e.key === 'Escape') {
+        e.stopPropagation();
         onClose();
       }
     };
