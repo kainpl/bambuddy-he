@@ -54,6 +54,7 @@ from backend.app.models.user import User
 from backend.app.schemas.auth import (
     EncryptionRowCounts,
     EncryptionStatusResponse,
+    ForgotPasswordConfirmRequest,
     ForgotPasswordRequest,
     ForgotPasswordResponse,
     GroupBrief,
@@ -72,6 +73,7 @@ from backend.app.schemas.auth import (
 )
 from backend.app.services.email_service import (
     create_password_reset_email_from_template,
+    create_password_reset_link_email_from_template,
     generate_secure_password,
     get_smtp_settings,
     save_smtp_settings,
@@ -272,6 +274,102 @@ def _get_client_ip(request: Request) -> str:
 
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
+
+
+# One hour: long enough for a mail server to be slow and a person to be busy,
+# short enough that a link left in an inbox is not a standing key to the
+# account.
+PASSWORD_RESET_TOKEN_TTL = timedelta(hours=1)
+
+
+async def create_password_reset_token(db: AsyncSession, username: str) -> str:
+    """Mint a single-use password-reset token; the DB keeps only its hash.
+
+    The raw value exists in the e-mail and in the link the user clicks, never
+    in a row — same reasoning as the refresh cookie. A leaked database is
+    therefore not a set of working reset links.
+    """
+    from sqlalchemy import delete
+
+    from backend.app.core.auth import hash_client_secret
+    from backend.app.models.auth_ephemeral import AuthEphemeralToken, TokenType
+
+    now = datetime.now(timezone.utc)
+    # Prune expired ones opportunistically, as the pre-auth tokens do.
+    await db.execute(
+        delete(AuthEphemeralToken).where(
+            AuthEphemeralToken.token_type == TokenType.PASSWORD_RESET,
+            AuthEphemeralToken.expires_at < now,
+        )
+    )
+    # Anything still outstanding for this account is superseded: asking again
+    # must not leave the previous link working.
+    await db.execute(
+        delete(AuthEphemeralToken).where(
+            AuthEphemeralToken.token_type == TokenType.PASSWORD_RESET,
+            AuthEphemeralToken.username == username,
+        )
+    )
+    raw = secrets.token_urlsafe(32)
+    db.add(
+        AuthEphemeralToken(
+            token=hash_client_secret(raw),
+            token_type=TokenType.PASSWORD_RESET,
+            username=username,
+            expires_at=now + PASSWORD_RESET_TOKEN_TTL,
+        )
+    )
+    await db.commit()
+    return raw
+
+
+async def consume_password_reset_token(db: AsyncSession, raw: str) -> str | None:
+    """Atomically validate and spend a reset token. Returns the username or None.
+
+    DELETE...RETURNING, so two requests carrying the same token cannot both
+    succeed — only the first DELETE finds the row. That matters more here than
+    for pre-auth: mail clients pre-fetch links, and a token that survived its
+    own first use would be spendable again by whoever else has the message.
+    """
+    from sqlalchemy import delete
+
+    from backend.app.core.auth import hash_client_secret
+    from backend.app.models.auth_ephemeral import AuthEphemeralToken, TokenType
+
+    now = datetime.now(timezone.utc)
+    result = await db.execute(
+        delete(AuthEphemeralToken)
+        .where(
+            AuthEphemeralToken.token == hash_client_secret(raw),
+            AuthEphemeralToken.token_type == TokenType.PASSWORD_RESET,
+            AuthEphemeralToken.expires_at > now,
+        )
+        .returning(AuthEphemeralToken.username)
+    )
+    row = result.one_or_none()
+    if row is None:
+        return None
+    await db.commit()
+    return row[0]
+
+
+def is_password_reset_available(*, smtp_configured: bool, local_login_enabled: bool) -> bool:
+    """Whether self-service recovery can work on this install.
+
+    The one definition of that rule. ``/auth/advanced-auth/status`` reports it
+    and the login page hides its "Forgot password?" link on it, so the offer on
+    screen and the answer from ``/auth/forgot-password`` cannot drift apart —
+    they did, and the link kept promising an e-mail the API would refuse.
+
+    ⚠️ Deliberately NOT gated on ``advanced_auth_enabled``. That setting bundles
+    three unrelated things — generated passwords for new users, login by
+    e-mail, and per-user notification mail — and tying recovery to it meant an
+    operator who had configured SMTP and tested it still got a 400. What
+    recovery actually needs is a way to send mail, and a local password worth
+    resetting; those are the two conditions, and they are the two the route
+    itself refuses on.
+    """
+    return smtp_configured and local_login_enabled
 
 
 async def is_advanced_auth_enabled(db: AsyncSession) -> bool:
@@ -1119,6 +1217,9 @@ async def get_advanced_auth_status(db: AsyncSession = Depends(get_db)):
     return {
         "advanced_auth_enabled": advanced_auth_enabled,
         "smtp_configured": smtp_configured,
+        "password_reset_available": is_password_reset_available(
+            smtp_configured=smtp_configured, local_login_enabled=local_login_enabled
+        ),
         "local_login_enabled": local_login_enabled,
         "autologin_provider_id": autologin_provider_id,
     }
@@ -1173,15 +1274,8 @@ async def forgot_password(
                 detail="Local login is disabled — use SSO instead.",
             )
 
-    # Check if advanced auth is enabled
-    advanced_auth = await is_advanced_auth_enabled(db)
-    if not advanced_auth:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Advanced authentication is not enabled",
-        )
-
-    # Get SMTP settings
+    # Recovery needs a way to send mail, and nothing else. It is NOT gated on
+    # ``advanced_auth_enabled`` — see ``is_password_reset_available``.
     smtp_settings = await get_smtp_settings(db)
     if not smtp_settings:
         raise HTTPException(
@@ -1196,26 +1290,28 @@ async def forgot_password(
     # but only send email if user exists and is not an LDAP user
     if user and user.is_active and user.auth_source != "ldap":
         try:
-            # Generate new password
-            new_password = generate_secure_password()
-            user.password_hash = get_password_hash(new_password)
-            user.password_changed_at = datetime.now(timezone.utc)  # §18.4: invalidate existing JWTs
-            # §18.14: all sliding-session refresh tokens for this user die too,
-            # so every other device the user was logged in on bounces to /login
-            # after the next refresh attempt. Without this the old refresh cookie
-            # would keep minting fresh access tokens against a rotated password.
-            await revoke_all_refresh_tokens_for_user(db, user.username)
-            await db.commit()
-
+            # ⚠️ The password is NOT touched here. The old flow generated one,
+            # stored it and mailed it in the clear, which meant knowing an
+            # address was enough to rotate that account's password — the owner
+            # was locked out by a request they never made and never saw. The
+            # account changes only when somebody proves they read the message,
+            # by spending the token below.
+            raw_token = await create_password_reset_token(db, user.username)
             login_url = await get_external_login_url(db)
+            # The fragment is never sent to the server, so the token stays out
+            # of access logs, proxies and Referer headers; LoginPage picks it up
+            # client-side and clears it from the URL.
+            reset_url = f"{login_url}#reset_token={raw_token}"
 
-            # Send password reset email
-            subject, text_body, html_body = await create_password_reset_email_from_template(
-                db, user.username, new_password, login_url
+            subject, text_body, html_body = await create_password_reset_link_email_from_template(
+                db,
+                user.username,
+                reset_url,
+                int(PASSWORD_RESET_TOKEN_TTL.total_seconds() // 3600),
             )
             send_email(smtp_settings, user.email, subject, text_body, html_body)
 
-            logger.info(f"Password reset email sent to {user.email}")
+            logger.info("Password reset link sent to user %s", user.username)
         except Exception as e:
             logger.error("Failed to send password reset email: %s", e)
             # Don't reveal error to user for security
@@ -1223,6 +1319,66 @@ async def forgot_password(
     return ForgotPasswordResponse(
         message="If the email address is associated with an account, a password reset email has been sent."
     )
+
+
+@router.post("/forgot-password/confirm", response_model=ForgotPasswordResponse)
+async def forgot_password_confirm(
+    request: ForgotPasswordConfirmRequest,
+    raw_request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Spend a reset token from the e-mail link and set the new password.
+
+    Rate-limited per client IP on the same bucket as the send half. Guessing a
+    32-byte urlsafe token is not a realistic attack, but an endpoint that
+    changes passwords and needs no credentials should not be free to hammer.
+
+    The refusal is deliberately specific ("invalid or expired") — unlike the
+    send half it leaks nothing: the caller already holds a token or does not.
+    """
+    import logging
+
+    from backend.app.core.rate_limit import (
+        MAX_PASSWORD_RESET_PER_IP,
+        check_rate_limit,
+        record_failed_attempt,
+    )
+    from backend.app.models.auth_ephemeral import EventType
+
+    logger = logging.getLogger(__name__)
+
+    client_ip = _get_client_ip(raw_request)
+    await check_rate_limit(
+        db, client_ip, event_type=EventType.PASSWORD_RESET_IP, max_attempts=MAX_PASSWORD_RESET_PER_IP
+    )
+    await record_failed_attempt(db, client_ip, event_type=EventType.PASSWORD_RESET_IP)
+
+    username = await consume_password_reset_token(db, request.token)
+    if username is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This password reset link is invalid or has expired.",
+        )
+
+    user = await get_user_by_username(db, username)
+    # The token outlived its account, or the account was suspended or moved to
+    # LDAP since the mail went out. Same refusal — the link is simply no good.
+    if user is None or not user.is_active or user.auth_source == "ldap":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This password reset link is invalid or has expired.",
+        )
+
+    user.password_hash = get_password_hash(request.new_password)
+    user.password_changed_at = datetime.now(timezone.utc)  # §18.4: invalidate existing JWTs
+    # §18.14: whoever was signed in on the old password is signed out. If the
+    # reset happened because somebody else had the account, leaving their
+    # session alive would defeat the point of the reset.
+    await revoke_all_refresh_tokens_for_user(db, user.username)
+    await db.commit()
+
+    logger.info("Password reset completed for user %s", user.username)
+    return ForgotPasswordResponse(message="Your password has been changed. You can sign in with it now.")
 
 
 @router.post("/reset-password", response_model=ResetPasswordResponse)

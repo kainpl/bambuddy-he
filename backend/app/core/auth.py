@@ -438,6 +438,12 @@ def _hash_refresh_token(raw: str) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+# Public name for the same primitive. Anything we hand a client and must later
+# recognise — a refresh cookie, a password-reset link — is stored as this hash
+# and never in the clear, so a stolen database yields nothing replayable.
+hash_client_secret = _hash_refresh_token
+
+
 def refresh_token_ttl(remember_me: bool, ceiling_hours: int = SESSION_MAX_HOURS_HARD_CEILING) -> timedelta:
     """Absolute DB-side TTL for a refresh token.
 

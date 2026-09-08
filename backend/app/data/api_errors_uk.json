@@ -719,6 +719,7 @@
   "This location is a staggered-start group. Un-choose it under Settings → Printing → Queue & Scheduling → Staggered start first.": "Це розташування — група поетапного запуску. Спочатку зніміть його вибір у Налаштування → Друк → Черги та планування → Поетапний запуск.",
   "This location is still in use: {} printer(s), {} sensor(s), {} queued item(s). Move them first.": "Це розташування ще використовується: {} принтер(ів), {} датчик(ів), {} елемент(ів) у черзі. Спочатку перемістіть їх.",
   "This OIDC provider is managed by environment variables and cannot be modified.": "Цей OIDC-провайдер керується змінними середовища, тому його не можна змінити.",
+  "This password reset link is invalid or has expired.": "Це посилання для скидання пароля недійсне або застаріло.",
   "This plate was not sliced with object labels, so its parts cannot be skipped": "Цю плиту нарізано без міток обʼєктів, тому її деталі не можна пропускати",
   "This print has already been counted into stock": "Цей друк уже зараховано у вільний залишок",
   "This print is filed under an order — its parts are counted there": "Цей друк віднесено до замовлення — його деталі зараховано там",

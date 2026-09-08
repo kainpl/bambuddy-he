@@ -6214,6 +6214,12 @@ export interface TestSMTPResponse {
 export interface AdvancedAuthStatus {
   advanced_auth_enabled: boolean;
   smtp_configured: boolean;
+  // Whether self-service password recovery can actually work here: SMTP is
+  // configured AND local login is on. The server owns this rule (see
+  // `is_password_reset_available`) so the offer on the login page and the
+  // answer from /auth/forgot-password cannot disagree — they did, and the link
+  // promised an e-mail the API refused to send.
+  password_reset_available: boolean;
   // #1589: false hides the username/password form on the LoginPage; the env
   // var BAMDUDE_LOCAL_LOGIN=true on the server flips this back to true so the
   // recovery path remains visible.

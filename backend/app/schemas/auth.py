@@ -183,6 +183,24 @@ class ForgotPasswordResponse(BaseModel):
     message: str
 
 
+class ForgotPasswordConfirmRequest(BaseModel):
+    """Second half of self-service recovery: the token from the e-mail link.
+
+    The password is set HERE, not when the e-mail was requested. The old flow
+    generated a password at request time and mailed it, which meant anyone who
+    knew an address could rotate that account's password and lock its owner
+    out without ever reading the message.
+    """
+
+    token: str = Field(..., max_length=512)
+    new_password: str = Field(..., min_length=MIN_PASSWORD_LENGTH, max_length=256)
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_new_password(cls, v: str) -> str:
+        return _validate_password_complexity(v)
+
+
 class ResetPasswordRequest(BaseModel):
     user_id: int
 

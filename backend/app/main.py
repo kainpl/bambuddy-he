@@ -9286,7 +9286,12 @@ PUBLIC_API_ROUTES = {
     "/api/v1/auth/refresh",
     # Advanced auth status needed for login page
     "/api/v1/auth/advanced-auth/status",
-    "/api/v1/auth/forgot-password",  # Password reset for advanced auth
+    # Both halves of self-service recovery. ⚠️ The confirm half MUST be here:
+    # it is reached by somebody who cannot sign in — that is the whole
+    # premise — so leaving it behind the auth gate makes the reset link
+    # answer 401 to the only person who would ever click it.
+    "/api/v1/auth/forgot-password",
+    "/api/v1/auth/forgot-password/confirm",
     # Version check for updates (no sensitive data)
     "/api/v1/updates/version",
     # Metrics endpoint handles its own prometheus_token authentication

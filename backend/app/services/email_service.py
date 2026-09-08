@@ -16,7 +16,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.app.models.notification_template import NotificationTemplate
+from backend.app.models.notification_template import DEFAULT_TEMPLATES, NotificationTemplate
 from backend.app.models.settings import Settings
 from backend.app.schemas.auth import MIN_PASSWORD_LENGTH, SMTPSettings
 
@@ -523,6 +523,70 @@ async def create_password_reset_email_from_template(
         # Fallback to hardcoded template
         logger.warning("No password reset email template found in database, using default")
         return create_password_reset_email(username, password, login_url)
+
+
+async def create_password_reset_link_email_from_template(
+    db: AsyncSession, username: str, reset_url: str, ttl_hours: int, app_name: str = "BamDude"
+) -> tuple[str, str, str]:
+    """Build the self-service recovery e-mail: a one-time link, no password.
+
+    Sibling of ``create_password_reset_email_from_template``, which is the
+    ADMIN-initiated reset and does still mail a generated password. The two are
+    separate templates on purpose — changing the meaning of the old one would
+    have left every existing install rendering "New Password: {password}" with
+    nothing to put there.
+
+    Returns:
+        Tuple of (subject, text_body, html_body)
+    """
+    template = await get_notification_template(db, "password_reset_link")
+    if template is None:
+        # The locale sync seeds this on startup, so a miss means a very old
+        # database that has not booted since the feature landed. Refusing would
+        # turn a cosmetic gap into "recovery is broken", so fall back to the
+        # default copy rather than to no e-mail at all.
+        logger.warning("No password_reset_link template in the database, using the built-in copy")
+        default = next((x for x in DEFAULT_TEMPLATES if x["event_type"] == "password_reset_link"), None)
+        if default is None:  # pragma: no cover - the entry is a module constant
+            raise RuntimeError("password_reset_link default template is missing")
+        title_template, body_template = default["title_template"], default["body_template"]
+    else:
+        title_template, body_template = template.title_template, template.body_template
+
+    variables = {
+        "app_name": app_name,
+        "username": username,
+        "reset_url": reset_url,
+        "ttl_hours": ttl_hours,
+    }
+    subject = render_template(title_template, variables)
+    text_body = render_template(body_template, variables)
+
+    # Escape the body and turn newlines into breaks, exactly as the sibling
+    # does — the username reaches here from the database and the URL is ours,
+    # but neither may be trusted into raw HTML.
+    escaped_text_body = html.escape(text_body).replace("\n", "<br>\n")
+    html_body = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+    <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); background-color: #667eea; padding: 30px; border-radius: 8px 8px 0 0;">
+        <h1 style="color: #ffffff; margin: 0; font-size: 24px; text-shadow: 0 1px 2px rgba(0,0,0,0.3);">{html.escape(subject)}</h1>
+    </div>
+    <div style="background: #f9f9f9; padding: 30px; border-radius: 0 0 8px 8px; border: 1px solid #ddd; border-top: none;">
+        <div style="font-size: 16px;">{escaped_text_body}</div>
+
+        <div style="text-align: center; margin: 30px 0;">
+            <a href="{html.escape(reset_url, quote=True)}" style="display: inline-block; background-color: #667eea; color: #ffffff; padding: 12px 30px; text-decoration: none; border-radius: 4px; font-weight: bold;">Reset Password</a>
+        </div>
+    </div>
+</body>
+</html>
+"""
+    return subject, text_body, html_body
 
 
 async def send_user_print_notification(

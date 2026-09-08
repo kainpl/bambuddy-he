@@ -721,14 +721,23 @@ export function LoginPage() {
             </button>
           </div>
 
+          {/* Offered only when a reset e-mail can actually be sent. With no
+              SMTP there is no self-service recovery at all, and a link that
+              opens a form nothing will answer is worse than no link: the
+              operator recovers the account from the server console instead
+              (`python -m backend.app.cli reset_password`). */}
           <div className="text-center">
-            <button
-              type="button"
-              onClick={() => setShowForgotPassword(true)}
-              className="text-sm text-bambu-gray hover:text-bambu-green transition-colors"
-            >
-              {t('login.forgotPassword')}
-            </button>
+            {advancedAuthStatus?.password_reset_available ? (
+              <button
+                type="button"
+                onClick={() => setShowForgotPassword(true)}
+                className="text-sm text-bambu-gray hover:text-bambu-green transition-colors"
+              >
+                {t('login.forgotPassword')}
+              </button>
+            ) : (
+              <p className="text-sm text-bambu-gray">{t('login.forgotPasswordAskAdmin')}</p>
+            )}
           </div>
         </form>
         )}
@@ -779,8 +788,7 @@ export function LoginPage() {
           size="md"
         >
           <div className="p-4">
-            {advancedAuthStatus?.advanced_auth_enabled ? (
-              <form onSubmit={handleForgotPassword} className="space-y-4">
+            <form onSubmit={handleForgotPassword} className="space-y-4">
                 <p className="text-bambu-gray text-sm">
                   {t('login.forgotPasswordEmailMessage')}
                 </p>
@@ -822,32 +830,7 @@ export function LoginPage() {
                       : t('login.sendResetEmail')}
                   </Button>
                 </div>
-              </form>
-            ) : (
-              <div className="space-y-4">
-                <p className="text-bambu-gray">
-                  {t('login.forgotPasswordMessage')}
-                </p>
-
-                <div className="bg-bambu-dark rounded-lg p-4 space-y-2">
-                  <p className="text-sm text-white font-medium">{t('login.howToReset')}</p>
-                  <ol className="text-sm text-bambu-gray space-y-1 list-decimal list-inside">
-                    <li>{t('login.resetStep1')}</li>
-                    <li>{t('login.resetStep2')}</li>
-                    <li>{t('login.resetStep3')}</li>
-                    <li>{t('login.resetStep4')}</li>
-                  </ol>
-                </div>
-
-                <Button
-                  variant="secondary"
-                  className="w-full"
-                  onClick={() => setShowForgotPassword(false)}
-                >
-                  {t('login.gotIt')}
-                </Button>
-              </div>
-            )}
+            </form>
           </div>
         </Modal>
       )}
