@@ -761,6 +761,52 @@ export function SystemInfoPage() {
             )}
           </div>
 
+          {/* What PostgreSQL itself knows about where its space went — the
+              same question pgAdmin answers. Absent on SQLite, where the file
+              IS the database and the storage breakdown already covers it. */}
+          {dbHealth.largest_tables && dbHealth.largest_tables.length > 0 && (
+            <div className="mt-4">
+              <h3 className="text-sm font-medium text-bambu-gray mb-2">
+                {t('system.largestTables', 'Largest tables')}
+              </h3>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-bambu-gray text-xs">
+                      <th className="text-left font-medium py-1">{t('system.table', 'Table')}</th>
+                      <th className="text-right font-medium py-1">{t('system.tableSize', 'Size')}</th>
+                      <th className="text-right font-medium py-1">{t('system.tableRows', 'Rows')}</th>
+                      <th className="text-right font-medium py-1">{t('system.tableScans', 'Seq / index scans')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {dbHealth.largest_tables.map((row) => {
+                      const scan = dbHealth.scans?.find((s) => s.table === row.table);
+                      return (
+                        <tr key={row.table} className="border-t border-bambu-dark-tertiary">
+                          <td className="py-1 pr-3 font-mono text-xs text-white">{row.table}</td>
+                          <td className="py-1 text-right text-bambu-gray tabular-nums">{formatBytes(row.bytes)}</td>
+                          <td className="py-1 text-right text-bambu-gray tabular-nums">
+                            {row.rows.toLocaleString()}
+                          </td>
+                          <td className="py-1 text-right text-bambu-gray tabular-nums">
+                            {scan ? `${scan.seq_scan.toLocaleString()} / ${scan.idx_scan.toLocaleString()}` : '—'}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <p className="mt-1 text-xs text-bambu-gray">
+                {t(
+                  'system.tableScansHint',
+                  'A large table read mostly by sequential scans is the shape that wants an index.',
+                )}
+              </p>
+            </div>
+          )}
+
           {dbHealth.probes_failed.length > 0 && (
             <p className="mt-3 text-xs text-bambu-gray">
               {t('system.probesFailed', 'Could not read: {{list}}', {

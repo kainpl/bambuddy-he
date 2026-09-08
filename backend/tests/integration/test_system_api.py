@@ -421,3 +421,58 @@ class TestSystemHelperFunctions:
 
         result = format_uptime(30)  # 30 seconds
         assert result == "< 1m"
+
+
+class TestDatabaseSizeAcrossBackends:
+    """⚠️ ``storage.database_size_bytes`` used to stat ``bamdude.db`` and nothing
+    else, so it reported **0** on every PostgreSQL install — including the
+    bundled one, whose cluster sits in DATA_DIR the entire time. PostgreSQL can
+    answer for itself, so it is asked.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_size_is_read_from_the_backend_not_from_a_filename(self, async_client, monkeypatch):
+        async def pretend_postgres(_db):
+            return 734_003_200
+
+        monkeypatch.setattr("backend.app.services.db_health.probe_size_bytes", pretend_postgres)
+        body = (await async_client.get("/api/v1/system/info")).json()
+
+        assert body["storage"]["database_size_bytes"] == 734_003_200
+        assert body["storage"]["database_size_formatted"]
+
+    @pytest.mark.asyncio
+    async def test_a_failing_probe_does_not_take_the_page_down(self, async_client, monkeypatch):
+        async def boom(_db):
+            raise RuntimeError("no such database")
+
+        monkeypatch.setattr("backend.app.services.db_health.probe_size_bytes", boom)
+        response = await async_client.get("/api/v1/system/info")
+
+        assert response.status_code == 200
+        assert response.json()["storage"]["database_size_bytes"] == 0
+
+    def test_the_bundled_cluster_counts_as_the_database_on_disk(self, monkeypatch, tmp_path):
+        """An external server's files are on another machine; the bundled one's
+        are the largest thing in DATA_DIR, and the storage breakdown listed
+        nothing for them."""
+        from backend.app.api.routes import system as system_routes
+
+        monkeypatch.setattr(system_routes.settings, "embedded_postgres", False, raising=False)
+        assert system_routes._get_embedded_pg_dir() is None
+
+        monkeypatch.setattr(system_routes.settings, "embedded_postgres", True, raising=False)
+        monkeypatch.setattr(system_routes.settings, "embedded_pg_data_dir", tmp_path / "postgres" / "18", raising=False)
+        assert system_routes._get_embedded_pg_dir() == tmp_path / "postgres"
+
+    def test_the_classifier_files_the_cluster_under_database(self, monkeypatch, tmp_path):
+        from backend.app.api.routes import system as system_routes
+
+        monkeypatch.setattr(system_routes.settings, "embedded_postgres", True, raising=False)
+        monkeypatch.setattr(system_routes.settings, "embedded_pg_data_dir", tmp_path / "postgres" / "18", raising=False)
+
+        rules = system_routes._get_storage_rules()
+        category, _label, matches = rules[0]
+        assert category == "database"
+        assert matches(tmp_path / "postgres" / "18" / "base" / "1" / "2619")
+        assert not matches(tmp_path / "archives" / "x.3mf")

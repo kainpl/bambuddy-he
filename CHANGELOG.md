@@ -92,6 +92,10 @@
 
 ### Fixed
 
+- **The sensor-silence watchdog read the whole sensor history every minute.** To work out which quantities a sensor reports and when it last reported, it scanned every row that sensor had ever recorded — twice, once for each question — on every tick of the measurement loop. On a real installation that was 94 000 rows and 13 MB of reads a minute to produce four short words and one timestamp, and it grew in step with how much history you keep. It now asks about the quantities BamDude knows how to measure and looks each one up directly: the same answers, measured at 0.3 ms instead of 33 ms, using the index that was already there.
+
+- **The System page reported a database size of 0 on PostgreSQL.** It measured the size by looking at the `bamdude.db` file, which does not exist on a PostgreSQL install — so every one of them showed nothing, including the bundled server whose data sits in your data folder the whole time. The figure now comes from the database itself on either backend, the storage breakdown counts the bundled server'''s files instead of omitting them, and the new database card lists the largest tables with their row counts and how they are being read.
+
 - **«Optimise database» works on PostgreSQL.** The button ran a SQLite-only command with no check for which backend you use, so on any PostgreSQL install it failed every single time while the UI still offered it. It now runs the maintenance that backend actually supports and says which it did.
 
 - **The inventory summary no longer waits for the spool list.** The farm-wide figures at the top of the page have their own query and their own data, but were hidden until a page of rows arrived — so the number you look at first was held up by the slower half of the page. A loading list now keeps the table'''s shape instead of replacing the whole thing with one spinner (which also covers the first flip of «Group similar», the one case that still genuinely reloads), and a filter change dims the rows and shows a small spinner so stale numbers cannot read as current.
