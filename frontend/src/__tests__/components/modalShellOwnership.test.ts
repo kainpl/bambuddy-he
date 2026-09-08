@@ -4,8 +4,8 @@
  * last; this scan is what stops the next copy.
  *
  * Two rules, checked on every JSX opening tag in `src/**\/*.tsx`:
- * 1. `fixed inset-0` with a visible ground (`bg-black` / `backdrop-blur`) is a
- *    modal → must be <Modal>.
+ * 1. `fixed inset-0` with a painted ground (any `bg-*` but `bg-transparent`,
+ *    or `backdrop-blur`) is a modal → must be <Modal>.
  * 2. an `inset-0` overlay with a pointer handler is a click-outside → only a
  *    menu, popover, drawer, loading or viewer overlay may have one, and it says
  *    so on the line above: `// not-a-modal: menu` (or `{/* not-a-modal: menu *\/}`).
@@ -52,6 +52,7 @@ const NOT_YET_MIGRATED: string[] = [
   'components/CreateFilamentFamilyModal.tsx',
   'components/CreateUserAdvancedAuthModal.tsx',
   'components/EditArchiveModal.tsx',
+  'components/EmbeddedCameraViewer.tsx',
   'components/FilamentCalibrationModal.tsx',
   'components/FilamentHoverCard.tsx',
   'components/FileManagerModal.tsx',
@@ -193,11 +194,16 @@ function offenders(file: string, src: string): string[] {
     if (!/className=/.test(t.text) || !/\binset-0\b/.test(t.text)) continue;
     if (MARKER.test(t.lineBefore)) continue;
     const fullScreen = /\bfixed\b/.test(t.text);
-    const visible = /\bbg-black\b|\bbackdrop-blur/.test(t.text);
+    // Any painted ground makes a full-screen overlay a modal — `bg-black/50`,
+    // but also an opaque themed ground like the fullscreen camera's
+    // `bg-bambu-dark-secondary`. A menu's click-catcher paints nothing.
+    const ground = /\bbg-(?!transparent\b)|\bbackdrop-blur/.test(t.text);
+    // A sibling backdrop is always the dimming kind.
+    const dimming = /\bbg-black\b|\bbackdrop-blur/.test(t.text);
     const handler = /\bon(Click|MouseDown|PointerDown|TouchStart)=/.test(t.text);
-    if (fullScreen && visible) {
+    if (fullScreen && ground) {
       out.push(`${file}:${t.line} — hand-rolled modal overlay; render <Modal> from components/Modal.tsx`);
-    } else if (handler && (fullScreen || (visible && /\babsolute\b/.test(t.text)))) {
+    } else if (handler && (fullScreen || (dimming && /\babsolute\b/.test(t.text)))) {
       out.push(
         `${file}:${t.line} — click-outside on an overlay; put "// not-a-modal: menu|popover|drawer|loading|viewer" on the line above, or use <Modal variant="lightbox">`,
       );
