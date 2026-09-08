@@ -8,15 +8,9 @@ import { useEffect, useRef } from 'react';
  * the returned ref to the element that carries `role="dialog"`, give that
  * element `tabIndex={-1}` so it can hold focus, and pass whether it is open.
  *
- * The call sites, eight of them — **five dialogs**: the import dialog
- * (`ImportProductDialog`), the product card dialog's shell
- * (`ProductCardDialog`), the stock correction dialog (`AdjustDialog`, in
- * `components/products/ProductStock.tsx`) and the shells of BOTH halves of the
- * model card modal (`ModelCardModal` carries an archive card and a library-file
- * card, each its own component); and **three lightboxes**: one in each half of
- * the model card modal and the product gallery's own (`ProductGallery`).
- * Counting them in the comment at each call site is what made the number wrong;
- * grep this file's name instead.
+ * Since the modal shell (`components/Modal.tsx`) every modal and lightbox goes
+ * through it, so the shell is the caller — grep this file's name rather than
+ * trusting any list written here; a list is what went stale last time.
  *
  * ⚠️ **This is NOT a focus trap and must not be described as one.** Tab still
  * walks out of the overlay and into the page behind it; what the hook fixes is
@@ -26,7 +20,8 @@ import { useEffect, useRef } from 'react';
  * nowhere: the next Tab restarts from the top of the page rather than from the
  * control that opened the dialog. Trapping properly means inert-ing the rest of
  * the document, which is a change to every page that opens one of these; it is
- * deliberately not done here and no comment in this codebase claims it is.
+ * deliberately not done here and no comment in this codebase claims it is
+ * (vault: `90-ideas/Focus trap для модалок через inert`).
  *
  * ⚠️ The element to return focus TO is read at OPEN, not at close: by the time
  * the overlay unmounts `document.activeElement` is whatever the overlay left
