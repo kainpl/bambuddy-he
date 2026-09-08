@@ -25,6 +25,7 @@ import { Card, CardHeader, CardContent } from './Card';
 import { parseUTCDate } from '../utils/date';
 import { Button } from './Button';
 import { BugReportBubble } from './BugReportBubble';
+import { isAnyModalOpen } from './modalStack';
 
 
 // Sidebar groups (for visual section dividers + labels). Group membership
@@ -662,6 +663,11 @@ export function Layout() {
     if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
       return;
     }
+    // Number-key navigation must not fire under a modal — the shortcuts page
+    // has promised this since it was written; the stack makes it true.
+    if (isAnyModalOpen()) {
+      return;
+    }
 
     // Number keys for navigation (1-9) - follows sidebar order including external links
     if (!e.metaKey && !e.ctrlKey && !e.altKey) {
@@ -693,9 +699,6 @@ export function Layout() {
         case '?':
           e.preventDefault();
           setShowShortcuts(true);
-          break;
-        case 'Escape':
-          setShowShortcuts(false);
           break;
       }
     }
