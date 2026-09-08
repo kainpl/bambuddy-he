@@ -18,6 +18,7 @@ from backend.app.schemas.auth import (
     SetupRequest,
     UserCreate,
     UserUpdate,
+    _validate_password_complexity,
 )
 
 VALID = "Abcdef12"
@@ -72,3 +73,37 @@ def test_an_omitted_password_is_still_optional_on_the_user_schemas():
     satisfy rules for a password it is not setting."""
     assert UserCreate(username="alice").password is None
     assert UserUpdate(email="alice@example.com").password is None
+
+
+def test_a_generated_password_satisfies_the_same_rules():
+    """Advanced auth and the forgot-password flow set a password nobody types.
+    It has to pass the rules a human's would — otherwise the account exists
+    with a password its own Change Password form would refuse."""
+    from backend.app.services.email_service import generate_secure_password
+
+    for _ in range(50):
+        _validate_password_complexity(generate_secure_password())
+
+
+def test_a_generated_password_may_not_be_shorter_than_the_floor():
+    from backend.app.services.email_service import generate_secure_password
+
+    with pytest.raises(ValueError):
+        generate_secure_password(length=MIN_PASSWORD_LENGTH - 1)
+
+
+def test_the_generated_order_is_not_the_predictable_generator():
+    """Every character is drawn with `secrets`; the shuffle must be too. A
+    `random.shuffle` here would leave the arrangement recoverable while the
+    alphabet was not, and the first four positions carry known classes."""
+    import inspect
+
+    from backend.app.services import email_service
+
+    source = inspect.getsource(email_service.generate_secure_password)
+    # Comments in there name `random.shuffle` to say why it is wrong, so look
+    # at the code alone.
+    code = " ".join(line for line in source.splitlines() if not line.lstrip().startswith("#"))
+    assert "secrets.SystemRandom().shuffle" in code
+    assert "random.shuffle" not in code.replace("secrets.SystemRandom().shuffle", "")
+    assert "import random" not in code

@@ -30,7 +30,7 @@ FRONTEND_RULES = Path(__file__).resolve().parents[3] / "frontend" / "src" / "uti
 # whichever rule is named first is the one the user fixes — a different order
 # on each side means the message changes when the form is finally submitted.
 FRONTEND_CHECKS = [
-    "password.length < MIN_PASSWORD_LENGTH",
+    "password.length >= MIN_PASSWORD_LENGTH",
     "/[A-Z]/.test(password)",
     "/[a-z]/.test(password)",
     "/\\d/.test(password)",

@@ -1,7 +1,7 @@
 import { useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Eye, EyeOff } from 'lucide-react';
-import { checkPasswordComplexity } from '../utils/password';
+import { Eye, EyeOff, Check, Dot } from 'lucide-react';
+import { PASSWORD_RULES } from '../utils/password';
 
 interface PasswordFieldProps {
   label: string;
@@ -13,9 +13,9 @@ interface PasswordFieldProps {
   id?: string;
   autoFocus?: boolean;
   /**
-   * Check the value against the complexity rules and name the first unmet one
-   * as the user types. Off for "current password" fields, where the rules
-   * describe the NEW password and an old one that predates them is still valid.
+   * Show the complexity requirements under the field and tick them off as they
+   * are met. Off for "current password" fields, where the rules describe the
+   * NEW password and an old one that predates them is still valid.
    */
   showRules?: boolean;
   /** When given and different from `value`, the field says they do not match. */
@@ -28,19 +28,24 @@ interface PasswordFieldProps {
 }
 
 /**
- * One password input: reveal toggle, and the reason it is not accepted yet.
+ * One password input: reveal toggle, and the requirements written out.
  *
- * ⚠️ The reason is the point of this component. Every create/change form
- * disabled its submit button on `isPasswordValid(...)` while the message
- * explaining WHICH rule failed lived in the click handler — behind the button
- * that same rule had disabled. So a user typing a password that was merely too
- * short saw a dead button and no text anywhere: the explanation existed and was
- * unreachable by construction (reported 2026-09-08).
+ * ⚠️ Saying what is wanted is the point of this component. Every create /
+ * change form disabled its submit button on the complexity rules while the
+ * only message naming the unmet one lived in the click handler — behind the
+ * very button that rule disabled. So a user typing a password that was merely
+ * too short saw a dead button and no text anywhere: the explanation existed
+ * and was unreachable by construction (reported 2026-09-08).
  *
- * The rules come from `utils/password.ts`, which mirrors the backend validator.
- * Nothing here may grow its own threshold: two forms had hand-rolled
- * `length < 6` checks while the server required 8 plus a mix, so they let a
- * password through that the API then refused.
+ * The requirements are a LIST rather than a single first-failure line, because
+ * they are worth knowing before the password is refused: being told "at least
+ * 8 characters", typing eight, and only then being told a digit is also needed
+ * is the same dead end one step later.
+ *
+ * The rules come from `utils/password.ts`, which mirrors the backend
+ * validator. Nothing here may grow its own threshold: two forms had
+ * hand-rolled `length < 6` checks while the server required 8 plus a mix, so
+ * they let a password through that the API then refused.
  */
 export function PasswordField({
   label,
@@ -56,14 +61,17 @@ export function PasswordField({
 }: PasswordFieldProps) {
   const { t } = useTranslation();
   const [revealed, setRevealed] = useState(false);
+  const [focused, setFocused] = useState(false);
   const generatedId = useId();
   const inputId = id ?? generatedId;
 
-  // Say nothing until there is something to say about: an empty field is not
-  // yet a mistake, it is a field the user has not reached.
-  const ruleKey = showRules && value ? checkPasswordComplexity(value) : null;
+  // A confirmation is either right or wrong — there is nothing to guide, so it
+  // keeps a single red line. An empty one is not yet a mistake.
   const mismatch = mustMatch !== undefined && value.length > 0 && value !== mustMatch;
-  const message = ruleKey ? t(ruleKey) : mismatch ? t('settings.passwordsDoNotMatch') : null;
+
+  // The requirements appear once the user is at the field: an untouched form is
+  // not the place to lecture, and the placeholder already carries the gist.
+  const rulesVisible = Boolean(showRules) && (focused || value.length > 0);
 
   return (
     <div>
@@ -76,15 +84,17 @@ export function PasswordField({
           type={revealed ? 'text' : 'password'}
           value={value}
           onChange={(e) => onChange(e.target.value)}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
           className={`block w-full px-4 py-3 pr-12 bg-bambu-dark-secondary border rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors ${
-            message ? 'border-red-500' : 'border-bambu-dark-tertiary'
+            mismatch ? 'border-red-500' : 'border-bambu-dark-tertiary'
           }`}
           placeholder={placeholder}
           autoComplete={autoComplete}
           required={required}
           autoFocus={autoFocus}
-          aria-invalid={message ? true : undefined}
-          aria-describedby={message ? `${inputId}-hint` : undefined}
+          aria-invalid={mismatch ? true : undefined}
+          aria-describedby={mismatch ? `${inputId}-error` : rulesVisible ? `${inputId}-rules` : undefined}
         />
         <button
           type="button"
@@ -99,10 +109,38 @@ export function PasswordField({
           {revealed ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
         </button>
       </div>
-      {message && (
-        <p id={`${inputId}-hint`} className="text-red-700 dark:text-red-400 text-xs mt-1">
-          {message}
+      {mismatch && (
+        <p id={`${inputId}-error`} className="text-red-700 dark:text-red-400 text-xs mt-1">
+          {t('settings.passwordsDoNotMatch')}
         </p>
+      )}
+      {rulesVisible && (
+        <ul id={`${inputId}-rules`} className="mt-2 space-y-0.5">
+          {PASSWORD_RULES.map((rule) => {
+            const met = rule.test(value);
+            return (
+              <li
+                key={rule.key}
+                className={`flex items-center gap-1 text-xs transition-colors ${
+                  met ? 'text-bambu-green' : 'text-bambu-gray'
+                }`}
+              >
+                {/* A met rule is ticked; an unmet one gets a neutral dot, not a
+                    cross — nothing is wrong yet, it is simply not done. */}
+                {met ? (
+                  <Check className="w-3.5 h-3.5 flex-shrink-0" aria-hidden="true" />
+                ) : (
+                  <Dot className="w-3.5 h-3.5 flex-shrink-0" aria-hidden="true" />
+                )}
+                <span>{t(rule.labelKey)}</span>
+                {/* The colour and the icon carry the state for everyone else. */}
+                <span className="sr-only">
+                  {t(met ? 'common.passwordRules.met' : 'common.passwordRules.unmet')}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
       )}
     </div>
   );

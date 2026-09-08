@@ -2,6 +2,8 @@
 
 ### Security
 
+- **Automatically generated passwords are now shuffled with a cryptographic generator.** Advanced authentication and the password-recovery e-mail create a password for you. Every character in it was drawn securely, but their final ORDER was decided by Python's general-purpose random generator, whose internal state can be reconstructed from its output — and the arrangement matters here, because the first four positions are known by construction to hold one lower-case letter, one upper-case, one digit and one special character. Nothing needs to be re-issued; passwords already sent remain 16 characters drawn from a secure source.
+
 - **Frontend dependencies bumped on Dependabot security advisories:** `@tiptap/core` 3.19 → 3.31, `fflate` 0.8.2 → 0.8.3, `@humanfs/node` 0.16.7 → 0.16.8 (transitive; the rich-text editor and the 3MF reader keep working as before).
 
 ### Added
@@ -97,6 +99,8 @@
 ### Fixed
 
 - **A user dialog with a grey Create button now says what is missing.** Typing a name and a password and finding the button still disabled, with nothing on screen explaining why, was the whole of the report — and the explanation did exist: the message naming the broken password rule was written to fire when you pressed the button that rule had just disabled. Every account password field now names the first unmet rule as you type it (eight characters, an upper-case letter, a lower-case letter, a digit), says when a confirmation does not match, and the two dialogs that can still be blocked by an empty field list which one. Two of those forms were also checking a rule that stopped being true — first setup and Change Password wanted six characters while the server has wanted eight and a mix for a long time, so a password they accepted came back refused. The server had the mirror-image gap: creating or editing a user through Settings enforced the character mix but not the length, the one place the eight-character floor was never applied.
+
+- **A password field now says what is wanted, not only what is wrong.** Under any field where you set a new password — first setup, create or edit a user, change your own — the four requirements are listed and tick themselves off green as you type: eight characters, an upper-case letter, a lower-case letter, a digit. They appear the moment you click into the field, so the target is visible before the password is refused rather than after; being told «at least 8 characters», typing eight and only then hearing about the digit is the same dead end one step later. The list stays put once everything passes.
 
 - **Every password field can show what you typed.** Create a user, edit one, change your own password, sign in, first setup — each password box now has an eye at its right-hand end. First setup had one already; nothing else did, so the only way to check a long password was to type it twice and hope. The create-user dialog also gains the e-mail field it was missing: the form carried the address all along and the dialog simply never asked for it.
 

@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.models.notification_template import NotificationTemplate
 from backend.app.models.settings import Settings
-from backend.app.schemas.auth import SMTPSettings
+from backend.app.schemas.auth import MIN_PASSWORD_LENGTH, SMTPSettings
 
 logger = logging.getLogger(__name__)
 
@@ -26,13 +26,17 @@ logger = logging.getLogger(__name__)
 def generate_secure_password(length: int = 16) -> str:
     """Generate a secure random password.
 
+    Satisfies ``schemas.auth._validate_password_complexity`` by construction —
+    one character from each class, then a length no shorter than the floor.
+
     Args:
         length: Length of the password (default: 16)
 
     Returns:
         A secure random password containing uppercase, lowercase, digits, and special characters
     """
-    import random
+    if length < MIN_PASSWORD_LENGTH:
+        raise ValueError(f"Generated passwords may not be shorter than {MIN_PASSWORD_LENGTH} characters")
 
     # Define character sets
     lowercase = string.ascii_lowercase
@@ -52,8 +56,14 @@ def generate_secure_password(length: int = 16) -> str:
     all_chars = lowercase + uppercase + digits + special
     password_chars.extend(secrets.choice(all_chars) for _ in range(length - 4))
 
-    # Shuffle to avoid predictable patterns
-    random.shuffle(password_chars)
+    # Shuffle to avoid predictable patterns.
+    # ⚠️ Not `random.shuffle` — that is the Mersenne Twister, whose state is
+    # recoverable from its output. Every character here is drawn with `secrets`,
+    # so leaving the ORDER to a predictable generator would be the one
+    # non-cryptographic step in the whole function: the first four positions
+    # are known to hold one lowercase, one uppercase, one digit and one
+    # special, and only the shuffle hides where they went.
+    secrets.SystemRandom().shuffle(password_chars)
 
     return "".join(password_chars)
 
