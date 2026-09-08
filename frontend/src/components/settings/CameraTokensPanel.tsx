@@ -13,6 +13,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Copy, Plus, Trash2, AlertTriangle } from 'lucide-react';
 import { api, type LongLivedToken } from '../../api/client';
+import { Modal } from '../Modal';
 import { useToast } from '../../contexts/ToastContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { parseUTCDate } from '../../utils/date';
@@ -145,12 +146,14 @@ interface ConfirmRevokeModalProps {
 function ConfirmRevokeModal({ token, onConfirm, onCancel }: ConfirmRevokeModalProps) {
   const { t } = useTranslation();
   return (
-    <div
-      className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
-      role="dialog"
-      aria-modal="true"
+    <Modal
+      onClose={onCancel}
+      hideClose
+      ariaLabel={t('cameraTokens.confirmRevoke.title')}
+      size="md"
+      panelClassName="border-red-500/40"
     >
-      <div className="bg-bambu-dark-secondary rounded-lg p-6 max-w-md w-full border border-red-500/40">
+      <div className="p-6">
         <div className="flex items-start gap-3 mb-4">
           <AlertTriangle className="w-6 h-6 text-red-600 dark:text-red-400 flex-shrink-0 mt-0.5" />
           <div>
@@ -179,7 +182,7 @@ function ConfirmRevokeModal({ token, onConfirm, onCancel }: ConfirmRevokeModalPr
           </button>
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -221,8 +224,14 @@ function JustCreatedModal({ token, onClose }: JustCreatedModalProps) {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-bambu-dark-secondary rounded-lg p-6 max-w-2xl w-full border border-bambu-green/40">
+    <Modal
+      onClose={onClose}
+      hideClose
+      ariaLabel={t('cameraTokens.created.title')}
+      size="2xl"
+      panelClassName="border-bambu-green/40"
+    >
+      <div className="p-6">
         <div className="flex items-start gap-3 mb-4">
           <AlertTriangle className="w-6 h-6 text-yellow-600 dark:text-yellow-400 flex-shrink-0 mt-0.5" />
           <div>
@@ -257,7 +266,7 @@ function JustCreatedModal({ token, onClose }: JustCreatedModalProps) {
           </button>
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }
 

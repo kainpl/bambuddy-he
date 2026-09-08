@@ -22,6 +22,7 @@ import {
   type PrintOptionsPreferenceData,
   type UserSlim,
 } from '../../api/client';
+import { Modal } from '../Modal';
 import { CalibrationModeControl } from '../PrintModal/CalibrationModeControl';
 import { autoCalibrationCaps, isDualNozzleModel } from '../../utils/printerCapabilities';
 import { useToast } from '../../contexts/ToastContext';
@@ -449,15 +450,12 @@ function EditDialog({ mode, existingEntries, users, availableModels, initialEntr
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div
-        className="bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg p-5 w-full max-w-md max-h-[90vh] overflow-y-auto"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <h3 className="text-lg font-semibold text-white mb-4">
-          {editingExisting ? t('printOptionsPrefs.editTitle') : t('printOptionsPrefs.addTitle')}
-        </h3>
-
+    <Modal
+      onClose={onClose}
+      title={editingExisting ? t('printOptionsPrefs.editTitle') : t('printOptionsPrefs.addTitle')}
+      size="md"
+    >
+      <div className="p-5">
         <div className="space-y-3 mb-4">
           <div>
             <label className="block text-xs text-bambu-gray mb-1">
@@ -678,7 +676,7 @@ function EditDialog({ mode, existingEntries, users, availableModels, initialEntr
           </button>
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -730,14 +728,8 @@ function CopyDialog({ src, users, availableModels, onClose }: CopyDialogProps) {
   const canCopy = dstUserId > 0 && dstModel.trim().length > 0 && !copyMutation.isPending;
 
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div
-        className="bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg p-5 w-full max-w-md"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <h3 className="text-lg font-semibold text-white mb-1">
-          {t('printOptionsPrefs.copyTitle')}
-        </h3>
+    <Modal onClose={onClose} title={t('printOptionsPrefs.copyTitle')} size="md">
+      <div className="p-5">
         <p className="text-xs text-bambu-gray mb-4">
           {t('printOptionsPrefs.copyFrom', { user: src.username, model: src.printer_model })}
         </p>
@@ -798,6 +790,6 @@ function CopyDialog({ src, users, availableModels, onClose }: CopyDialogProps) {
           </button>
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }
