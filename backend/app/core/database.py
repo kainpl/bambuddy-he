@@ -5,6 +5,7 @@ from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Session
 
+from backend.app.core import query_timing
 from backend.app.core.config import settings
 from backend.app.core.db_dialect import is_sqlite
 
@@ -111,6 +112,11 @@ def _create_engine():
         event.listen(eng.sync_engine, "connect", _set_sqlite_pragmas)
     else:
         event.listen(eng.sync_engine, "before_cursor_execute", _strip_tz_from_params, retval=True)
+    # ⚠️ Outside the branch above on purpose: _strip_tz_from_params is the
+    # PostgreSQL half only, and hanging the timing beside it would instrument
+    # half the installs. Inside _create_engine rather than at module level,
+    # because reinitialize_database() rebuilds the engine after a restore.
+    query_timing.install(eng)
     return eng
 
 
