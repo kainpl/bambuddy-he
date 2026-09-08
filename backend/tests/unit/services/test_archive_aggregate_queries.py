@@ -253,7 +253,41 @@ async def test_records_name_the_winning_print(db_session):
     assert out["records"]["longest"]["print_name"] == "epic"
     assert out["records"]["heaviest"]["print_name"] == "epic"
     assert out["records"]["costliest"]["print_name"] == "epic"
-    assert out["records"]["costliest"]["cost"] == pytest.approx(45.0)
+    assert out["records"]["costliest"]["total"] == pytest.approx(45.0)
+    # The split is kept so the page can show "filament 40 + energy 5".
+    assert out["records"]["costliest"]["cost"] == pytest.approx(40.0)
+    assert out["records"]["costliest"]["energy_cost"] == pytest.approx(5.0)
+
+
+@pytest.mark.asyncio
+async def test_a_record_only_counts_a_completed_print(db_session):
+    """⚠️ A record is a claim about output. A twenty-hour run that was cancelled
+    is not the longest print, and a failure that burned 900 g is not the
+    heaviest — the page has always ranked completed prints only."""
+    await _seed(
+        db_session,
+        [
+            _archive(
+                print_name="cancelled monster",
+                status="cancelled",
+                started_at=datetime(2026, 9, 7, 0, 0),
+                completed_at=datetime(2026, 9, 8, 0, 0),
+                filament_used_grams=900.0,
+                cost=99.0,
+            ),
+            _archive(
+                print_name="modest but finished",
+                started_at=datetime(2026, 9, 7, 8, 0),
+                completed_at=datetime(2026, 9, 7, 9, 0),
+                filament_used_grams=20.0,
+                cost=2.0,
+            ),
+        ],
+    )
+    out = await _collect(db_session)
+    assert out["records"]["longest"]["print_name"] == "modest but finished"
+    assert out["records"]["heaviest"]["print_name"] == "modest but finished"
+    assert out["records"]["costliest"]["print_name"] == "modest but finished"
 
 
 @pytest.mark.asyncio

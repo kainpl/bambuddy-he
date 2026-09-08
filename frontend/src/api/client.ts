@@ -1130,29 +1130,87 @@ export interface Archive {
   parts?: ArchivePart[];
 }
 
-export interface ArchiveSlim {
-  id: number;
-  printer_id: number | null;
-  print_name: string | null;
-  filename: string;
-  print_time_seconds: number | null;
-  actual_time_seconds: number | null;
-  filament_used_grams: number | null;
-  filament_type: string | null;
-  filament_color: string | null;
-  status: string;
-  started_at: string | null;
-  completed_at: string | null;
-  // Filament only — grams x price per spool, plus the untracked remainder at
-  // the default rate. Electricity is NOT in here; it is the two fields below.
-  cost: number | null;
-  // Measured electricity for this print, when a smart plug covered it. Null on
-  // a printer without one, and null outside per-print energy tracking mode.
-  energy_kwh: number | null;
-  energy_cost: number | null;
+/**
+ * GET /archives/aggregate — everything the Stats page and the archive calendar
+ * fold, folded on the server.
+ *
+ * Sized by the date range rather than by the number of prints. It replaces
+ * `GET /archives/slim`, which returned at most 10 000 rows newest-first with no
+ * total and no flag, so on a busy farm "all time" quietly meant "the last few
+ * weeks" and the calendar quietly lost the start of its own month.
+ *
+ * Bucket keys are already local to this browser's zone (sent as
+ * `X-Client-Timezone`), so they are read as-is — never re-parsed as UTC.
+ */
+export interface BucketMetrics {
+  prints: number;
+  completed: number;
+  failed: number;
+  grams: number;
+  cost: number;
+  energy_cost: number;
   quantity: number;
-  created_at: string;
-  thumbnail_path: string | null;
+  seconds: number;
+}
+
+export interface AggregateBucket {
+  /** `2026-09-08` when granularity is `day`, `2026-09-08T14` when `hour`. */
+  at: string;
+  /** Keyed on created_at: the activity calendar, heat-map and weekday habits. */
+  started: BucketMetrics;
+  /** Keyed on completed_at ?? created_at: the archive calendar and trends. */
+  ended: BucketMetrics;
+}
+
+export interface AggregateHourCell { hour: number; prints: number; failures: number }
+export interface AggregatePrinterRow {
+  printer_id: number | null;
+  prints: number;
+  grams: number;
+  seconds: number;
+  completed: number;
+  failed: number;
+}
+export interface AggregateMaterialRow {
+  material: string;
+  prints: number;
+  grams: number;
+  seconds: number;
+  completed: number;
+  failed: number;
+}
+export interface AggregateColorRow { color: string; prints: number; grams: number }
+export interface AggregateDurationRow { bucket: string; prints: number }
+export interface AggregateTotals {
+  prints: number;
+  completed: number;
+  failed: number;
+  grams: number;
+  cost: number;
+  energy_kwh: number;
+  energy_cost: number;
+  quantity: number;
+  seconds: number;
+  printers: number;
+}
+export interface AggregateRecords {
+  longest: { archive_id: number; print_name: string | null; seconds: number } | null;
+  heaviest: { archive_id: number; print_name: string | null; grams: number } | null;
+  costliest: { archive_id: number; print_name: string | null; total: number; cost: number; energy_cost: number } | null;
+  success_streak: number;
+}
+
+export interface ArchiveAggregate {
+  timezone: string;
+  granularity: 'day' | 'hour';
+  buckets: AggregateBucket[];
+  by_hour_of_day: AggregateHourCell[];
+  by_printer: AggregatePrinterRow[];
+  by_material: AggregateMaterialRow[];
+  by_color: AggregateColorRow[];
+  by_duration: AggregateDurationRow[];
+  totals: AggregateTotals;
+  records: AggregateRecords;
 }
 
 export interface PaginationMeta {
@@ -7612,12 +7670,12 @@ export const api = {
     bytes_freed: number;
     errors: string[];
   }>(overrideDays ? `/archives/cleanup/run?days=${overrideDays}` : '/archives/cleanup/run', { method: 'POST' }),
-  getArchivesSlim: (dateFrom?: string, dateTo?: string) => {
+  getArchiveAggregate: (dateFrom?: string, dateTo?: string) => {
     const params = new URLSearchParams();
     if (dateFrom) params.set('date_from', dateFrom);
     if (dateTo) params.set('date_to', dateTo);
     const qs = params.toString();
-    return request<ArchiveSlim[]>(`/archives/slim${qs ? `?${qs}` : ''}`);
+    return request<ArchiveAggregate>(`/archives/aggregate${qs ? `?${qs}` : ''}`);
   },
   getArchive: (id: number) => request<Archive>(`/archives/${id}`),
   /**

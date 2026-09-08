@@ -29,7 +29,6 @@ from backend.app.models.user import User
 from backend.app.schemas.archive import (
     ArchiveFilterOptions,
     ArchiveResponse,
-    ArchiveSlim,
     ArchiveStats,
     ArchiveUpdate,
     PaginatedArchiveResponse,
@@ -468,109 +467,6 @@ async def aggregate_archives(
         date_to=date_to,
         user_id=None if can_read_all or current_user is None else current_user.id,
     )
-
-
-@router.get("/slim", response_model=list[ArchiveSlim])
-async def list_archives_slim(
-    request: Request,
-    date_from: date | None = Query(None),
-    date_to: date | None = Query(None),
-    limit: int = Query(default=10000, le=50000),
-    offset: int = 0,
-    db: AsyncSession = Depends(get_db),
-    auth_result: tuple[User | None, bool] = Depends(
-        require_ownership_permission(
-            Permission.ARCHIVES_READ_ALL,
-            Permission.ARCHIVES_READ_OWN,
-        )
-    ),
-):
-    """Lightweight archive listing for stats/dashboard widgets.
-
-    Returns only the fields needed for client-side aggregation,
-    skipping duplicate detection, file paths, and extra_data.
-    """
-    # Defensively exclude the legacy "archived" status (uploaded-but-never-printed
-    # rows; no longer produced — see archive.py — but legacy DBs may still carry
-    # them). Also exclude trashed rows (deleted_at IS NOT NULL) to stay consistent
-    # with GET /stats: the stats/dashboard widgets fed by this endpoint (Filament
-    # Trends, Calendar, StatsPage charts) must not count prints the user removed
-    # from active history, otherwise the trend charts and the Quick Stats totals
-    # would disagree about the same prints.
-    current_user, can_read_all = auth_result
-    filters = [
-        PrintArchive.status != "archived",
-        PrintArchive.deleted_at.is_(None),
-    ]
-    # READ_OWN callers may only see their own runs (security #2). This endpoint
-    # has no created_by_id query param, so pin the owner filter directly.
-    if current_user is not None and not can_read_all:
-        filters.append(PrintArchive.created_by_id == current_user.id)
-    # Client's day boundaries — see get_archive_stats for why UTC was wrong.
-    _tz = client_timezone(request)
-    if date_from:
-        filters.append(PrintArchive.created_at >= day_bounds(date_from, _tz)[0])
-    if date_to:
-        filters.append(PrintArchive.created_at < day_bounds(date_to, _tz)[1])
-
-    query = (
-        select(
-            PrintArchive.id,
-            PrintArchive.printer_id,
-            PrintArchive.print_name,
-            PrintArchive.filename,
-            PrintArchive.print_time_seconds,
-            PrintArchive.actual_time_seconds,
-            PrintArchive.started_at,
-            PrintArchive.completed_at,
-            PrintArchive.filament_used_grams,
-            PrintArchive.filament_type,
-            PrintArchive.filament_color,
-            PrintArchive.status,
-            PrintArchive.cost,
-            # Measured electricity, alongside the filament cost. ``cost`` is
-            # filament ONLY (usage_tracker: grams x that spool's price, plus the
-            # untracked remainder at the default rate), so a "most expensive
-            # print" computed from it alone is answering a narrower question
-            # than it claims. Both columns ride here because the records widget
-            # aggregates client-side from this payload.
-            PrintArchive.energy_kwh,
-            PrintArchive.energy_cost,
-            PrintArchive.quantity,
-            PrintArchive.created_at,
-            PrintArchive.thumbnail_path,
-        )
-        .where(*filters)
-        .order_by(PrintArchive.created_at.desc())
-        .limit(limit)
-        .offset(offset)
-    )
-    result = await db.execute(query)
-    rows = result.all()
-
-    return [
-        {
-            "id": r.id,
-            "printer_id": r.printer_id,
-            "print_name": r.print_name,
-            "filename": r.filename,
-            "print_time_seconds": r.print_time_seconds,
-            "actual_time_seconds": r.actual_time_seconds,
-            "filament_used_grams": r.filament_used_grams,
-            "filament_type": r.filament_type,
-            "filament_color": r.filament_color,
-            "status": r.status,
-            "started_at": r.started_at,
-            "completed_at": r.completed_at,
-            "cost": r.cost,
-            "energy_kwh": r.energy_kwh,
-            "energy_cost": r.energy_cost,
-            "quantity": r.quantity,
-            "created_at": r.created_at,
-            "thumbnail_path": r.thumbnail_path,
-        }
-        for r in rows
-    ]
 
 
 @router.get("/search", response_model=list[ArchiveResponse])

@@ -94,9 +94,18 @@ class HeaviestRecord(BaseModel):
 
 
 class CostliestRecord(BaseModel):
+    """Filament plus measured electricity, with the split kept.
+
+    A print with no plug data contributes 0 energy and competes on filament
+    alone — that is the honest comparison, and inventing a figure would put a
+    guess on the podium.
+    """
+
     archive_id: int
     print_name: str | None = None
+    total: float = 0.0
     cost: float = 0.0
+    energy_cost: float = 0.0
 
 
 class Records(BaseModel):

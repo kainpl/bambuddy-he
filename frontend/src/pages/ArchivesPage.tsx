@@ -3002,9 +3002,9 @@ export function ArchivesPage() {
   }, []);
   const calendarDateTo = useMemo(() => new Date().toISOString().split('T')[0], []);
 
-  const { data: calendarArchives } = useQuery({
+  const { data: calendarAggregate } = useQuery({
     queryKey: ['archives-calendar', calendarDateFrom, calendarDateTo],
-    queryFn: () => api.getArchivesSlim(calendarDateFrom, calendarDateTo),
+    queryFn: () => api.getArchiveAggregate(calendarDateFrom, calendarDateTo),
     enabled: viewMode === 'calendar',
   });
 
@@ -3789,7 +3789,7 @@ export function ArchivesPage() {
       ) : viewMode === 'calendar' ? (
         <Card className="p-6">
           <CalendarView
-            archives={calendarArchives || []}
+            buckets={calendarAggregate?.buckets || []}
             printerMap={printerMap}
           />
         </Card>

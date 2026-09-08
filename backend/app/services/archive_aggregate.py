@@ -340,18 +340,31 @@ async def _totals(db, filters: list) -> dict:
     return {k: (v or 0) for k, v in values.items()}
 
 
-async def _one_record(db, filters: list, measure, name: str) -> dict | None:
+async def _one_record(db, filters: list, measure, name: str, *, extra: dict | None = None) -> dict | None:
+    """The single best COMPLETED print by one measure.
+
+    ⚠️ Completed only, and that is not a detail: a record is a claim about
+    output. A run that was cancelled after twenty hours is not «the longest
+    print», and a failure that burned 900 g is not «the heaviest». The page has
+    always ranked this way.
+    """
+    columns = [PrintArchive.id, PrintArchive.print_name, measure.label("value")]
+    extra_names = tuple(extra or ())
+    columns += [(extra or {})[k].label(k) for k in extra_names]
     row = (
         await db.execute(
-            select(PrintArchive.id, PrintArchive.print_name, measure.label("value"))
-            .where(*filters, measure > 0)
+            select(*columns)
+            .where(*filters, PrintArchive.status == "completed", measure > 0)
             .order_by(measure.desc())
             .limit(1)
         )
     ).first()
     if row is None:
         return None
-    return {"archive_id": row[0], "print_name": row[1], name: float(row[2] or 0.0)}
+    record = {"archive_id": row[0], "print_name": row[1], name: float(row[2] or 0.0)}
+    for index, key in enumerate(extra_names, start=3):
+        record[key] = float(row[index] or 0.0)
+    return record
 
 
 async def _success_streak(db, filters: list) -> int:
@@ -433,11 +446,19 @@ async def collect(
         "records": {
             "longest": await _one_record(db, filters, _SECONDS, "seconds"),
             "heaviest": await _one_record(db, filters, func.coalesce(PrintArchive.filament_used_grams, 0.0), "grams"),
+            # Filament AND measured electricity, with the split beside it: the
+            # page shows «filament X + energy Y» whenever electricity actually
+            # moved the number, so the winner can be reconciled against its own
+            # archive page.
             "costliest": await _one_record(
                 db,
                 filters,
                 func.coalesce(PrintArchive.cost, 0.0) + func.coalesce(PrintArchive.energy_cost, 0.0),
-                "cost",
+                "total",
+                extra={
+                    "cost": func.coalesce(PrintArchive.cost, 0.0),
+                    "energy_cost": func.coalesce(PrintArchive.energy_cost, 0.0),
+                },
             ),
             "success_streak": await _success_streak(db, filters),
         },
