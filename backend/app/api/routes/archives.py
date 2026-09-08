@@ -36,9 +36,10 @@ from backend.app.schemas.archive import (
     PaginationMeta,
     ReprintRequest,
 )
+from backend.app.schemas.archive_aggregate import ArchiveAggregate
 from backend.app.schemas.plate_objects import PlateObjectsResponse
 from backend.app.schemas.project import StockMovedOut
-from backend.app.services import part_stock
+from backend.app.services import archive_aggregate, part_stock
 from backend.app.services.archive import ArchiveService, resolve_display_stem
 from backend.app.services.design_settings import overrides_from_config
 from backend.app.services.filament_cost import default_rate_per_kg
@@ -432,6 +433,41 @@ async def get_archive_filter_options(
     service = ArchiveService(db)
     options = await service.get_filter_options()
     return ArchiveFilterOptions(**options)
+
+
+@router.get("/aggregate", response_model=ArchiveAggregate)
+async def aggregate_archives(
+    request: Request,
+    date_from: date | None = Query(None),
+    date_to: date | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+    auth_result: tuple[User | None, bool] = Depends(
+        require_ownership_permission(
+            Permission.ARCHIVES_READ_ALL,
+            Permission.ARCHIVES_READ_OWN,
+        )
+    ),
+):
+    """Everything the Stats page and the archive calendar fold, folded here.
+
+    The response is sized by the date range, not by the number of prints — and,
+    unlike the slim listing it replaces, it is not silently truncated at the
+    newest 10 000 rows, which on a busy farm turned «all time» into «the last
+    three weeks» without saying so.
+
+    Day and hour keys are local to the caller's ``X-Client-Timezone`` (the
+    server's ``TZ`` when the header is absent), which is where the browser was
+    bucketing them before — so the numbers are the same, computed once instead
+    of per viewer.
+    """
+    current_user, can_read_all = auth_result
+    return await archive_aggregate.collect(
+        db,
+        tz=client_timezone(request),
+        date_from=date_from,
+        date_to=date_to,
+        user_id=None if can_read_all or current_user is None else current_user.id,
+    )
 
 
 @router.get("/slim", response_model=list[ArchiveSlim])
