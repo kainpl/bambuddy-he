@@ -1,6 +1,6 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertCircle, AlertTriangle, Calendar, Loader2, Pencil, Printer, X } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AlertCircle, AlertTriangle, Calendar, Loader2, Pencil, Printer } from 'lucide-react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type {
   AutoQueueItemCreate,
@@ -11,9 +11,9 @@ import type {
 } from '../../api/client';
 import { api, macrosApi } from '../../api/client';
 import { useAuth } from '../../contexts/AuthContext';
-import { Card, CardContent } from '../Card';
 import { Button } from '../Button';
 import { ConfirmModal } from '../ConfirmModal';
+import { Modal } from '../Modal';
 import { useToast } from '../../contexts/ToastContext';
 import {
   buildAmsMapping,
@@ -103,6 +103,7 @@ export function PrintModal({
   const queryClient = useQueryClient();
   const { showToast } = useToast();
   const { hasPermission } = useAuth();
+  const headingId = useId();
 
   // Determine if we're printing a library file
   const isLibraryFile = !!libraryFileId && !archiveId;
@@ -1096,15 +1097,6 @@ export function PrintModal({
     }
   }, [settings?.per_printer_mapping_expanded, selectedPrinters, initialExpandApplied, multiPrinterMapping]);
 
-  // Close on Escape key
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !isSubmitting) onClose();
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose, isSubmitting]);
-
   const isMultiPlate = platesData?.is_multi_plate ?? false;
   const plates = platesData?.plates ?? [];
 
@@ -1912,73 +1904,63 @@ export function PrintModal({
   if (autoSubmitWhenUnambiguous && !autoSubmitRefused) return null;
 
   return (
-    <div
-      className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
-      onClick={isSubmitting ? undefined : onClose}
-    >
-      <Card
-        className="w-full max-w-2xl max-h-[90vh] overflow-y-auto"
-        onClick={(e) => e.stopPropagation()}
+    <>
+      <Modal
+        onClose={onClose}
+        closeDisabled={isSubmitting}
+        labelledBy={headingId}
+        size="2xl"
+        header={
+          <>
+            <TitleIcon className="w-5 h-5 text-bambu-green" />
+            <h2 id={headingId} className="text-lg font-semibold text-white">{modalConfig.title}</h2>
+            {/* Only thing that says a run over several files is under way —
+                every dialog in it is otherwise identical. */}
+            {sequence && (
+              <span
+                className="px-2 py-0.5 rounded-full bg-bambu-dark text-xs text-bambu-gray tabular-nums"
+                title={t('printModal.fileOfTotal', sequence)}
+                aria-label={t('printModal.fileOfTotal', sequence)}
+              >
+                {sequence.current}/{sequence.total}
+              </span>
+            )}
+            {/* Same job for a run over GROUPS: which group this is, and how
+                many plates go out when it is answered. */}
+            {groupBadge && (
+              <span className="px-2 py-0.5 rounded-full bg-bambu-dark text-xs text-bambu-gray tabular-nums">
+                {/* ⚠️ `units` travels as `count`: i18next resolves the
+                    plural from that name and no other, and a one-unit group
+                    is reachable whenever there is more than one group. */}
+                {t('queue.groupBadge', {
+                  current: groupBadge.current,
+                  total: groupBadge.total,
+                  count: groupBadge.units,
+                })}
+              </span>
+            )}
+            {/* The group's own answer to "must I see the rest of these?"
+                ⚠️ Only where there IS a rest: a one-member group has nothing
+                to apply to, and offering the choice there is noise.
+                ⚠️ The hint counts the OTHERS (units - 1), not the group. */}
+            {groupBadge && groupBadge.units > 1 && onApplyToRestChange && (
+              <label
+                className="flex items-center gap-1.5 text-xs text-bambu-gray cursor-pointer select-none"
+                title={t('queue.applyToRestHint', { count: groupBadge.units - 1 })}
+              >
+                <input
+                  type="checkbox"
+                  className="accent-bambu-green"
+                  checked={applyToRest !== false}
+                  onChange={(e) => onApplyToRestChange(e.target.checked)}
+                />
+                {t('queue.applyToRest')}
+              </label>
+            )}
+          </>
+        }
       >
-        <CardContent>
-          {/* Header */}
-          <div
-            className={`flex items-center justify-between ${
-              mode === 'reprint' ? 'mb-4' : 'mb-4 border-b border-bambu-dark-tertiary'
-            }`}
-          >
-            <div className="flex items-center gap-2">
-              <TitleIcon className="w-5 h-5 text-bambu-green" />
-              <h2 className="text-lg font-semibold text-white">{modalConfig.title}</h2>
-              {/* Only thing that says a run over several files is under way —
-                  every dialog in it is otherwise identical. */}
-              {sequence && (
-                <span
-                  className="px-2 py-0.5 rounded-full bg-bambu-dark text-xs text-bambu-gray tabular-nums"
-                  title={t('printModal.fileOfTotal', sequence)}
-                  aria-label={t('printModal.fileOfTotal', sequence)}
-                >
-                  {sequence.current}/{sequence.total}
-                </span>
-              )}
-              {/* Same job for a run over GROUPS: which group this is, and how
-                  many plates go out when it is answered. */}
-              {groupBadge && (
-                <span className="px-2 py-0.5 rounded-full bg-bambu-dark text-xs text-bambu-gray tabular-nums">
-                  {/* ⚠️ `units` travels as `count`: i18next resolves the
-                      plural from that name and no other, and a one-unit group
-                      is reachable whenever there is more than one group. */}
-                  {t('queue.groupBadge', {
-                    current: groupBadge.current,
-                    total: groupBadge.total,
-                    count: groupBadge.units,
-                  })}
-                </span>
-              )}
-              {/* The group's own answer to "must I see the rest of these?"
-                  ⚠️ Only where there IS a rest: a one-member group has nothing
-                  to apply to, and offering the choice there is noise.
-                  ⚠️ The hint counts the OTHERS (units - 1), not the group. */}
-              {groupBadge && groupBadge.units > 1 && onApplyToRestChange && (
-                <label
-                  className="flex items-center gap-1.5 text-xs text-bambu-gray cursor-pointer select-none"
-                  title={t('queue.applyToRestHint', { count: groupBadge.units - 1 })}
-                >
-                  <input
-                    type="checkbox"
-                    className="accent-bambu-green"
-                    checked={applyToRest !== false}
-                    onChange={(e) => onApplyToRestChange(e.target.checked)}
-                  />
-                  {t('queue.applyToRest')}
-                </label>
-              )}
-            </div>
-            <Button variant="ghost" size="sm" onClick={onClose} disabled={isSubmitting}>
-              <X className="w-5 h-5" />
-            </Button>
-          </div>
-
+        <div className="p-4">
           <form onSubmit={handleSubmit} className={mode === 'reprint' ? '' : 'space-y-4'}>
             {/* Dispatch mode toggle — only for add-to-queue.
                 Reprint is always specific; edit is bound to an existing per-printer row.
@@ -2335,8 +2317,8 @@ export function PrintModal({
               </Button>
             </div>
           </form>
-        </CardContent>
-      </Card>
+        </div>
+      </Modal>
 
       {filamentWarningItems && filamentWarningItems.length > 0 && (
         <ConfirmModal
@@ -2352,7 +2334,7 @@ export function PrintModal({
           onCancel={() => setFilamentWarningItems(null)}
         />
       )}
-    </div>
+    </>
   );
 }
 

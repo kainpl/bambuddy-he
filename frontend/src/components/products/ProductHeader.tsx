@@ -73,7 +73,11 @@ export function ProductHeader({ product, onEdit, onDuplicate, onDelete, onToggle
   useEffect(() => {
     if (!rereadOpen) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setRereadOpen(false);
+      // Escape stops at this menu — the modal stack must not also close the dialog behind it.
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        setRereadOpen(false);
+      }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
@@ -208,6 +212,7 @@ export function ProductHeader({ product, onEdit, onDuplicate, onDelete, onToggle
               </Button>
               {rereadOpen && (
                 <>
+                  {/* not-a-modal: popover */}
                   <div className="fixed inset-0 z-10" onClick={() => setRereadOpen(false)} />
                   <div
                     role="menu"

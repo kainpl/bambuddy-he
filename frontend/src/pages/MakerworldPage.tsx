@@ -18,6 +18,7 @@ import { openInSlicer, type SlicerType } from '../utils/slicer';
 import { Button } from '../components/Button';
 import { Card, CardContent, CardHeader } from '../components/Card';
 import { ConfirmModal } from '../components/ConfirmModal';
+import { Modal } from '../components/Modal';
 import { SliceModal, type SliceSource } from '../components/SliceModal';
 import { Cog } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
@@ -408,12 +409,12 @@ export function MakerworldPage() {
     resolveMutation.mutate(trimmed);
   };
 
-  // Keyboard navigation for the lightbox (Escape closes, arrows navigate).
+  // Arrow-key navigation for the lightbox. Escape is the shell's (the modal
+  // stack closes the topmost, which is this lightbox).
   useEffect(() => {
     if (!lightbox) return;
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setLightbox(null);
-      else if (e.key === 'ArrowLeft') {
+      if (e.key === 'ArrowLeft') {
         setLightbox((prev) => (prev && prev.index > 0 ? { ...prev, index: prev.index - 1 } : prev));
       } else if (e.key === 'ArrowRight') {
         setLightbox((prev) =>
@@ -1228,11 +1229,10 @@ export function MakerworldPage() {
       )}
 
       {lightbox && (
-        <div
-          className="fixed inset-0 bg-black/90 backdrop-blur-sm flex items-center justify-center z-50"
-          onClick={() => setLightbox(null)}
-          role="dialog"
-          aria-modal="true"
+        <Modal
+          variant="lightbox"
+          onClose={() => setLightbox(null)}
+          ariaLabel={t('makerworld.openGallery')}
         >
           <button
             type="button"
@@ -1286,7 +1286,7 @@ export function MakerworldPage() {
               {lightbox.index + 1} / {lightbox.images.length}
             </div>
           )}
-        </div>
+        </Modal>
       )}
     </div>
   );

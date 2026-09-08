@@ -92,6 +92,7 @@ export function TrashSplitButton({
           </button>
           {open && createPortal(
             <>
+              {/* not-a-modal: menu */}
               <div className="fixed inset-0 z-[55]" onClick={() => setOpen(false)} />
               <div
                 style={{

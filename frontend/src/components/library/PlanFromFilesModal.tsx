@@ -1,11 +1,12 @@
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
-import { ClipboardList, Loader2, X } from 'lucide-react';
+import { ClipboardList, Loader2 } from 'lucide-react';
 import { api } from '../../api/client';
 import type { Order, PartsPreview } from '../../api/client';
 import { Button } from '../Button';
+import { Modal } from '../Modal';
 import { PlanBlock } from '../projects/PlanBlock';
 import { useToast } from '../../contexts/ToastContext';
 import { useOrderDetail } from '../../hooks/useOrderDetail';
@@ -38,6 +39,7 @@ export function PlanFromFilesModal({ fileIds, onClose }: PlanFromFilesModalProps
   const { t } = useTranslation();
   const { showToast } = useToast();
   const queryClient = useQueryClient();
+  const headingId = useId();
 
   const preview = useQuery<PartsPreview>({
     queryKey: ['parts-preview', fileIds],
@@ -112,159 +114,157 @@ export function PlanFromFilesModal({ fileIds, onClose }: PlanFromFilesModalProps
   const fileName = (id: number) => preview.data?.files.find((f) => f.id === id)?.filename ?? `#${id}`;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" role="dialog" aria-modal="true">
-      <div className="w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-xl bg-bambu-dark-secondary border border-bambu-dark-tertiary">
-        <div className="flex items-center justify-between p-4 border-b border-bambu-dark-tertiary">
-          <h2 className="text-lg font-semibold text-white flex items-center gap-2">
-            <ClipboardList className="w-5 h-5" />
-            {t('orders.fromFiles.title')}
-            <span className="text-sm text-bambu-gray font-normal">
-              · {orderId === null ? t('orders.fromFiles.stepParts') : t('orders.fromFiles.stepPlan')}
-            </span>
-          </h2>
-          <button type="button" onClick={onClose} className="text-bambu-gray hover:text-white" aria-label={t('common.close')}>
-            <X className="w-5 h-5" />
-          </button>
-        </div>
+    <Modal
+      onClose={onClose}
+      labelledBy={headingId}
+      size="3xl"
+      header={
+        <h2 id={headingId} className="text-lg font-semibold text-white flex items-center gap-2">
+          <ClipboardList className="w-5 h-5" />
+          {t('orders.fromFiles.title')}
+          <span className="text-sm text-bambu-gray font-normal">
+            · {orderId === null ? t('orders.fromFiles.stepParts') : t('orders.fromFiles.stepPlan')}
+          </span>
+        </h2>
+      }
+    >
+      {orderId === null ? (
+        <div className="p-4 space-y-4">
+          {preview.isLoading && <Loader2 className="w-5 h-5 animate-spin text-bambu-gray" />}
+          {preview.isError && (
+            <p className="text-sm text-red-400">{t('orders.fromFiles.loadFailed')} {(preview.error as Error).message}</p>
+          )}
+          {preview.data && (
+            <>
+              <div>
+                <p className="text-xs text-bambu-gray mb-1">{t('orders.fromFiles.files')}</p>
+                <ul className="text-sm text-white space-y-0.5">
+                  {preview.data.files.map((f) => (
+                    <li key={f.id}>
+                      {f.filename}
+                      {f.sliced_for_model && <span className="text-bambu-gray"> · {f.sliced_for_model}</span>}
+                      {f.plates.length === 0 && <span className="text-amber-400"> · {t('orders.fromFiles.noMetadata')}</span>}
+                      {f.plates.some((p) => !p.sliced) && <span className="text-amber-400"> · {t('orders.fromFiles.notSliced')}</span>}
+                    </li>
+                  ))}
+                </ul>
+              </div>
 
-        {orderId === null ? (
-          <div className="p-4 space-y-4">
-            {preview.isLoading && <Loader2 className="w-5 h-5 animate-spin text-bambu-gray" />}
-            {preview.isError && (
-              <p className="text-sm text-red-400">{t('orders.fromFiles.loadFailed')} {(preview.error as Error).message}</p>
-            )}
-            {preview.data && (
-              <>
-                <div>
-                  <p className="text-xs text-bambu-gray mb-1">{t('orders.fromFiles.files')}</p>
-                  <ul className="text-sm text-white space-y-0.5">
-                    {preview.data.files.map((f) => (
-                      <li key={f.id}>
-                        {f.filename}
-                        {f.sliced_for_model && <span className="text-bambu-gray"> · {f.sliced_for_model}</span>}
-                        {f.plates.length === 0 && <span className="text-amber-400"> · {t('orders.fromFiles.noMetadata')}</span>}
-                        {f.plates.some((p) => !p.sliced) && <span className="text-amber-400"> · {t('orders.fromFiles.notSliced')}</span>}
+              <label className="block">
+                <span className="text-xs text-bambu-gray">{t('orders.fromFiles.name')}</span>
+                <input
+                  value={name}
+                  onChange={(e) => setNameEdited(e.target.value)}
+                  className="mt-1 w-full bg-bambu-dark border border-bambu-dark-tertiary rounded px-2 py-1.5 text-sm text-white"
+                />
+              </label>
+
+              {catalog && (
+                <label className="flex items-center gap-2 text-sm text-white cursor-pointer">
+                  <input type="checkbox" checked={useCatalog} onChange={(e) => setUseCatalog(e.target.checked)} className="accent-bambu-green" />
+                  {t('orders.fromFiles.useProduct', { name: catalog.name })}
+                </label>
+              )}
+
+              {catalogMode && catalog ? (
+                <div className="space-y-2">
+                  <p className="text-xs text-bambu-gray">{t('orders.fromFiles.kit')}</p>
+                  <ul className="text-sm text-white">
+                    {catalog.parts.map((p) => (
+                      <li key={p.id}>
+                        {p.name} × {p.qty_per_unit}
                       </li>
                     ))}
                   </ul>
-                </div>
-
-                <label className="block">
-                  <span className="text-xs text-bambu-gray">{t('orders.fromFiles.name')}</span>
-                  <input
-                    value={name}
-                    onChange={(e) => setNameEdited(e.target.value)}
-                    className="mt-1 w-full bg-bambu-dark border border-bambu-dark-tertiary rounded px-2 py-1.5 text-sm text-white"
-                  />
-                </label>
-
-                {catalog && (
-                  <label className="flex items-center gap-2 text-sm text-white cursor-pointer">
-                    <input type="checkbox" checked={useCatalog} onChange={(e) => setUseCatalog(e.target.checked)} className="accent-bambu-green" />
-                    {t('orders.fromFiles.useProduct', { name: catalog.name })}
+                  <label className="block max-w-[10rem]">
+                    <span className="text-xs text-bambu-gray">{t('orders.fromFiles.units')}</span>
+                    <input
+                      type="number"
+                      min={1}
+                      value={units}
+                      onChange={(e) => setUnits(e.target.value)}
+                      className="mt-1 w-full bg-bambu-dark border border-bambu-dark-tertiary rounded px-2 py-1.5 text-sm text-white"
+                    />
                   </label>
-                )}
-
-                {catalogMode && catalog ? (
-                  <div className="space-y-2">
-                    <p className="text-xs text-bambu-gray">{t('orders.fromFiles.kit')}</p>
-                    <ul className="text-sm text-white">
-                      {catalog.parts.map((p) => (
-                        <li key={p.id}>
-                          {p.name} × {p.qty_per_unit}
-                        </li>
-                      ))}
-                    </ul>
-                    <label className="block max-w-[10rem]">
-                      <span className="text-xs text-bambu-gray">{t('orders.fromFiles.units')}</span>
-                      <input
-                        type="number"
-                        min={1}
-                        value={units}
-                        onChange={(e) => setUnits(e.target.value)}
-                        className="mt-1 w-full bg-bambu-dark border border-bambu-dark-tertiary rounded px-2 py-1.5 text-sm text-white"
-                      />
-                    </label>
-                  </div>
-                ) : (
-                  <table className="w-full text-sm">
-                    <thead className="text-xs text-bambu-gray text-left">
-                      <tr>
-                        <th className="font-normal p-2">{t('orders.fromFiles.part')}</th>
-                        <th className="font-normal p-2 w-32">{t('orders.fromFiles.targets')}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {preview.data.parts.map((part) => (
-                        <tr key={part.name_key} className="border-t border-bambu-dark-tertiary align-top">
-                          <td className="p-2">
-                            <p className="text-white">{part.name}</p>
-                            <ul className="text-xs text-bambu-gray">
-                              {part.yields.map((y) => (
-                                <li key={`${y.library_file_id}-${y.plate_index}`}>
-                                  {t('orders.fromFiles.origin', { file: fileName(y.library_file_id), plate: plateLabel(y.plate_index), count: y.count })}
-                                </li>
-                              ))}
-                            </ul>
-                          </td>
-                          <td className="p-2">
-                            <input
-                              type="number"
-                              min={0}
-                              aria-label={part.name}
-                              value={targets[part.name_key] ?? ''}
-                              onChange={(e) => setTargets((prev) => ({ ...prev, [part.name_key]: e.target.value }))}
-                              className="w-full bg-bambu-dark border border-bambu-dark-tertiary rounded px-2 py-1 text-white"
-                            />
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-
-                <div className="flex justify-end gap-2">
-                  <Button variant="secondary" onClick={onClose}>{t('orders.fromFiles.cancel')}</Button>
-                  <Button
-                    onClick={() => create.mutate()}
-                    disabled={!canCalculate || create.isPending}
-                    title={!canCalculate && !catalogMode ? t('orders.fromFiles.noTargets') : undefined}
-                  >
-                    {create.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-                    {t('orders.fromFiles.calculate')}
-                  </Button>
                 </div>
-              </>
-            )}
-          </div>
-        ) : (
-          <div className="p-4 space-y-4">
-            {order.data ? (
-              <PlanBlock order={order.data} canEdit variant="dialog" onEnqueued={() => setEnqueued(true)} />
-            ) : (
-              <Loader2 className="w-5 h-5 animate-spin text-bambu-gray" />
-            )}
-            <p className="text-xs text-bambu-gray">{t('orders.fromFiles.hoursNote')}</p>
-            <div className="flex justify-between items-center gap-2 flex-wrap">
-              <Link to={`/projects/${orderId}`} className="text-sm text-bambu-green hover:underline" onClick={onClose}>
-                {t('orders.fromFiles.openOrder')}
-              </Link>
-              <div className="flex gap-2">
-                {enqueued ? (
-                  <Button onClick={() => finish('queued')}>{t('orders.fromFiles.close')}</Button>
-                ) : (
-                  <>
-                    <Button variant="secondary" onClick={() => cancel.mutate()} disabled={cancel.isPending}>
-                      {t('orders.fromFiles.cancel')}
-                    </Button>
-                    <Button onClick={() => finish('created')}>{t('orders.fromFiles.keepOrder')}</Button>
-                  </>
-                )}
+              ) : (
+                <table className="w-full text-sm">
+                  <thead className="text-xs text-bambu-gray text-left">
+                    <tr>
+                      <th className="font-normal p-2">{t('orders.fromFiles.part')}</th>
+                      <th className="font-normal p-2 w-32">{t('orders.fromFiles.targets')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {preview.data.parts.map((part) => (
+                      <tr key={part.name_key} className="border-t border-bambu-dark-tertiary align-top">
+                        <td className="p-2">
+                          <p className="text-white">{part.name}</p>
+                          <ul className="text-xs text-bambu-gray">
+                            {part.yields.map((y) => (
+                              <li key={`${y.library_file_id}-${y.plate_index}`}>
+                                {t('orders.fromFiles.origin', { file: fileName(y.library_file_id), plate: plateLabel(y.plate_index), count: y.count })}
+                              </li>
+                            ))}
+                          </ul>
+                        </td>
+                        <td className="p-2">
+                          <input
+                            type="number"
+                            min={0}
+                            aria-label={part.name}
+                            value={targets[part.name_key] ?? ''}
+                            onChange={(e) => setTargets((prev) => ({ ...prev, [part.name_key]: e.target.value }))}
+                            className="w-full bg-bambu-dark border border-bambu-dark-tertiary rounded px-2 py-1 text-white"
+                          />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+
+              <div className="flex justify-end gap-2">
+                <Button variant="secondary" onClick={onClose}>{t('orders.fromFiles.cancel')}</Button>
+                <Button
+                  onClick={() => create.mutate()}
+                  disabled={!canCalculate || create.isPending}
+                  title={!canCalculate && !catalogMode ? t('orders.fromFiles.noTargets') : undefined}
+                >
+                  {create.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                  {t('orders.fromFiles.calculate')}
+                </Button>
               </div>
+            </>
+          )}
+        </div>
+      ) : (
+        <div className="p-4 space-y-4">
+          {order.data ? (
+            <PlanBlock order={order.data} canEdit variant="dialog" onEnqueued={() => setEnqueued(true)} />
+          ) : (
+            <Loader2 className="w-5 h-5 animate-spin text-bambu-gray" />
+          )}
+          <p className="text-xs text-bambu-gray">{t('orders.fromFiles.hoursNote')}</p>
+          <div className="flex justify-between items-center gap-2 flex-wrap">
+            <Link to={`/projects/${orderId}`} className="text-sm text-bambu-green hover:underline" onClick={onClose}>
+              {t('orders.fromFiles.openOrder')}
+            </Link>
+            <div className="flex gap-2">
+              {enqueued ? (
+                <Button onClick={() => finish('queued')}>{t('orders.fromFiles.close')}</Button>
+              ) : (
+                <>
+                  <Button variant="secondary" onClick={() => cancel.mutate()} disabled={cancel.isPending}>
+                    {t('orders.fromFiles.cancel')}
+                  </Button>
+                  <Button onClick={() => finish('created')}>{t('orders.fromFiles.keepOrder')}</Button>
+                </>
+              )}
             </div>
           </div>
-        )}
-      </div>
-    </div>
+        </div>
+      )}
+    </Modal>
   );
 }

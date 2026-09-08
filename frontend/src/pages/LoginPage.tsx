@@ -5,10 +5,10 @@ import { useTranslation } from 'react-i18next';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { useTheme } from '../contexts/ThemeContext';
-import { X, Mail, Shield, Smartphone, Key } from 'lucide-react';
+import { Mail, Shield, Smartphone, Key } from 'lucide-react';
 import { api, type LoginResponse } from '../api/client';
-import { Card, CardHeader, CardContent } from '../components/Card';
 import { Button } from '../components/Button';
+import { Modal } from '../components/Modal';
 
 type LoginStep = 'credentials' | '2fa' | 'reset-password';
 
@@ -785,105 +785,87 @@ export function LoginPage() {
 
       {/* Forgot Password Modal */}
       {showForgotPassword && (
-        <div
-          className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
-          onClick={() => setShowForgotPassword(false)}
+        <Modal
+          onClose={() => {
+            setShowForgotPassword(false);
+            setForgotEmail('');
+          }}
+          title={t('login.forgotPasswordTitle')}
+          icon={<Mail className="w-5 h-5 text-bambu-green" />}
+          size="md"
         >
-          <Card
-            className="w-full max-w-md"
-            onClick={(e: React.MouseEvent) => e.stopPropagation()}
-          >
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Mail className="w-5 h-5 text-bambu-green" />
-                  <h2 className="text-lg font-semibold text-white">{t('login.forgotPasswordTitle')}</h2>
+          <div className="p-4">
+            {advancedAuthStatus?.advanced_auth_enabled ? (
+              <form onSubmit={handleForgotPassword} className="space-y-4">
+                <p className="text-bambu-gray text-sm">
+                  {t('login.forgotPasswordEmailMessage')}
+                </p>
+
+                <div>
+                  <label htmlFor="forgot-email" className="block text-sm font-medium text-white mb-2">
+                    {t('login.emailAddress')}
+                  </label>
+                  <input
+                    id="forgot-email"
+                    type="email"
+                    required
+                    value={forgotEmail}
+                    onChange={(e) => setForgotEmail(e.target.value)}
+                    className="block w-full px-4 py-3 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors"
+                    placeholder={t('login.emailPlaceholder')}
+                  />
                 </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    setShowForgotPassword(false);
-                    setForgotEmail('');
-                  }}
-                >
-                  <X className="w-5 h-5" />
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent>
-              {advancedAuthStatus?.advanced_auth_enabled ? (
-                <form onSubmit={handleForgotPassword} className="space-y-4">
-                  <p className="text-bambu-gray text-sm">
-                    {t('login.forgotPasswordEmailMessage')}
-                  </p>
 
-                  <div>
-                    <label htmlFor="forgot-email" className="block text-sm font-medium text-white mb-2">
-                      {t('login.emailAddress')}
-                    </label>
-                    <input
-                      id="forgot-email"
-                      type="email"
-                      required
-                      value={forgotEmail}
-                      onChange={(e) => setForgotEmail(e.target.value)}
-                      className="block w-full px-4 py-3 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors"
-                      placeholder={t('login.emailPlaceholder')}
-                    />
-                  </div>
-
-                  <div className="flex gap-2">
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      className="flex-1"
-                      onClick={() => {
-                        setShowForgotPassword(false);
-                        setForgotEmail('');
-                      }}
-                    >
-                      {t('login.cancel')}
-                    </Button>
-                    <Button
-                      type="submit"
-                      className="flex-1"
-                      disabled={forgotPasswordMutation.isPending}
-                    >
-                      {forgotPasswordMutation.isPending
-                        ? t('login.sending')
-                        : t('login.sendResetEmail')}
-                    </Button>
-                  </div>
-                </form>
-              ) : (
-                <div className="space-y-4">
-                  <p className="text-bambu-gray">
-                    {t('login.forgotPasswordMessage')}
-                  </p>
-
-                  <div className="bg-bambu-dark rounded-lg p-4 space-y-2">
-                    <p className="text-sm text-white font-medium">{t('login.howToReset')}</p>
-                    <ol className="text-sm text-bambu-gray space-y-1 list-decimal list-inside">
-                      <li>{t('login.resetStep1')}</li>
-                      <li>{t('login.resetStep2')}</li>
-                      <li>{t('login.resetStep3')}</li>
-                      <li>{t('login.resetStep4')}</li>
-                    </ol>
-                  </div>
-
+                <div className="flex gap-2">
                   <Button
+                    type="button"
                     variant="secondary"
-                    className="w-full"
-                    onClick={() => setShowForgotPassword(false)}
+                    className="flex-1"
+                    onClick={() => {
+                      setShowForgotPassword(false);
+                      setForgotEmail('');
+                    }}
                   >
-                    {t('login.gotIt')}
+                    {t('login.cancel')}
+                  </Button>
+                  <Button
+                    type="submit"
+                    className="flex-1"
+                    disabled={forgotPasswordMutation.isPending}
+                  >
+                    {forgotPasswordMutation.isPending
+                      ? t('login.sending')
+                      : t('login.sendResetEmail')}
                   </Button>
                 </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
+              </form>
+            ) : (
+              <div className="space-y-4">
+                <p className="text-bambu-gray">
+                  {t('login.forgotPasswordMessage')}
+                </p>
+
+                <div className="bg-bambu-dark rounded-lg p-4 space-y-2">
+                  <p className="text-sm text-white font-medium">{t('login.howToReset')}</p>
+                  <ol className="text-sm text-bambu-gray space-y-1 list-decimal list-inside">
+                    <li>{t('login.resetStep1')}</li>
+                    <li>{t('login.resetStep2')}</li>
+                    <li>{t('login.resetStep3')}</li>
+                    <li>{t('login.resetStep4')}</li>
+                  </ol>
+                </div>
+
+                <Button
+                  variant="secondary"
+                  className="w-full"
+                  onClick={() => setShowForgotPassword(false)}
+                >
+                  {t('login.gotIt')}
+                </Button>
+              </div>
+            )}
+          </div>
+        </Modal>
       )}
     </div>
   );

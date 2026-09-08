@@ -1,12 +1,13 @@
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Check, FileBox, Layers, Loader2, Search, X } from 'lucide-react';
+import { Check, FileBox, Layers, Loader2, Search } from 'lucide-react';
 
 import { api } from '../api/client';
 import type { LibraryFileListItem } from '../api/client';
 import { Button } from './Button';
 import { FolderTreePicker } from './FolderTreePicker';
+import { Modal } from './Modal';
 import type { SequencedFile } from './QueueSequencer';
 import { offerableFiles } from '../lib/offerableFiles';
 import { formatDuration, parseUTCDate } from '../utils/date';
@@ -66,6 +67,7 @@ export function LibraryPickerModal({
   onConfirm,
 }: LibraryPickerModalProps) {
   const { t } = useTranslation();
+  const headingId = useId();
   const [folder, setFolder] = useState<number | null | typeof ALL_FOLDERS>(ALL_FOLDERS);
   const [search, setSearch] = useState('');
   const [picked, setPicked] = useState<Map<number, SequencedFile>>(new Map());
@@ -138,137 +140,137 @@ export function LibraryPickerModal({
   const count = picked.size;
 
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-bambu-dark-secondary rounded-lg w-full max-w-5xl h-[80vh] flex flex-col">
-        <div className="flex items-center justify-between gap-3 p-4 border-b border-bambu-dark shrink-0">
-          <div className="min-w-0">
-            <h2 className="text-lg font-semibold text-white truncate">{t('libraryPicker.title')}</h2>
-            <p className="text-xs text-bambu-gray truncate">
-              {t('libraryPicker.subtitle', { target: targetName })}
-            </p>
-          </div>
-          <button onClick={onCancel} className="p-1 hover:bg-bambu-dark rounded" aria-label={t('common.close')}>
-            <X className="w-5 h-5 text-bambu-gray" />
+    <Modal
+      onClose={onCancel}
+      labelledBy={headingId}
+      header={
+        <div className="min-w-0">
+          <h2 id={headingId} className="text-lg font-semibold text-white truncate">{t('libraryPicker.title')}</h2>
+          <p className="text-xs text-bambu-gray truncate">
+            {t('libraryPicker.subtitle', { target: targetName })}
+          </p>
+        </div>
+      }
+      size="5xl"
+      panelClassName="h-[80vh]"
+      bodyClassName="flex flex-col"
+    >
+      <div className="flex-1 min-h-0 flex">
+        <div className="w-56 shrink-0 border-r border-bambu-dark p-2 overflow-y-auto">
+          <button
+            type="button"
+            onClick={() => setFolder(ALL_FOLDERS)}
+            className={`w-full text-left px-3 py-2 rounded transition-colors flex items-center gap-2 mb-1 ${
+              folder === ALL_FOLDERS
+                ? 'bg-bambu-green/20 text-bambu-green'
+                : 'hover:bg-bambu-dark text-white'
+            }`}
+          >
+            <Layers className="w-4 h-4 shrink-0" />
+            <span className="truncate">{t('libraryPicker.allFiles')}</span>
           </button>
+          {/* Read-only external mounts are offered here: this picker only
+              READS folders, so the write-permission filter does not apply. */}
+          <FolderTreePicker
+            folders={folders}
+            value={folder === ALL_FOLDERS ? NOTHING_HIGHLIGHTED : folder}
+            onChange={setFolder}
+            rootLabel={t('libraryPicker.libraryRoot')}
+            includeReadOnly
+            className="max-h-none"
+          />
         </div>
 
-        <div className="flex-1 min-h-0 flex">
-          <div className="w-56 shrink-0 border-r border-bambu-dark p-2 overflow-y-auto">
-            <button
-              type="button"
-              onClick={() => setFolder(ALL_FOLDERS)}
-              className={`w-full text-left px-3 py-2 rounded transition-colors flex items-center gap-2 mb-1 ${
-                folder === ALL_FOLDERS
-                  ? 'bg-bambu-green/20 text-bambu-green'
-                  : 'hover:bg-bambu-dark text-white'
-              }`}
-            >
-              <Layers className="w-4 h-4 shrink-0" />
-              <span className="truncate">{t('libraryPicker.allFiles')}</span>
-            </button>
-            {/* Read-only external mounts are offered here: this picker only
-                READS folders, so the write-permission filter does not apply. */}
-            <FolderTreePicker
-              folders={folders}
-              value={folder === ALL_FOLDERS ? NOTHING_HIGHLIGHTED : folder}
-              onChange={setFolder}
-              rootLabel={t('libraryPicker.libraryRoot')}
-              includeReadOnly
-              className="max-h-none"
-            />
+        <div className="flex-1 min-w-0 flex flex-col">
+          <div className="p-3 border-b border-bambu-dark shrink-0">
+            <div className="relative">
+              <Search className="w-4 h-4 text-bambu-gray absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder={t('libraryPicker.searchPlaceholder')}
+                className="w-full pl-9 pr-3 py-2 rounded bg-bambu-dark text-sm text-white placeholder:text-bambu-gray focus:outline-none focus:ring-1 focus:ring-bambu-green"
+              />
+            </div>
           </div>
 
-          <div className="flex-1 min-w-0 flex flex-col">
-            <div className="p-3 border-b border-bambu-dark shrink-0">
-              <div className="relative">
-                <Search className="w-4 h-4 text-bambu-gray absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                <input
-                  type="text"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder={t('libraryPicker.searchPlaceholder')}
-                  className="w-full pl-9 pr-3 py-2 rounded bg-bambu-dark text-sm text-white placeholder:text-bambu-gray focus:outline-none focus:ring-1 focus:ring-bambu-green"
-                />
+          <div className="flex-1 overflow-y-auto p-3">
+            {isLoading ? (
+              <div className="h-full flex items-center justify-center">
+                <Loader2 className="w-6 h-6 text-bambu-green animate-spin" />
               </div>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-3">
-              {isLoading ? (
-                <div className="h-full flex items-center justify-center">
-                  <Loader2 className="w-6 h-6 text-bambu-green animate-spin" />
-                </div>
-              ) : visible.length === 0 ? (
-                <p className="text-sm text-bambu-gray italic p-4 text-center">
-                  {offerable.length === 0
-                    ? printerModel
-                      ? t('libraryPicker.noneForModel', { model: mapModelCode(printerModel) })
-                      : t('libraryPicker.noneSliced')
-                    : t('libraryPicker.noMatch')}
-                </p>
-              ) : (
-                <div className="grid grid-cols-1 xl:grid-cols-2 gap-2">
-                  {visible.map((file) => {
-                    const checked = picked.has(file.id);
-                    return (
-                      <button
-                        key={file.id}
-                        type="button"
-                        aria-pressed={checked}
-                        onClick={() => toggle(file)}
-                        className={`flex items-center gap-3 p-2 rounded border text-left transition-colors ${
-                          checked
-                            ? 'border-bambu-green bg-bambu-green/10'
-                            : 'border-bambu-dark-tertiary bg-bambu-dark hover:border-bambu-green/50'
+            ) : visible.length === 0 ? (
+              <p className="text-sm text-bambu-gray italic p-4 text-center">
+                {offerable.length === 0
+                  ? printerModel
+                    ? t('libraryPicker.noneForModel', { model: mapModelCode(printerModel) })
+                    : t('libraryPicker.noneSliced')
+                  : t('libraryPicker.noMatch')}
+              </p>
+            ) : (
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-2">
+                {visible.map((file) => {
+                  const checked = picked.has(file.id);
+                  return (
+                    <button
+                      key={file.id}
+                      type="button"
+                      aria-pressed={checked}
+                      onClick={() => toggle(file)}
+                      className={`flex items-center gap-3 p-2 rounded border text-left transition-colors ${
+                        checked
+                          ? 'border-bambu-green bg-bambu-green/10'
+                          : 'border-bambu-dark-tertiary bg-bambu-dark hover:border-bambu-green/50'
+                      }`}
+                    >
+                      <span
+                        className={`w-4 h-4 shrink-0 rounded border flex items-center justify-center ${
+                          checked ? 'bg-bambu-green border-bambu-green' : 'border-bambu-gray/50'
                         }`}
                       >
-                        <span
-                          className={`w-4 h-4 shrink-0 rounded border flex items-center justify-center ${
-                            checked ? 'bg-bambu-green border-bambu-green' : 'border-bambu-gray/50'
-                          }`}
-                        >
-                          {checked && <Check className="w-3 h-3 text-black" strokeWidth={3} />}
+                        {checked && <Check className="w-3 h-3 text-black" strokeWidth={3} />}
+                      </span>
+                      <span className="w-12 h-12 shrink-0 rounded bg-bambu-dark-tertiary overflow-hidden flex items-center justify-center">
+                        {file.thumbnail_path ? (
+                          <img
+                            src={api.getLibraryFileThumbnailUrl(file.id)}
+                            alt=""
+                            className="w-full h-full object-contain"
+                          />
+                        ) : (
+                          <FileBox className="w-5 h-5 text-bambu-gray/50" />
+                        )}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-sm text-white truncate">
+                          {file.print_name || file.filename}
                         </span>
-                        <span className="w-12 h-12 shrink-0 rounded bg-bambu-dark-tertiary overflow-hidden flex items-center justify-center">
-                          {file.thumbnail_path ? (
-                            <img
-                              src={api.getLibraryFileThumbnailUrl(file.id)}
-                              alt=""
-                              className="w-full h-full object-contain"
-                            />
-                          ) : (
-                            <FileBox className="w-5 h-5 text-bambu-gray/50" />
-                          )}
-                        </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="block text-sm text-white truncate">
-                            {file.print_name || file.filename}
-                          </span>
-                          <span className="block text-xs text-bambu-gray truncate">{details(file)}</span>
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-
-        <div className="flex items-center justify-between gap-2 p-4 border-t border-bambu-dark shrink-0">
-          <span className="text-xs text-bambu-gray">
-            {/* Counted across every folder, which is exactly why it is worth saying. */}
-            {t('libraryPicker.selectedCount', { count })}
-          </span>
-          <div className="flex items-center gap-2">
-            <Button variant="ghost" onClick={onCancel}>
-              {t('common.cancel')}
-            </Button>
-            <Button disabled={count === 0} onClick={() => onConfirm([...picked.values()])}>
-              {t('libraryPicker.confirm')}
-            </Button>
+                        <span className="block text-xs text-bambu-gray truncate">{details(file)}</span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
       </div>
-    </div>
+
+      <div className="flex items-center justify-between gap-2 p-4 border-t border-bambu-dark shrink-0">
+        <span className="text-xs text-bambu-gray">
+          {/* Counted across every folder, which is exactly why it is worth saying. */}
+          {t('libraryPicker.selectedCount', { count })}
+        </span>
+        <div className="flex items-center gap-2">
+          <Button variant="ghost" onClick={onCancel}>
+            {t('common.cancel')}
+          </Button>
+          <Button disabled={count === 0} onClick={() => onConfirm([...picked.values()])}>
+            {t('libraryPicker.confirm')}
+          </Button>
+        </div>
+      </div>
+    </Modal>
   );
 }

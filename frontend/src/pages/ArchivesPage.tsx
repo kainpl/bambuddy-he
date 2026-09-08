@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { useState, useRef, useEffect, useCallback, useId, useMemo } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -74,6 +74,8 @@ import { useIsMobile } from '../hooks/useIsMobile';
 import type { Archive, OrderListItem, ArchiveListParams } from '../api/client';
 import { Card, CardContent } from '../components/Card';
 import { Button } from '../components/Button';
+import { Modal } from '../components/Modal';
+import { isAnyModalOpen } from '../components/modalStack';
 import { PaginationBar } from '../components/PaginationBar';
 import { ModelViewerModal } from '../components/ModelViewerModal';
 import { PrintModal } from '../components/PrintModal';
@@ -240,6 +242,7 @@ function ArchiveCard({
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [currentPlateIndex, setCurrentPlateIndex] = useState<number | null>(null);
   const [showPlateNav, setShowPlateNav] = useState(false);
+  const timelapseSelectHeadingId = useId();
   const source3mfInputRef = useRef<HTMLInputElement>(null);
   const f3dInputRef = useRef<HTMLInputElement>(null);
   const timelapseInputRef = useRef<HTMLInputElement>(null);
@@ -1420,58 +1423,54 @@ function ArchiveCard({
 
       {/* Timelapse Selection Modal */}
       {showTimelapseSelect && availableTimelapses.length > 0 && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-card-dark rounded-lg max-w-lg w-full max-h-[80vh] flex flex-col">
-            <div className="flex items-center justify-between p-4 border-b border-gray-700">
-              <div>
-                <h3 className="text-lg font-semibold text-white">{t('archives.modal.selectTimelapse')}</h3>
-                <p className="text-sm text-gray-400 mt-1">
-                  {t('archives.modal.selectTimelapseDesc')}
-                </p>
-              </div>
+        <Modal
+          onClose={() => {
+            setShowTimelapseSelect(false);
+            setAvailableTimelapses([]);
+          }}
+          labelledBy={timelapseSelectHeadingId}
+          header={
+            <div className="min-w-0">
+              <h3 id={timelapseSelectHeadingId} className="text-lg font-semibold text-white">{t('archives.modal.selectTimelapse')}</h3>
+              <p className="text-sm text-gray-400 mt-1">
+                {t('archives.modal.selectTimelapseDesc')}
+              </p>
+            </div>
+          }
+          size="lg"
+        >
+          <div className="overflow-y-auto flex-1 p-2">
+            {availableTimelapses.map((file) => (
               <button
-                onClick={() => {
-                  setShowTimelapseSelect(false);
-                  setAvailableTimelapses([]);
-                }}
-                className="text-gray-400 hover:text-white p-1"
+                key={file.name}
+                onClick={() => timelapseSelectMutation.mutate(file.name)}
+                disabled={timelapseSelectMutation.isPending}
+                className="w-full text-left p-3 rounded-lg hover:bg-gray-700 transition-colors flex items-center gap-3 disabled:opacity-50"
               >
-                <X className="w-5 h-5" />
+                <Film className="w-8 h-8 text-bambu-green flex-shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-white font-medium truncate">{file.name}</p>
+                  <p className="text-sm text-gray-400">
+                    {formatFileSize(file.size)}
+                    {file.mtime && ` • ${formatDateTime(file.mtime, timeFormat, dateFormat)}`}
+                  </p>
+                </div>
               </button>
-            </div>
-            <div className="overflow-y-auto flex-1 p-2">
-              {availableTimelapses.map((file) => (
-                <button
-                  key={file.name}
-                  onClick={() => timelapseSelectMutation.mutate(file.name)}
-                  disabled={timelapseSelectMutation.isPending}
-                  className="w-full text-left p-3 rounded-lg hover:bg-gray-700 transition-colors flex items-center gap-3 disabled:opacity-50"
-                >
-                  <Film className="w-8 h-8 text-bambu-green flex-shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-white font-medium truncate">{file.name}</p>
-                    <p className="text-sm text-gray-400">
-                      {formatFileSize(file.size)}
-                      {file.mtime && ` • ${formatDateTime(file.mtime, timeFormat, dateFormat)}`}
-                    </p>
-                  </div>
-                </button>
-              ))}
-            </div>
-            <div className="p-4 border-t border-gray-700">
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  setShowTimelapseSelect(false);
-                  setAvailableTimelapses([]);
-                }}
-                className="w-full"
-              >
-                {t('common.cancel')}
-              </Button>
-            </div>
+            ))}
           </div>
-        </div>
+          <div className="p-4 border-t border-gray-700">
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setShowTimelapseSelect(false);
+                setAvailableTimelapses([]);
+              }}
+              className="w-full"
+            >
+              {t('common.cancel')}
+            </Button>
+          </div>
+        </Modal>
       )}
 
       {/* Read-only plate object preview, opened from the object count. */}
@@ -1672,6 +1671,7 @@ function ArchiveListRow({
   const [showDeleteF3dConfirm, setShowDeleteF3dConfirm] = useState(false);
   const [showDeleteTimelapseConfirm, setShowDeleteTimelapseConfirm] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const timelapseSelectHeadingId = useId();
   const source3mfInputRef = useRef<HTMLInputElement>(null);
   const f3dInputRef = useRef<HTMLInputElement>(null);
   const timelapseInputRef = useRef<HTMLInputElement>(null);
@@ -2555,45 +2555,41 @@ function ArchiveListRow({
 
       {/* Timelapse Selection Modal */}
       {showTimelapseSelect && availableTimelapses.length > 0 && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-card-dark rounded-lg max-w-lg w-full max-h-[80vh] flex flex-col">
-            <div className="flex items-center justify-between p-4 border-b border-gray-700">
-              <div>
-                <h3 className="text-lg font-semibold text-white">{t('archives.modal.selectTimelapse')}</h3>
-                <p className="text-sm text-gray-400 mt-1">
-                  {t('archives.modal.selectTimelapseDesc')}
-                </p>
-              </div>
+        <Modal
+          onClose={() => {
+            setShowTimelapseSelect(false);
+            setAvailableTimelapses([]);
+          }}
+          labelledBy={timelapseSelectHeadingId}
+          header={
+            <div className="min-w-0">
+              <h3 id={timelapseSelectHeadingId} className="text-lg font-semibold text-white">{t('archives.modal.selectTimelapse')}</h3>
+              <p className="text-sm text-gray-400 mt-1">
+                {t('archives.modal.selectTimelapseDesc')}
+              </p>
+            </div>
+          }
+          size="lg"
+        >
+          <div className="overflow-y-auto flex-1 p-2">
+            {availableTimelapses.map((file) => (
               <button
-                onClick={() => {
-                  setShowTimelapseSelect(false);
-                  setAvailableTimelapses([]);
-                }}
-                className="text-gray-400 hover:text-white p-1"
+                key={file.name}
+                onClick={() => timelapseSelectMutation.mutate(file.name)}
+                disabled={timelapseSelectMutation.isPending}
+                className="w-full text-left p-3 rounded-lg hover:bg-gray-700 transition-colors mb-1"
               >
-                <X className="w-5 h-5" />
+                <div className="font-medium text-white">{file.name}</div>
+                <div className="text-sm text-gray-400 flex gap-3">
+                  <span>{formatFileSize(file.size)}</span>
+                  {file.mtime && (
+                    <span>{formatDateOnly(file.mtime)}</span>
+                  )}
+                </div>
               </button>
-            </div>
-            <div className="overflow-y-auto flex-1 p-2">
-              {availableTimelapses.map((file) => (
-                <button
-                  key={file.name}
-                  onClick={() => timelapseSelectMutation.mutate(file.name)}
-                  disabled={timelapseSelectMutation.isPending}
-                  className="w-full text-left p-3 rounded-lg hover:bg-gray-700 transition-colors mb-1"
-                >
-                  <div className="font-medium text-white">{file.name}</div>
-                  <div className="text-sm text-gray-400 flex gap-3">
-                    <span>{formatFileSize(file.size)}</span>
-                    {file.mtime && (
-                      <span>{formatDateOnly(file.mtime)}</span>
-                    )}
-                  </div>
-                </button>
-              ))}
-            </div>
+            ))}
           </div>
-        </div>
+        </Modal>
       )}
 
       {/* Read-only plate object preview, opened from the object count. */}
@@ -3232,6 +3228,10 @@ export function ArchivesPage() {
       if (e.key === 'Escape') {
         target.blur();
       }
+      return;
+    }
+    // Page shortcuts stay quiet under a modal — the stack owns Esc there.
+    if (isAnyModalOpen()) {
       return;
     }
 

@@ -2,12 +2,25 @@
  * Tests for the Layout component.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
-import { waitFor } from '@testing-library/react';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { act, fireEvent, waitFor } from '@testing-library/react';
 import { render } from '../utils';
 import { Layout } from '../../components/Layout';
+import { register, unregister, _resetForTests } from '../../components/modalStack';
 import { http, HttpResponse } from 'msw';
 import { server } from '../mocks/server';
+
+// The number-key guard is a call to `navigate`, not a DOM change: key `1` goes
+// to the first sidebar item, which is `/` — where the router already sits — so
+// a pathname assertion could not tell "navigated home" from "did nothing".
+// Spying on the router's navigate is the house pattern (see
+// LoginPageAuthedRedirect.test.tsx); NavLink keeps the real implementation, so
+// the sidebar-link tests in this file are untouched by it.
+const navigateSpy = vi.fn();
+vi.mock('react-router-dom', async () => {
+  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom');
+  return { ...actual, useNavigate: () => navigateSpy };
+});
 
 describe('Layout', () => {
   beforeEach(() => {
@@ -108,6 +121,36 @@ describe('Layout', () => {
         const settingsLink = document.querySelector('a[href="/settings"]');
         expect(settingsLink).toBeInTheDocument();
       });
+    });
+  });
+
+  describe('keyboard shortcuts', () => {
+    afterEach(() => {
+      _resetForTests();
+    });
+
+    it('number-key navigation is off while a modal is open', async () => {
+      render(<Layout />);
+      await waitFor(() => {
+        expect(document.querySelector('a[href="/settings"]')).toBeInTheDocument();
+      });
+
+      // A modal is on the stack: `1` must not move the app out from under it.
+      act(() => {
+        register('probe', [], { current: { onClose: vi.fn(), closeDisabled: false } });
+      });
+      navigateSpy.mockClear();
+      fireEvent.keyDown(document, { key: '1' });
+      expect(navigateSpy).not.toHaveBeenCalled();
+
+      // With the stack empty again the very same keypress navigates — so the
+      // assertion above pinned the guard, not a key handler that never worked.
+      act(() => {
+        unregister('probe');
+      });
+      navigateSpy.mockClear();
+      fireEvent.keyDown(document, { key: '1' });
+      expect(navigateSpy).toHaveBeenCalled();
     });
   });
 

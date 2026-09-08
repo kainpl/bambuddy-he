@@ -86,6 +86,10 @@
   --color-bambu-gray: var(--text-muted);
   --color-bambu-gray-light: var(--text-secondary);
   --color-bambu-gray-dark: var(--text-tertiary);
+
+  /* Tailwind 4's container scale stops at 7xl (80rem). The modal shell offers
+     size="8xl"; without this token `max-w-8xl` silently generates nothing. */
+  --container-8xl: 88rem;
 }
 
 /* ============================================

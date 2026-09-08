@@ -167,11 +167,10 @@ describe('ProductCardDialog', () => {
   });
 
   it('lets Escape close the LIGHTBOX first and the dialog only after it', async () => {
-    // ⚠️ Both Escape handlers sit on `window`, and this dialog's is registered
-    // FIRST — on mount, while the gallery's arrives only when a picture is
-    // enlarged. So one Escape used to close the whole dialog out from under the
-    // lightbox, throwing away everything typed into the form on the way. The
-    // dialog stands down while the gallery reports a lightbox open.
+    // ⚠️ One Escape used to close the whole dialog out from under the
+    // lightbox, throwing away everything typed into the form on the way. Both
+    // overlays are the shared shell now, and the modal stack hands Escape to
+    // the topmost one — the lightbox, which mounted last.
     const onClose = vi.fn();
     render(<ProductCardDialog product={withPictures} onClose={onClose} />);
 
@@ -179,15 +178,15 @@ describe('ProductCardDialog', () => {
     fireEvent.change(name, { target: { value: 'Beaker' } });
 
     fireEvent.click(screen.getByTestId('gallery-picture-a.png-dialog'));
-    expect(screen.getByTestId('gallery-lightbox-dialog')).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Picture viewer' })).toBeInTheDocument();
 
     fireEvent.keyDown(window, { key: 'Escape' });
-    expect(screen.queryByTestId('gallery-lightbox-dialog')).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Picture viewer' })).not.toBeInTheDocument();
     expect(onClose).not.toHaveBeenCalled();
     expect((screen.getByLabelText(/^name$/i) as HTMLInputElement).value).toBe('Beaker');
 
     // ...and the next one closes the dialog, now that nothing is over it.
-    await waitFor(() => expect(screen.queryByTestId('gallery-lightbox-dialog')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Picture viewer' })).not.toBeInTheDocument());
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(onClose).toHaveBeenCalledTimes(1);
   });

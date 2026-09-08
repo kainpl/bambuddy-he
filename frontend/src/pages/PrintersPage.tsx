@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from 'react';
+import { useState, useEffect, useId, useLayoutEffect, useMemo, useRef, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ZigbeeStatusBadge } from '../components/zigbee/ZigbeeStatusBadge';
 import { useTranslation } from 'react-i18next';
@@ -121,6 +121,7 @@ export interface SpoolmanSlotAssignmentRow {
 }
 import { Card, CardContent } from '../components/Card';
 import { Button } from '../components/Button';
+import { Modal } from '../components/Modal';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { FileManagerModal } from '../components/FileManagerModal';
 import { EmbeddedCameraViewer } from '../components/EmbeddedCameraViewer';
@@ -983,10 +984,7 @@ export function CoverImage({ url, printName, paused }: { url: string | null; pri
 
       {/* Cover Image Overlay */}
       {showOverlay && cacheBustedUrl && (
-        <div
-          className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-8"
-          onClick={() => setShowOverlay(false)}
-        >
+        <Modal variant="lightbox" onClose={() => setShowOverlay(false)} ariaLabel={t('printers.printPreview')}>
           <div className="relative max-w-2xl max-h-full">
             <img
               src={cacheBustedUrl}
@@ -997,7 +995,7 @@ export function CoverImage({ url, printName, paused }: { url: string | null; pri
               <p className="text-white text-center mt-4 text-lg">{printName}</p>
             )}
           </div>
-        </div>
+        </Modal>
       )}
     </>
   );
@@ -1197,6 +1195,7 @@ function ToolbarDropdown<T extends string>({
 
       {isOpen && (
         <>
+          {/* not-a-modal: menu */}
           <div className="fixed inset-0 z-10" onClick={() => setIsOpen(false)} />
           <div className="absolute left-0 top-full z-20 mt-1 min-w-full rounded-lg border border-bambu-dark-tertiary bg-bambu-dark-secondary py-1 shadow-xl">
             {options.map((option) => (
@@ -1246,6 +1245,7 @@ function ToolbarMenu({
 
       {isOpen && (
         <>
+          {/* not-a-modal: menu */}
           <div className="fixed inset-0 z-10" onClick={() => setIsOpen(false)} />
           <div
             className="absolute right-0 top-full z-20 mt-1 min-w-40 rounded-lg border border-bambu-dark-tertiary bg-bambu-dark-secondary p-2 shadow-xl"
@@ -1632,6 +1632,7 @@ function FanBadge({
       </button>
       {open && (
         <>
+          {/* not-a-modal: popover */}
           <div className="fixed inset-0 z-40" onClick={onToggle} />
           <div className="absolute bottom-full left-0 mb-1 z-50 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg shadow-lg py-1 min-w-[110px] max-h-[280px] overflow-y-auto">
             <div className="px-3 py-1 text-[length:var(--pc-t10,10px)] uppercase tracking-wider text-bambu-gray">{label}</div>
@@ -1914,6 +1915,7 @@ function PrinterCard({
   const [editingRoi, setEditingRoi] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [isSavingRoi, setIsSavingRoi] = useState(false);
   const [plateCheckLightWasOff, setPlateCheckLightWasOff] = useState(false);
+  const plateCheckHeadingId = useId();
 
   const { data: status } = useQuery({
     queryKey: ['printerStatus', printer.id],
@@ -2785,17 +2787,6 @@ function PrinterCard({
     }
   };
 
-  // Close plate check modal on Escape key
-  useEffect(() => {
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && plateCheckResult) {
-        closePlateCheckModal();
-      }
-    };
-    window.addEventListener('keydown', handleEscape);
-    return () => window.removeEventListener('keydown', handleEscape);
-  }, [plateCheckResult, closePlateCheckModal]);
-
   // Watch ams_status_main to detect when RFID read completes
   // ams_status_main: 0=idle, 2=rfid_identifying
   const deferredClearRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -3222,6 +3213,7 @@ function PrinterCard({
               </Button>
               {showMenu && (
                 <>
+                {/* not-a-modal: menu */}
                 <div className="fixed inset-0 z-10" onClick={() => setShowMenu(false)} />
                 {/* Anchor by the top-right corner of the cluster (kebab's
                     own top edge): ``top-full`` was the previous default
@@ -3673,64 +3665,70 @@ function PrinterCard({
 
         {/* Delete Confirmation */}
         {showDeleteConfirm && (
-          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
-            <Card className="w-full max-w-md mx-4">
-              <CardContent>
-                <div className="flex items-start gap-3 mb-4">
-                  <div className="p-2 rounded-full bg-red-100 dark:bg-red-500/20">
-                    <AlertTriangle className="w-[var(--pc-i5,1.25rem)] h-[var(--pc-i5,1.25rem)] text-red-600 dark:text-red-400" />
-                  </div>
+          <Modal
+            onClose={() => {
+              setShowDeleteConfirm(false);
+              setDeleteArchives(true);
+            }}
+            hideClose
+            ariaLabel={t('printers.confirm.deleteTitle')}
+            size="md"
+          >
+            <div className="p-4">
+              <div className="flex items-start gap-3 mb-4">
+                <div className="p-2 rounded-full bg-red-100 dark:bg-red-500/20">
+                  <AlertTriangle className="w-[var(--pc-i5,1.25rem)] h-[var(--pc-i5,1.25rem)] text-red-600 dark:text-red-400" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-white">{t('printers.confirm.deleteTitle')}</h3>
+                  <p className="text-sm text-bambu-gray mt-1">
+                    {t('printers.confirm.deleteMessage', { name: printer.name })}
+                  </p>
+                </div>
+              </div>
+
+              <div className="bg-bambu-dark rounded-lg p-3 mb-4">
+                <label className="flex items-start gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={deleteArchives}
+                    onChange={(e) => setDeleteArchives(e.target.checked)}
+                    className="accent-bambu-green mt-0.5 w-[var(--pc-i4,1rem)] h-[var(--pc-i4,1rem)] rounded border-bambu-gray bg-bambu-dark-secondary text-bambu-green focus:ring-bambu-green focus:ring-offset-0"
+                  />
                   <div>
-                    <h3 className="text-lg font-semibold text-white">{t('printers.confirm.deleteTitle')}</h3>
-                    <p className="text-sm text-bambu-gray mt-1">
-                      {t('printers.confirm.deleteMessage', { name: printer.name })}
+                    <span className="text-sm text-white">{t('printers.deleteArchives')}</span>
+                    <p className="text-xs text-bambu-gray mt-0.5">
+                      {deleteArchives
+                        ? t('printers.confirm.deleteArchivesNote')
+                        : t('printers.confirm.keepArchivesNote')}
                     </p>
                   </div>
-                </div>
+                </label>
+              </div>
 
-                <div className="bg-bambu-dark rounded-lg p-3 mb-4">
-                  <label className="flex items-start gap-3 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={deleteArchives}
-                      onChange={(e) => setDeleteArchives(e.target.checked)}
-                      className="accent-bambu-green mt-0.5 w-[var(--pc-i4,1rem)] h-[var(--pc-i4,1rem)] rounded border-bambu-gray bg-bambu-dark-secondary text-bambu-green focus:ring-bambu-green focus:ring-offset-0"
-                    />
-                    <div>
-                      <span className="text-sm text-white">{t('printers.deleteArchives')}</span>
-                      <p className="text-xs text-bambu-gray mt-0.5">
-                        {deleteArchives
-                          ? t('printers.confirm.deleteArchivesNote')
-                          : t('printers.confirm.keepArchivesNote')}
-                      </p>
-                    </div>
-                  </label>
-                </div>
-
-                <div className="flex justify-end gap-2">
-                  <Button
-                    variant="secondary"
-                    onClick={() => {
-                      setShowDeleteConfirm(false);
-                      setDeleteArchives(true);
-                    }}
-                  >
-                    {t('common.cancel')}
-                  </Button>
-                  <Button
-                    variant="danger"
-                    onClick={() => {
-                      deleteMutation.mutate({ deleteArchives });
-                      setShowDeleteConfirm(false);
-                      setDeleteArchives(true);
-                    }}
-                  >
-                    Delete
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
+              <div className="flex justify-end gap-2">
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    setShowDeleteConfirm(false);
+                    setDeleteArchives(true);
+                  }}
+                >
+                  {t('common.cancel')}
+                </Button>
+                <Button
+                  variant="danger"
+                  onClick={() => {
+                    deleteMutation.mutate({ deleteArchives });
+                    setShowDeleteConfirm(false);
+                    setDeleteArchives(true);
+                  }}
+                >
+                  Delete
+                </Button>
+              </div>
+            </div>
+          </Modal>
         )}
 
         {/* Status — see the equivalent defensive `=== false` check on the
@@ -4290,6 +4288,7 @@ function PrinterCard({
                             </button>
                             {showSpeedMenu === printer.id && (
                               <>
+                                {/* not-a-modal: menu */}
                                 <div className="fixed inset-0 z-40" onClick={() => setShowSpeedMenu(null)} />
                                 <div className="absolute bottom-full left-0 mb-1 z-50 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg shadow-lg py-1 min-w-[130px]">
                                   {([
@@ -4371,6 +4370,7 @@ function PrinterCard({
                             </button>
                             {showBedJogMenu === printer.id && (
                               <>
+                                {/* not-a-modal: menu */}
                                 <div className="fixed inset-0 z-40" onClick={() => setShowBedJogMenu(null)} />
                                 <div className="absolute bottom-full left-0 mb-1 z-50 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg shadow-lg p-2 min-w-[140px]">
                                   <div className="flex items-center justify-between gap-1 mb-2">
@@ -6167,268 +6167,270 @@ function PrinterCard({
 
       {/* Plate Check Result Modal */}
       {plateCheckResult && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => closePlateCheckModal()}>
-          <div className="bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-xl shadow-2xl max-w-lg w-full" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between p-4 border-b border-bambu-dark-tertiary">
-              <div className="flex items-center gap-2">
-                {plateCheckResult.needs_calibration ? (
-                  <ScanSearch className="w-[var(--pc-i5,1.25rem)] h-[var(--pc-i5,1.25rem)] text-blue-500" />
-                ) : plateCheckResult.is_empty ? (
-                  <CheckCircle className="w-[var(--pc-i5,1.25rem)] h-[var(--pc-i5,1.25rem)] text-green-500" />
-                ) : (
-                  <XCircle className="w-[var(--pc-i5,1.25rem)] h-[var(--pc-i5,1.25rem)] text-yellow-500" />
-                )}
-                <h2 className="text-lg font-semibold text-white">
-                  {t('printers.plateDetection.title')}
-                </h2>
-                {plateCheckResult.reference_count !== undefined && plateCheckResult.max_references && (
-                  <span className="text-xs text-bambu-gray bg-bambu-dark-tertiary px-2 py-1 rounded">
-                    {t('printers.plateDetection.refsCount', { count: plateCheckResult.reference_count, max: plateCheckResult.max_references })}
-                  </span>
-                )}
-              </div>
-              <button
-                onClick={() => closePlateCheckModal()}
-                className="p-1 text-bambu-gray hover:text-white rounded transition-colors"
-              >
-                <X className="w-[var(--pc-i5,1.25rem)] h-[var(--pc-i5,1.25rem)]" />
-              </button>
-            </div>
-            <div className="p-4 space-y-4">
+        <Modal
+          onClose={() => closePlateCheckModal()}
+          labelledBy={plateCheckHeadingId}
+          header={
+            <>
               {plateCheckResult.needs_calibration ? (
-                <>
-                  <div className="p-3 rounded-lg bg-blue-100 dark:bg-blue-500/20 border border-blue-300 dark:border-blue-500/50">
-                    <p className="font-medium text-blue-700 dark:text-blue-400">
-                      {t('printers.plateDetection.calibrationRequired')}
-                    </p>
-                    <p className="text-sm text-bambu-gray mt-1" dangerouslySetInnerHTML={{ __html: t('printers.plateDetection.calibrationInstructions') }} />
-                  </div>
-                  <div className="text-sm text-bambu-gray space-y-2">
-                    <p>{t('printers.plateDetection.calibrationDescription')}</p>
-                    <p dangerouslySetInnerHTML={{ __html: t('printers.plateDetection.calibrationTip') }} />
-                  </div>
-                </>
+                <ScanSearch className="w-[var(--pc-i5,1.25rem)] h-[var(--pc-i5,1.25rem)] text-blue-500" />
+              ) : plateCheckResult.is_empty ? (
+                <CheckCircle className="w-[var(--pc-i5,1.25rem)] h-[var(--pc-i5,1.25rem)] text-green-500" />
               ) : (
-                <>
-                  <div className={`p-3 rounded-lg ${plateCheckResult.is_empty ? 'bg-green-100 dark:bg-green-500/20 border border-green-300 dark:border-green-500/50' : 'bg-yellow-100 dark:bg-yellow-500/20 border border-yellow-300 dark:border-yellow-500/50'}`}>
-                    <p className={`font-medium ${plateCheckResult.is_empty ? 'text-green-700 dark:text-green-400' : 'text-yellow-700 dark:text-yellow-400'}`}>
-                      {plateCheckResult.is_empty ? t('printers.plateDetection.plateEmpty') : t('printers.plateDetection.objectsDetected')}
-                    </p>
-                    <p className="text-sm text-bambu-gray mt-1">
-                      {t('printers.plateDetection.confidence')}: {Math.round(plateCheckResult.confidence * 100)}% | {t('printers.plateDetection.difference')}: {plateCheckResult.difference_percent.toFixed(1)}%
+                <XCircle className="w-[var(--pc-i5,1.25rem)] h-[var(--pc-i5,1.25rem)] text-yellow-500" />
+              )}
+              <h2 id={plateCheckHeadingId} className="text-lg font-semibold text-white">
+                {t('printers.plateDetection.title')}
+              </h2>
+              {plateCheckResult.reference_count !== undefined && plateCheckResult.max_references && (
+                <span className="text-xs text-bambu-gray bg-bambu-dark-tertiary px-2 py-1 rounded">
+                  {t('printers.plateDetection.refsCount', { count: plateCheckResult.reference_count, max: plateCheckResult.max_references })}
+                </span>
+              )}
+            </>
+          }
+          size="lg"
+        >
+          <div className="p-4 space-y-4">
+            {plateCheckResult.needs_calibration ? (
+              <>
+                <div className="p-3 rounded-lg bg-blue-100 dark:bg-blue-500/20 border border-blue-300 dark:border-blue-500/50">
+                  <p className="font-medium text-blue-700 dark:text-blue-400">
+                    {t('printers.plateDetection.calibrationRequired')}
+                  </p>
+                  <p className="text-sm text-bambu-gray mt-1" dangerouslySetInnerHTML={{ __html: t('printers.plateDetection.calibrationInstructions') }} />
+                </div>
+                <div className="text-sm text-bambu-gray space-y-2">
+                  <p>{t('printers.plateDetection.calibrationDescription')}</p>
+                  <p dangerouslySetInnerHTML={{ __html: t('printers.plateDetection.calibrationTip') }} />
+                </div>
+              </>
+            ) : (
+              <>
+                <div className={`p-3 rounded-lg ${plateCheckResult.is_empty ? 'bg-green-100 dark:bg-green-500/20 border border-green-300 dark:border-green-500/50' : 'bg-yellow-100 dark:bg-yellow-500/20 border border-yellow-300 dark:border-yellow-500/50'}`}>
+                  <p className={`font-medium ${plateCheckResult.is_empty ? 'text-green-700 dark:text-green-400' : 'text-yellow-700 dark:text-yellow-400'}`}>
+                    {plateCheckResult.is_empty ? t('printers.plateDetection.plateEmpty') : t('printers.plateDetection.objectsDetected')}
+                  </p>
+                  <p className="text-sm text-bambu-gray mt-1">
+                    {t('printers.plateDetection.confidence')}: {Math.round(plateCheckResult.confidence * 100)}% | {t('printers.plateDetection.difference')}: {plateCheckResult.difference_percent.toFixed(1)}%
+                  </p>
+                </div>
+                {plateCheckResult.debug_image_url && (
+                  <div>
+                    <p className="text-sm text-bambu-gray mb-2">{t('printers.plateDetection.analysisPreview')}</p>
+                    <img
+                      src={plateCheckResult.debug_image_url}
+                      alt={t('printers.plateDetection.analysisPreview')}
+                      className="w-full rounded-lg border border-bambu-dark-tertiary"
+                    />
+                    <p className="text-xs text-bambu-gray mt-2">
+                      {t('printers.plateDetection.analysisLegend')}
                     </p>
                   </div>
-                  {plateCheckResult.debug_image_url && (
-                    <div>
-                      <p className="text-sm text-bambu-gray mb-2">{t('printers.plateDetection.analysisPreview')}</p>
+                )}
+                <p className="text-xs text-bambu-gray">
+                  {plateCheckResult.message}
+                </p>
+              </>
+            )}
+
+            {/* Saved References Grid */}
+            {plateReferences && plateReferences.references.length > 0 && (
+              <div className="mt-4 pt-4 border-t border-bambu-dark-tertiary">
+                <p className="text-sm font-medium text-white mb-2">
+                  {t('printers.plateDetection.savedReferences', { count: plateReferences.references.length, max: plateReferences.max_references })}
+                </p>
+                <div className="grid grid-cols-5 gap-2">
+                  {plateReferences.references.map((ref) => (
+                    <div key={ref.index} className="relative group">
                       <img
-                        src={plateCheckResult.debug_image_url}
-                        alt={t('printers.plateDetection.analysisPreview')}
-                        className="w-full rounded-lg border border-bambu-dark-tertiary"
+                        src={api.getPlateReferenceThumbnailUrl(printer.id, ref.index)}
+                        alt={ref.label || `Reference ${ref.index + 1}`}
+                        className="w-full aspect-video object-cover rounded border border-bambu-dark-tertiary"
                       />
-                      <p className="text-xs text-bambu-gray mt-2">
-                        {t('printers.plateDetection.analysisLegend')}
+                      {/* Delete button */}
+                      <button
+                        onClick={() => handleDeleteRef(ref.index)}
+                        className="absolute top-1 right-1 p-0.5 bg-red-500/80 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                        title={t('printers.plateDetection.deleteReference')}
+                      >
+                        <X className="w-[var(--pc-i3,0.75rem)] h-[var(--pc-i3,0.75rem)] text-white" />
+                      </button>
+                      {/* Label */}
+                      {editingRefLabel?.index === ref.index ? (
+                        <input
+                          type="text"
+                          value={editingRefLabel.label}
+                          onChange={(e) => setEditingRefLabel({ ...editingRefLabel, label: e.target.value })}
+                          onBlur={() => handleUpdateRefLabel(ref.index, editingRefLabel.label)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleUpdateRefLabel(ref.index, editingRefLabel.label);
+                            // Inner layer: cancel the inline edit only — the
+                            // modal stack's window listener must not also
+                            // close the plate-check modal on this keypress.
+                            if (e.key === 'Escape') {
+                              e.stopPropagation();
+                              setEditingRefLabel(null);
+                            }
+                          }}
+                          className="w-full mt-1 px-1 py-0.5 text-xs bg-bambu-dark-tertiary border border-bambu-green rounded text-white"
+                          autoFocus
+                          placeholder={t('printers.plateDetection.labelPlaceholder')}
+                        />
+                      ) : (
+                        <p
+                          className="text-xs text-bambu-gray mt-1 truncate cursor-pointer hover:text-white"
+                          onClick={() => setEditingRefLabel({ index: ref.index, label: ref.label })}
+                          title={ref.label ? t('printers.plateDetection.clickToEdit', { label: ref.label }) : t('printers.plateDetection.clickToAddLabel')}
+                        >
+                          {ref.label || <span className="italic opacity-50">{t('printers.noLabel')}</span>}
+                        </p>
+                      )}
+                      {/* Timestamp — respect user's date_format choice */}
+                      <p className="text-[length:var(--pc-t10,10px)] text-bambu-gray/60">
+                        {ref.timestamp ? formatDateOnly(ref.timestamp, undefined, dateFormat) : ''}
                       </p>
                     </div>
-                  )}
-                  <p className="text-xs text-bambu-gray">
-                    {plateCheckResult.message}
-                  </p>
-                </>
-              )}
-
-              {/* Saved References Grid */}
-              {plateReferences && plateReferences.references.length > 0 && (
-                <div className="mt-4 pt-4 border-t border-bambu-dark-tertiary">
-                  <p className="text-sm font-medium text-white mb-2">
-                    {t('printers.plateDetection.savedReferences', { count: plateReferences.references.length, max: plateReferences.max_references })}
-                  </p>
-                  <div className="grid grid-cols-5 gap-2">
-                    {plateReferences.references.map((ref) => (
-                      <div key={ref.index} className="relative group">
-                        <img
-                          src={api.getPlateReferenceThumbnailUrl(printer.id, ref.index)}
-                          alt={ref.label || `Reference ${ref.index + 1}`}
-                          className="w-full aspect-video object-cover rounded border border-bambu-dark-tertiary"
-                        />
-                        {/* Delete button */}
-                        <button
-                          onClick={() => handleDeleteRef(ref.index)}
-                          className="absolute top-1 right-1 p-0.5 bg-red-500/80 rounded opacity-0 group-hover:opacity-100 transition-opacity"
-                          title={t('printers.plateDetection.deleteReference')}
-                        >
-                          <X className="w-[var(--pc-i3,0.75rem)] h-[var(--pc-i3,0.75rem)] text-white" />
-                        </button>
-                        {/* Label */}
-                        {editingRefLabel?.index === ref.index ? (
-                          <input
-                            type="text"
-                            value={editingRefLabel.label}
-                            onChange={(e) => setEditingRefLabel({ ...editingRefLabel, label: e.target.value })}
-                            onBlur={() => handleUpdateRefLabel(ref.index, editingRefLabel.label)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') handleUpdateRefLabel(ref.index, editingRefLabel.label);
-                              if (e.key === 'Escape') setEditingRefLabel(null);
-                            }}
-                            className="w-full mt-1 px-1 py-0.5 text-xs bg-bambu-dark-tertiary border border-bambu-green rounded text-white"
-                            autoFocus
-                            placeholder={t('printers.plateDetection.labelPlaceholder')}
-                          />
-                        ) : (
-                          <p
-                            className="text-xs text-bambu-gray mt-1 truncate cursor-pointer hover:text-white"
-                            onClick={() => setEditingRefLabel({ index: ref.index, label: ref.label })}
-                            title={ref.label ? t('printers.plateDetection.clickToEdit', { label: ref.label }) : t('printers.plateDetection.clickToAddLabel')}
-                          >
-                            {ref.label || <span className="italic opacity-50">{t('printers.noLabel')}</span>}
-                          </p>
-                        )}
-                        {/* Timestamp — respect user's date_format choice */}
-                        <p className="text-[length:var(--pc-t10,10px)] text-bambu-gray/60">
-                          {ref.timestamp ? formatDateOnly(ref.timestamp, undefined, dateFormat) : ''}
-                        </p>
-                      </div>
-                    ))}
-                  </div>
+                  ))}
                 </div>
-              )}
+              </div>
+            )}
 
-              {/* ROI Editor */}
-              {!plateCheckResult.needs_calibration && (
-                <div className="mt-4 pt-4 border-t border-bambu-dark-tertiary">
-                  <div className="flex items-center justify-between mb-2">
-                    <p className="text-sm font-medium text-white">{t('printers.roi.title')}</p>
-                    {!editingRoi ? (
+            {/* ROI Editor */}
+            {!plateCheckResult.needs_calibration && (
+              <div className="mt-4 pt-4 border-t border-bambu-dark-tertiary">
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-sm font-medium text-white">{t('printers.roi.title')}</p>
+                  {!editingRoi ? (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setEditingRoi(plateCheckResult.roi || { x: 0.15, y: 0.35, w: 0.70, h: 0.55 })}
+                    >
+                      <Pencil className="w-[var(--pc-i3,0.75rem)] h-[var(--pc-i3,0.75rem)] mr-1" />
+                      {t('common.edit')}
+                    </Button>
+                  ) : (
+                    <div className="flex gap-1">
                       <Button
                         variant="ghost"
                         size="sm"
-                        onClick={() => setEditingRoi(plateCheckResult.roi || { x: 0.15, y: 0.35, w: 0.70, h: 0.55 })}
+                        onClick={() => setEditingRoi(null)}
+                        disabled={isSavingRoi}
                       >
-                        <Pencil className="w-[var(--pc-i3,0.75rem)] h-[var(--pc-i3,0.75rem)] mr-1" />
-                        {t('common.edit')}
+                        {t('common.cancel')}
                       </Button>
-                    ) : (
-                      <div className="flex gap-1">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setEditingRoi(null)}
-                          disabled={isSavingRoi}
-                        >
-                          {t('common.cancel')}
-                        </Button>
-                        <Button
-                          size="sm"
-                          onClick={handleSaveRoi}
-                          disabled={isSavingRoi}
-                        >
-                          {isSavingRoi ? <Loader2 className="w-[var(--pc-i3,0.75rem)] h-[var(--pc-i3,0.75rem)] animate-spin" /> : t('common.save')}
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-                  {editingRoi ? (
-                    <div className="space-y-3 bg-bambu-dark-tertiary/50 p-3 rounded-lg">
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <label className="text-xs text-bambu-gray">{t('printers.roi.xStart')}</label>
-                          <input
-                            type="range"
-                            min="0"
-                            max="0.9"
-                            step="0.01"
-                            value={editingRoi.x}
-                            onChange={(e) => setEditingRoi({ ...editingRoi, x: parseFloat(e.target.value) })}
-                            className="w-full h-1.5 bg-bambu-dark-tertiary rounded-lg cursor-pointer accent-green-500"
-                          />
-                          <span className="text-xs text-bambu-gray">{Math.round(editingRoi.x * 100)}%</span>
-                        </div>
-                        <div>
-                          <label className="text-xs text-bambu-gray">{t('printers.roi.yStart')}</label>
-                          <input
-                            type="range"
-                            min="0"
-                            max="0.9"
-                            step="0.01"
-                            value={editingRoi.y}
-                            onChange={(e) => setEditingRoi({ ...editingRoi, y: parseFloat(e.target.value) })}
-                            className="w-full h-1.5 bg-bambu-dark-tertiary rounded-lg cursor-pointer accent-green-500"
-                          />
-                          <span className="text-xs text-bambu-gray">{Math.round(editingRoi.y * 100)}%</span>
-                        </div>
-                        <div>
-                          <label className="text-xs text-bambu-gray">{t('printers.width')}</label>
-                          <input
-                            type="range"
-                            min="0.1"
-                            max="1"
-                            step="0.01"
-                            value={editingRoi.w}
-                            onChange={(e) => setEditingRoi({ ...editingRoi, w: parseFloat(e.target.value) })}
-                            className="w-full h-1.5 bg-bambu-dark-tertiary rounded-lg cursor-pointer accent-green-500"
-                          />
-                          <span className="text-xs text-bambu-gray">{Math.round(editingRoi.w * 100)}%</span>
-                        </div>
-                        <div>
-                          <label className="text-xs text-bambu-gray">{t('printers.height')}</label>
-                          <input
-                            type="range"
-                            min="0.1"
-                            max="1"
-                            step="0.01"
-                            value={editingRoi.h}
-                            onChange={(e) => setEditingRoi({ ...editingRoi, h: parseFloat(e.target.value) })}
-                            className="w-full h-1.5 bg-bambu-dark-tertiary rounded-lg cursor-pointer accent-green-500"
-                          />
-                          <span className="text-xs text-bambu-gray">{Math.round(editingRoi.h * 100)}%</span>
-                        </div>
-                      </div>
-                      <p className="text-xs text-bambu-gray">
-                        {t('printers.roi.instruction')}
-                      </p>
+                      <Button
+                        size="sm"
+                        onClick={handleSaveRoi}
+                        disabled={isSavingRoi}
+                      >
+                        {isSavingRoi ? <Loader2 className="w-[var(--pc-i3,0.75rem)] h-[var(--pc-i3,0.75rem)] animate-spin" /> : t('common.save')}
+                      </Button>
                     </div>
-                  ) : (
-                    <p className="text-xs text-bambu-gray">
-                      Current: X={Math.round((plateCheckResult.roi?.x || 0.15) * 100)}%, Y={Math.round((plateCheckResult.roi?.y || 0.35) * 100)}%,
-                      W={Math.round((plateCheckResult.roi?.w || 0.70) * 100)}%, H={Math.round((plateCheckResult.roi?.h || 0.55) * 100)}%
-                    </p>
                   )}
                 </div>
-              )}
-            </div>
-            <div className="flex justify-end gap-2 p-4 border-t border-bambu-dark-tertiary">
-              {plateCheckResult.needs_calibration ? (
-                <>
-                  <Button variant="ghost" onClick={() => closePlateCheckModal()}>
-                    {t('common.cancel')}
-                  </Button>
-                  <Button
-                    onClick={() => handleCalibratePlate()}
-                    disabled={isCalibrating}
-                  >
-                    {isCalibrating ? (
-                      <>
-                        <Loader2 className="w-[var(--pc-i4,1rem)] h-[var(--pc-i4,1rem)] mr-2 animate-spin" />
-                        {t('printers.plateDetection.calibrating')}
-                      </>
-                    ) : (
-                      t('printers.plateDetection.calibrateEmptyPlate')
-                    )}
-                  </Button>
-                </>
-              ) : (
-                <>
-                  <Button variant="ghost" onClick={() => handleCalibratePlate()} disabled={isCalibrating}>
-                    {isCalibrating ? t('printers.plateDetection.adding') : t('printers.plateDetection.addReference', { count: plateReferences?.references.length || 0, max: plateReferences?.max_references || 5 })}
-                  </Button>
-                  <Button onClick={() => closePlateCheckModal()}>
-                    {t('common.close')}
-                  </Button>
-                </>
-              )}
-            </div>
+                {editingRoi ? (
+                  <div className="space-y-3 bg-bambu-dark-tertiary/50 p-3 rounded-lg">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-xs text-bambu-gray">{t('printers.roi.xStart')}</label>
+                        <input
+                          type="range"
+                          min="0"
+                          max="0.9"
+                          step="0.01"
+                          value={editingRoi.x}
+                          onChange={(e) => setEditingRoi({ ...editingRoi, x: parseFloat(e.target.value) })}
+                          className="w-full h-1.5 bg-bambu-dark-tertiary rounded-lg cursor-pointer accent-green-500"
+                        />
+                        <span className="text-xs text-bambu-gray">{Math.round(editingRoi.x * 100)}%</span>
+                      </div>
+                      <div>
+                        <label className="text-xs text-bambu-gray">{t('printers.roi.yStart')}</label>
+                        <input
+                          type="range"
+                          min="0"
+                          max="0.9"
+                          step="0.01"
+                          value={editingRoi.y}
+                          onChange={(e) => setEditingRoi({ ...editingRoi, y: parseFloat(e.target.value) })}
+                          className="w-full h-1.5 bg-bambu-dark-tertiary rounded-lg cursor-pointer accent-green-500"
+                        />
+                        <span className="text-xs text-bambu-gray">{Math.round(editingRoi.y * 100)}%</span>
+                      </div>
+                      <div>
+                        <label className="text-xs text-bambu-gray">{t('printers.width')}</label>
+                        <input
+                          type="range"
+                          min="0.1"
+                          max="1"
+                          step="0.01"
+                          value={editingRoi.w}
+                          onChange={(e) => setEditingRoi({ ...editingRoi, w: parseFloat(e.target.value) })}
+                          className="w-full h-1.5 bg-bambu-dark-tertiary rounded-lg cursor-pointer accent-green-500"
+                        />
+                        <span className="text-xs text-bambu-gray">{Math.round(editingRoi.w * 100)}%</span>
+                      </div>
+                      <div>
+                        <label className="text-xs text-bambu-gray">{t('printers.height')}</label>
+                        <input
+                          type="range"
+                          min="0.1"
+                          max="1"
+                          step="0.01"
+                          value={editingRoi.h}
+                          onChange={(e) => setEditingRoi({ ...editingRoi, h: parseFloat(e.target.value) })}
+                          className="w-full h-1.5 bg-bambu-dark-tertiary rounded-lg cursor-pointer accent-green-500"
+                        />
+                        <span className="text-xs text-bambu-gray">{Math.round(editingRoi.h * 100)}%</span>
+                      </div>
+                    </div>
+                    <p className="text-xs text-bambu-gray">
+                      {t('printers.roi.instruction')}
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-xs text-bambu-gray">
+                    Current: X={Math.round((plateCheckResult.roi?.x || 0.15) * 100)}%, Y={Math.round((plateCheckResult.roi?.y || 0.35) * 100)}%,
+                    W={Math.round((plateCheckResult.roi?.w || 0.70) * 100)}%, H={Math.round((plateCheckResult.roi?.h || 0.55) * 100)}%
+                  </p>
+                )}
+              </div>
+            )}
           </div>
-        </div>
+          <div className="flex justify-end gap-2 p-4 border-t border-bambu-dark-tertiary">
+            {plateCheckResult.needs_calibration ? (
+              <>
+                <Button variant="ghost" onClick={() => closePlateCheckModal()}>
+                  {t('common.cancel')}
+                </Button>
+                <Button
+                  onClick={() => handleCalibratePlate()}
+                  disabled={isCalibrating}
+                >
+                  {isCalibrating ? (
+                    <>
+                      <Loader2 className="w-[var(--pc-i4,1rem)] h-[var(--pc-i4,1rem)] mr-2 animate-spin" />
+                      {t('printers.plateDetection.calibrating')}
+                    </>
+                  ) : (
+                    t('printers.plateDetection.calibrateEmptyPlate')
+                  )}
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button variant="ghost" onClick={() => handleCalibratePlate()} disabled={isCalibrating}>
+                  {isCalibrating ? t('printers.plateDetection.adding') : t('printers.plateDetection.addReference', { count: plateReferences?.references.length || 0, max: plateReferences?.max_references || 5 })}
+                </Button>
+                <Button onClick={() => closePlateCheckModal()}>
+                  {t('common.close')}
+                </Button>
+              </>
+            )}
+          </div>
+        </Modal>
       )}
 
       {/* Power On Confirmation */}
@@ -6570,8 +6572,13 @@ function PrinterCard({
           StatusPanel::check_axis_z_at_home runs AFTER Ctrl_Axis has published,
           so Studio's unhomed Z jog happens and then advises recentering. */}
       {showNotHomedModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-          <div className="bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg shadow-xl w-full max-w-sm p-5">
+        <Modal
+          onClose={() => setShowNotHomedModal(null)}
+          hideClose
+          ariaLabel={t('printers.bedJog.notHomedTitle')}
+          size="sm"
+        >
+          <div className="p-5">
             <div className="flex items-start gap-3 mb-4">
               <AlertTriangle className="w-[var(--pc-i5,1.25rem)] h-[var(--pc-i5,1.25rem)] text-yellow-600 dark:text-yellow-400 flex-shrink-0 mt-0.5" />
               <div>
@@ -6601,7 +6608,7 @@ function PrinterCard({
               </button>
             </div>
           </div>
-        </div>
+        </Modal>
       )}
 
       {/* Fan speed during a print — BambuStudio's own warning
@@ -6612,8 +6619,13 @@ function PrinterCard({
           acknowledgement on every call, so this dialog is the explanation, not
           the guard. */}
       {showFanPrintingModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-          <div className="bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg shadow-xl w-full max-w-sm p-5">
+        <Modal
+          onClose={() => setShowFanPrintingModal(null)}
+          hideClose
+          ariaLabel={t('printers.fans.printingWarningTitle')}
+          size="sm"
+        >
+          <div className="p-5">
             <div className="flex items-start gap-3 mb-4">
               <AlertTriangle className="w-[var(--pc-i5,1.25rem)] h-[var(--pc-i5,1.25rem)] text-yellow-600 dark:text-yellow-400 flex-shrink-0 mt-0.5" />
               <div>
@@ -6649,7 +6661,7 @@ function PrinterCard({
               </button>
             </div>
           </div>
-        </div>
+        </Modal>
       )}
 
       {status && (
@@ -6851,6 +6863,7 @@ function PrinterCard({
 
       {/* AMS Slot Menu Backdrop - closes menu when clicking outside */}
       {amsSlotMenu && (
+        // not-a-modal: menu
         <div
           className="fixed inset-0 z-40"
           onClick={() => setAmsSlotMenu(null)}
@@ -6869,7 +6882,7 @@ function PrinterCard({
         const anyTrayLoaded = targetAms?.tray?.some(tr => tr.state === 11) ?? false;
         return (
           <>
-            {/* Backdrop */}
+            {/* not-a-modal: popover */}
             <div className="fixed inset-0 z-[100]" onClick={() => setDryingPopoverAmsId(null)} />
             {/* Popover */}
             <div
@@ -7054,57 +7067,46 @@ function MacrosPanel({
   const isBusy = executeMutation.isPending || !!macroExecuting;
 
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div
-        className="bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-xl w-full max-w-sm shadow-lg"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between px-4 py-3 border-b border-bambu-dark-tertiary">
-          <h3 className="text-sm font-semibold text-white">{t('printers.macros')} - {printer.name}</h3>
-          <button onClick={onClose} className="text-bambu-gray hover:text-white">
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-        <div className="p-3 max-h-64 overflow-y-auto">
-          {isLoading ? (
-            <div className="flex justify-center py-4">
-              <Loader2 className="w-5 h-5 animate-spin text-bambu-gray" />
-            </div>
-          ) : filteredMacros.length === 0 ? (
-            <p className="text-sm text-bambu-gray text-center py-4">{t('printers.noMacros')}</p>
-          ) : (
-            <div className="space-y-1">
-              {filteredMacros.map((macro: Macro) => {
-                const isSending = executeMutation.isPending && executeMutation.variables === macro.id;
-                const isRunning = macroExecuting === macro.name;
-                return (
-                  <button
-                    key={macro.id}
-                    className="w-full px-3 py-2 text-left text-sm text-white hover:bg-bambu-dark-tertiary rounded-lg flex items-center justify-between gap-2 disabled:opacity-50"
-                    onClick={() => executeMutation.mutate(macro.id)}
-                    disabled={isBusy}
-                  >
-                    <div>
-                      <div className="font-medium">{macro.name}</div>
-                      <div className="text-xs text-bambu-gray">
-                        {isRunning
-                          ? t('printers.macroAwaitingResponse')
-                          : `${macro.gcode.split('\n').length} ${t('printers.macroLines')}`}
-                      </div>
+    <Modal onClose={onClose} title={`${t('printers.macros')} - ${printer.name}`} size="sm">
+      <div className="p-3 max-h-64 overflow-y-auto">
+        {isLoading ? (
+          <div className="flex justify-center py-4">
+            <Loader2 className="w-5 h-5 animate-spin text-bambu-gray" />
+          </div>
+        ) : filteredMacros.length === 0 ? (
+          <p className="text-sm text-bambu-gray text-center py-4">{t('printers.noMacros')}</p>
+        ) : (
+          <div className="space-y-1">
+            {filteredMacros.map((macro: Macro) => {
+              const isSending = executeMutation.isPending && executeMutation.variables === macro.id;
+              const isRunning = macroExecuting === macro.name;
+              return (
+                <button
+                  key={macro.id}
+                  className="w-full px-3 py-2 text-left text-sm text-white hover:bg-bambu-dark-tertiary rounded-lg flex items-center justify-between gap-2 disabled:opacity-50"
+                  onClick={() => executeMutation.mutate(macro.id)}
+                  disabled={isBusy}
+                >
+                  <div>
+                    <div className="font-medium">{macro.name}</div>
+                    <div className="text-xs text-bambu-gray">
+                      {isRunning
+                        ? t('printers.macroAwaitingResponse')
+                        : `${macro.gcode.split('\n').length} ${t('printers.macroLines')}`}
                     </div>
-                    {isSending || isRunning ? (
-                      <Loader2 className="w-4 h-4 animate-spin text-bambu-green flex-shrink-0" />
-                    ) : (
-                      <Play className="w-4 h-4 text-bambu-gray flex-shrink-0" />
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </div>
+                  </div>
+                  {isSending || isRunning ? (
+                    <Loader2 className="w-4 h-4 animate-spin text-bambu-green flex-shrink-0" />
+                  ) : (
+                    <Play className="w-4 h-4 text-bambu-gray flex-shrink-0" />
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -7322,435 +7324,419 @@ export function AddPrinterModal({
     };
   }, []);
 
-  // Close on Escape key
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose]);
-
   return (
-    <div
-      className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50"
-      onClick={onClose}
-    >
-      <Card className="w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={(e: React.MouseEvent) => e.stopPropagation()}>
-        <CardContent>
-          <h2 className="text-xl font-semibold mb-4">{t('printers.addPrinter')}</h2>
-
-          {/* Discovery Section - full width */}
-          <div className="mb-4 pb-4 border-b border-bambu-dark-tertiary">
-            {/* Subnet picker — always visible. The dropdown lists detected
-                interface subnets and a "Custom..." sentinel that reveals a
-                CIDR text input for printers on a different L3 segment (router,
-                VLAN, etc.). #1564 */}
-            <div className="mb-3">
-              <label className="block text-sm text-bambu-gray mb-1">
-                {t('printers.discovery.subnetToScan')}
-              </label>
-              {detectedSubnets.length > 0 ? (
-                <select
-                  className="w-full px-3 py-1.5 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none text-sm"
-                  value={useCustomSubnet ? '__custom__' : subnet}
-                  onChange={(e) => {
-                    if (e.target.value === '__custom__') {
-                      setUseCustomSubnet(true);
-                    } else {
-                      setUseCustomSubnet(false);
-                      setSubnet(e.target.value);
-                    }
-                  }}
-                  disabled={discovering}
-                >
-                  {detectedSubnets.map(s => (
-                    <option key={s} value={s}>{s}</option>
-                  ))}
-                  <option value="__custom__">{t('printers.discovery.customSubnetOption')}</option>
-                </select>
-              ) : (
-                <input
-                  type="text"
-                  className="w-full px-3 py-1.5 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none text-sm"
-                  value={subnet}
-                  onChange={(e) => setSubnet(e.target.value)}
-                  placeholder="192.168.1.0/24"
-                  disabled={discovering}
-                />
-              )}
-              {useCustomSubnet && (
-                <input
-                  type="text"
-                  aria-label={t('printers.discovery.customSubnetLabel')}
-                  className="mt-2 w-full px-3 py-1.5 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none text-sm"
-                  value={customSubnet}
-                  onChange={(e) => setCustomSubnet(e.target.value)}
-                  placeholder="10.1.1.0/24"
-                  disabled={discovering}
-                />
-              )}
-              <p className="mt-1 text-xs text-bambu-gray">
-                {isDocker
-                  ? t('printers.discovery.dockerNote')
-                  : t('printers.discovery.customSubnetNote')}
-              </p>
-            </div>
-
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={startDiscovery}
-              disabled={discovering}
-              className="w-full"
-            >
-              {discovering ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  {(isDocker || useCustomSubnet) && scanProgress.total > 0
-                    ? t('printers.discovery.scanProgress', { scanned: scanProgress.scanned, total: scanProgress.total })
-                    : t('printers.discovery.scanning')}
-                </>
-              ) : (
-                <>
-                  <Search className="w-4 h-4" />
-                  {(isDocker || useCustomSubnet) ? t('printers.discovery.scanSubnet') : t('printers.discovery.discoverNetwork')}
-                </>
-              )}
-            </Button>
-
-            {discoveryError && (
-              <div className="mt-2 text-sm text-red-700 dark:text-red-400">{discoveryError}</div>
-            )}
-
-            {newPrinters.length > 0 && (
-              <div className="mt-3 space-y-2 max-h-40 overflow-y-auto">
-                {newPrinters.map((printer) => (
-                  <div
-                    key={printer.serial}
-                    className="flex items-center justify-between p-2 bg-bambu-dark rounded-lg hover:bg-bambu-dark-secondary cursor-pointer transition-colors"
-                    onClick={() => selectPrinter(printer)}
-                  >
-                    <div className="min-w-0 flex-1">
-                      <p className="font-medium text-white text-sm truncate">
-                        {printer.name || printer.serial}
-                      </p>
-                      <p className="text-xs text-bambu-gray truncate">
-                        {mapModelCode(printer.model) || t('printers.discovery.unknown')} • {printer.ip_address}
-                        {printer.serial.startsWith('unknown-') && (
-                          <span className="text-yellow-500"> • {t('printers.discovery.serialRequired')}</span>
-                        )}
-                      </p>
-                    </div>
-                    <ChevronDown className="w-4 h-4 text-bambu-gray -rotate-90 flex-shrink-0 ml-2" />
-                  </div>
+    <Modal onClose={onClose} title={t('printers.addPrinter')} size="2xl">
+      <div className="p-4">
+        {/* Discovery Section - full width */}
+        <div className="mb-4 pb-4 border-b border-bambu-dark-tertiary">
+          {/* Subnet picker — always visible. The dropdown lists detected
+              interface subnets and a "Custom..." sentinel that reveals a
+              CIDR text input for printers on a different L3 segment (router,
+              VLAN, etc.). #1564 */}
+          <div className="mb-3">
+            <label className="block text-sm text-bambu-gray mb-1">
+              {t('printers.discovery.subnetToScan')}
+            </label>
+            {detectedSubnets.length > 0 ? (
+              <select
+                className="w-full px-3 py-1.5 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none text-sm"
+                value={useCustomSubnet ? '__custom__' : subnet}
+                onChange={(e) => {
+                  if (e.target.value === '__custom__') {
+                    setUseCustomSubnet(true);
+                  } else {
+                    setUseCustomSubnet(false);
+                    setSubnet(e.target.value);
+                  }
+                }}
+                disabled={discovering}
+              >
+                {detectedSubnets.map(s => (
+                  <option key={s} value={s}>{s}</option>
                 ))}
-              </div>
+                <option value="__custom__">{t('printers.discovery.customSubnetOption')}</option>
+              </select>
+            ) : (
+              <input
+                type="text"
+                className="w-full px-3 py-1.5 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none text-sm"
+                value={subnet}
+                onChange={(e) => setSubnet(e.target.value)}
+                placeholder="192.168.1.0/24"
+                disabled={discovering}
+              />
             )}
-
-            {discovering && (
-              <p className="mt-2 text-sm text-bambu-gray text-center">
-                {(isDocker || useCustomSubnet) ? t('printers.discovery.scanningSubnet') : t('printers.discovery.scanningNetwork')}
-              </p>
+            {useCustomSubnet && (
+              <input
+                type="text"
+                aria-label={t('printers.discovery.customSubnetLabel')}
+                className="mt-2 w-full px-3 py-1.5 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none text-sm"
+                value={customSubnet}
+                onChange={(e) => setCustomSubnet(e.target.value)}
+                placeholder="10.1.1.0/24"
+                disabled={discovering}
+              />
             )}
-
-            {hasScanned && !discovering && discovered.length === 0 && (
-              <p className="mt-2 text-sm text-bambu-gray text-center">
-                {(isDocker || useCustomSubnet) ? t('printers.discovery.noPrintersFoundSubnet') : t('printers.discovery.noPrintersFoundNetwork')}
-              </p>
-            )}
-
-            {hasScanned && !discovering && discovered.length > 0 && newPrinters.length === 0 && (
-              <p className="mt-2 text-sm text-bambu-gray text-center">
-                {t('printers.discovery.allConfigured')}
-              </p>
-            )}
+            <p className="mt-1 text-xs text-bambu-gray">
+              {isDocker
+                ? t('printers.discovery.dockerNote')
+                : t('printers.discovery.customSubnetNote')}
+            </p>
           </div>
-          <form onSubmit={handleAddSubmit}>
-            {/* Two-column grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {/* Left column - Connection */}
-              <div className="space-y-3">
-                <div>
-                  <label className="block text-sm text-bambu-gray mb-1">{t('printers.name')}</label>
-                  <input
-                    type="text"
-                    required
-                    className="w-full px-3 py-1.5 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
-                    value={form.name}
-                    onChange={(e) => setForm({ ...form, name: e.target.value })}
-                    placeholder={t('printers.modal.myPrinter')}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm text-bambu-gray mb-1">{t('printers.ipAddress')}</label>
-                  <input
-                    type="text"
-                    required
-                    pattern="(\d{1,3}(\.\d{1,3}){3}|[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*)"
-                    className="w-full px-3 py-1.5 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
-                    value={form.ip_address}
-                    onChange={(e) => setForm({ ...form, ip_address: e.target.value })}
-                    placeholder="192.168.1.100 or printer.local"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm text-bambu-gray mb-1">{t('printers.serialNumber')}</label>
-                  <input
-                    type="text"
-                    required
-                    className="w-full px-3 py-1.5 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
-                    value={form.serial_number}
-                    onChange={(e) => setForm({ ...form, serial_number: e.target.value })}
-                    placeholder="01P00A000000000"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm text-bambu-gray mb-1">{t('printers.accessCode')}</label>
-                  <div className="relative">
-                    <input
-                      type={showAccessCode ? 'text' : 'password'}
-                      required
-                      className="w-full px-3 py-1.5 pr-10 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
-                      value={form.access_code}
-                      onChange={(e) => setForm({ ...form, access_code: e.target.value })}
-                      placeholder={t('printers.modal.fromPrinterSettings')}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowAccessCode(!showAccessCode)}
-                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-bambu-gray hover:text-white transition-colors"
-                      tabIndex={-1}
-                    >
-                      {showAccessCode ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
+
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={startDiscovery}
+            disabled={discovering}
+            className="w-full"
+          >
+            {discovering ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                {(isDocker || useCustomSubnet) && scanProgress.total > 0
+                  ? t('printers.discovery.scanProgress', { scanned: scanProgress.scanned, total: scanProgress.total })
+                  : t('printers.discovery.scanning')}
+              </>
+            ) : (
+              <>
+                <Search className="w-4 h-4" />
+                {(isDocker || useCustomSubnet) ? t('printers.discovery.scanSubnet') : t('printers.discovery.discoverNetwork')}
+              </>
+            )}
+          </Button>
+
+          {discoveryError && (
+            <div className="mt-2 text-sm text-red-700 dark:text-red-400">{discoveryError}</div>
+          )}
+
+          {newPrinters.length > 0 && (
+            <div className="mt-3 space-y-2 max-h-40 overflow-y-auto">
+              {newPrinters.map((printer) => (
+                <div
+                  key={printer.serial}
+                  className="flex items-center justify-between p-2 bg-bambu-dark rounded-lg hover:bg-bambu-dark-secondary cursor-pointer transition-colors"
+                  onClick={() => selectPrinter(printer)}
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="font-medium text-white text-sm truncate">
+                      {printer.name || printer.serial}
+                    </p>
+                    <p className="text-xs text-bambu-gray truncate">
+                      {mapModelCode(printer.model) || t('printers.discovery.unknown')} • {printer.ip_address}
+                      {printer.serial.startsWith('unknown-') && (
+                        <span className="text-yellow-500"> • {t('printers.discovery.serialRequired')}</span>
+                      )}
+                    </p>
                   </div>
+                  <ChevronDown className="w-4 h-4 text-bambu-gray -rotate-90 flex-shrink-0 ml-2" />
                 </div>
-                <div>
-                  <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.modelOptional')}</label>
-                  <select
-                    className="w-full px-3 py-1.5 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
-                    value={form.model || ''}
-                    onChange={(e) => setForm({ ...form, model: e.target.value })}
+              ))}
+            </div>
+          )}
+
+          {discovering && (
+            <p className="mt-2 text-sm text-bambu-gray text-center">
+              {(isDocker || useCustomSubnet) ? t('printers.discovery.scanningSubnet') : t('printers.discovery.scanningNetwork')}
+            </p>
+          )}
+
+          {hasScanned && !discovering && discovered.length === 0 && (
+            <p className="mt-2 text-sm text-bambu-gray text-center">
+              {(isDocker || useCustomSubnet) ? t('printers.discovery.noPrintersFoundSubnet') : t('printers.discovery.noPrintersFoundNetwork')}
+            </p>
+          )}
+
+          {hasScanned && !discovering && discovered.length > 0 && newPrinters.length === 0 && (
+            <p className="mt-2 text-sm text-bambu-gray text-center">
+              {t('printers.discovery.allConfigured')}
+            </p>
+          )}
+        </div>
+        <form onSubmit={handleAddSubmit}>
+          {/* Two-column grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {/* Left column - Connection */}
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm text-bambu-gray mb-1">{t('printers.name')}</label>
+                <input
+                  type="text"
+                  required
+                  className="w-full px-3 py-1.5 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  placeholder={t('printers.modal.myPrinter')}
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-bambu-gray mb-1">{t('printers.ipAddress')}</label>
+                <input
+                  type="text"
+                  required
+                  pattern="(\d{1,3}(\.\d{1,3}){3}|[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*)"
+                  className="w-full px-3 py-1.5 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+                  value={form.ip_address}
+                  onChange={(e) => setForm({ ...form, ip_address: e.target.value })}
+                  placeholder="192.168.1.100 or printer.local"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-bambu-gray mb-1">{t('printers.serialNumber')}</label>
+                <input
+                  type="text"
+                  required
+                  className="w-full px-3 py-1.5 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+                  value={form.serial_number}
+                  onChange={(e) => setForm({ ...form, serial_number: e.target.value })}
+                  placeholder="01P00A000000000"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-bambu-gray mb-1">{t('printers.accessCode')}</label>
+                <div className="relative">
+                  <input
+                    type={showAccessCode ? 'text' : 'password'}
+                    required
+                    className="w-full px-3 py-1.5 pr-10 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+                    value={form.access_code}
+                    onChange={(e) => setForm({ ...form, access_code: e.target.value })}
+                    placeholder={t('printers.modal.fromPrinterSettings')}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowAccessCode(!showAccessCode)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-bambu-gray hover:text-white transition-colors"
+                    tabIndex={-1}
                   >
-                    <option value="">{t('printers.modal.selectModel')}</option>
-                    <optgroup label="H2 Series">
-                      <option value="H2C">H2C</option>
-                      <option value="H2D">H2D</option>
-                      <option value="H2D Pro">H2D Pro</option>
-                      <option value="H2S">H2S</option>
-                    </optgroup>
-                    <optgroup label="X2 Series">
-                      <option value="X2D">X2D</option>
-                    </optgroup>
-                    <optgroup label="X1 Series">
-                      <option value="X1E">X1E</option>
-                      <option value="X1C">X1 Carbon</option>
-                      <option value="X1">X1</option>
-                    </optgroup>
-                    <optgroup label="P Series">
-                      <option value="P2S">P2S</option>
-                      <option value="P1S">P1S</option>
-                      <option value="P1P">P1P</option>
-                    </optgroup>
-                    <optgroup label="A1 Series">
-                      <option value="A1">A1</option>
-                      <option value="A1 Mini">A1 Mini</option>
-                    </optgroup>
-                    <optgroup label="A2 Series">
-                      <option value="A2L">A2L</option>
-                    </optgroup>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.locationGroup')}</label>
-                  <PrinterLocationSelect
-                    value={form.location_id ?? null}
-                    onChange={(id) => setForm({ ...form, location_id: id })}
-                    allowCreate
-                  />
-                  <p className="text-xs text-bambu-gray mt-1">{t('printers.locationHelp')}</p>
-                </div>
-                <div>
-                  <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.tags')}</label>
-                  <PrinterTagsSelect
-                    value={form.tag_ids ?? []}
-                    onChange={(ids) => setForm({ ...form, tag_ids: ids })}
-                    allowCreate
-                  />
+                    {showAccessCode ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
                 </div>
               </div>
-
-              {/* Right column - Settings */}
-              <div className="space-y-3">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      id="cleanup_after_print"
-                      checked={form.cleanup_after_print}
-                      onChange={(e) => setForm({ ...form, cleanup_after_print: e.target.checked })}
-                      className="accent-bambu-green rounded border-bambu-dark-tertiary bg-bambu-dark text-bambu-green focus:ring-bambu-green"
-                    />
-                    <label htmlFor="cleanup_after_print" className="text-sm text-bambu-gray">
-                      {t('printers.modal.cleanupAfterPrintLabel')}
-                    </label>
-                  </div>
-                  <p className="text-xs text-bambu-gray mt-1 ml-6">{t('printers.modal.cleanupAfterPrintHint')}</p>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-bambu-gray mb-1">
-                    {t('printers.modal.mqttConnectionTimeoutLabel')}
-                  </label>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="number"
-                      min="0"
-                      max="3600"
-                      value={form.mqtt_connection_timeout}
-                      onChange={(e) => setForm({ ...form, mqtt_connection_timeout: parseInt(e.target.value) || 0 })}
-                      className="w-24 px-3 py-1.5 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-sm focus:border-bambu-green focus:ring-1 focus:ring-bambu-green"
-                    />
-                    <span className="text-xs text-bambu-gray">{t('printers.modal.mqttConnectionTimeoutHint')}</span>
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.staggerInterval')}</label>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="number"
-                      min="0"
-                      max="60"
-                      value={form.stagger_interval_minutes ?? 0}
-                      onChange={(e) => setForm({ ...form, stagger_interval_minutes: parseInt(e.target.value) || 0 })}
-                      className="w-24 px-3 py-1.5 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-sm focus:border-bambu-green focus:ring-1 focus:ring-bambu-green"
-                    />
-                    <span className="text-xs text-bambu-gray">{t('printers.modal.staggerIntervalHint')}</span>
-                  </div>
-                </div>
-                {(() => {
-                  const modelProfiles = (swapProfiles ?? []).filter((p) =>
-                    form.model ? p.models.includes(form.model) : false
-                  );
-                  if (modelProfiles.length === 0) return null;
-                  return (
-                    <>
-                      <div>
-                        <label className="flex items-center gap-2 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={form.swap_mode_enabled ?? false}
-                            onChange={(e) => {
-                              const enabled = e.target.checked;
-                              setForm({
-                                ...form,
-                                swap_mode_enabled: enabled,
-                                swap_profile: enabled
-                                  ? (form.swap_profile ?? modelProfiles[0]?.id ?? null)
-                                  : null,
-                                ...(enabled ? { require_plate_clear: false } : {}),
-                              });
-                            }}
-                            className="accent-bambu-green w-4 h-4 rounded border-bambu-dark-tertiary bg-bambu-dark text-bambu-green focus:ring-bambu-green"
-                          />
-                          <span className="text-sm text-white">{t('printers.modal.swapMode')}</span>
-                        </label>
-                        <p className="text-xs text-bambu-gray mt-1 ml-6">{t('printers.modal.swapModeHint')}</p>
-                      </div>
-                      {form.swap_mode_enabled && (
-                        <div className="ml-6">
-                          <label className="block text-xs text-bambu-gray mb-1">
-                            {t('printers.modal.swapProfile')}
-                          </label>
-                          <select
-                            value={form.swap_profile ?? ''}
-                            onChange={(e) => setForm({ ...form, swap_profile: e.target.value || null })}
-                            className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none text-sm"
-                          >
-                            {modelProfiles.map((p) => (
-                              <option key={p.id} value={p.id}>{p.label}</option>
-                            ))}
-                          </select>
-                          {form.swap_profile && (
-                            <p className="text-xs text-bambu-gray mt-1">
-                              {modelProfiles.find((p) => p.id === form.swap_profile)?.description}
-                            </p>
-                          )}
-                        </div>
-                      )}
-                    </>
-                  );
-                })()}
-                {!form.swap_mode_enabled && (
-                <div>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={form.require_plate_clear ?? true}
-                      onChange={(e) => setForm({ ...form, require_plate_clear: e.target.checked })}
-                      className="accent-bambu-green w-4 h-4 rounded border-bambu-dark-tertiary bg-bambu-dark text-bambu-green focus:ring-bambu-green"
-                    />
-                    <span className="text-sm text-white">{t('printers.modal.requirePlateClear')}</span>
-                  </label>
-                  <p className="text-xs text-bambu-gray mt-1 ml-6">{t('printers.modal.requirePlateClearHint')}</p>
-                </div>
-                )}
+              <div>
+                <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.modelOptional')}</label>
+                <select
+                  className="w-full px-3 py-1.5 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+                  value={form.model || ''}
+                  onChange={(e) => setForm({ ...form, model: e.target.value })}
+                >
+                  <option value="">{t('printers.modal.selectModel')}</option>
+                  <optgroup label="H2 Series">
+                    <option value="H2C">H2C</option>
+                    <option value="H2D">H2D</option>
+                    <option value="H2D Pro">H2D Pro</option>
+                    <option value="H2S">H2S</option>
+                  </optgroup>
+                  <optgroup label="X2 Series">
+                    <option value="X2D">X2D</option>
+                  </optgroup>
+                  <optgroup label="X1 Series">
+                    <option value="X1E">X1E</option>
+                    <option value="X1C">X1 Carbon</option>
+                    <option value="X1">X1</option>
+                  </optgroup>
+                  <optgroup label="P Series">
+                    <option value="P2S">P2S</option>
+                    <option value="P1S">P1S</option>
+                    <option value="P1P">P1P</option>
+                  </optgroup>
+                  <optgroup label="A1 Series">
+                    <option value="A1">A1</option>
+                    <option value="A1 Mini">A1 Mini</option>
+                  </optgroup>
+                  <optgroup label="A2 Series">
+                    <option value="A2L">A2L</option>
+                  </optgroup>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.locationGroup')}</label>
+                <PrinterLocationSelect
+                  value={form.location_id ?? null}
+                  onChange={(id) => setForm({ ...form, location_id: id })}
+                  allowCreate
+                />
+                <p className="text-xs text-bambu-gray mt-1">{t('printers.locationHelp')}</p>
+              </div>
+              <div>
+                <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.tags')}</label>
+                <PrinterTagsSelect
+                  value={form.tag_ids ?? []}
+                  onChange={(ids) => setForm({ ...form, tag_ids: ids })}
+                  allowCreate
+                />
               </div>
             </div>
 
-            {/* Manual connection diagnostic — run it against the entered
-                connection before saving (e.g. to debug a discovery miss). */}
-            <button
-              type="button"
-              onClick={() => setShowDiagnostic(true)}
-              className="mt-4 w-full flex items-center justify-center gap-2 px-3 py-2 text-sm bg-bambu-dark border border-bambu-dark-tertiary hover:bg-bambu-dark-tertiary text-white rounded-lg transition-colors"
-            >
-              <Stethoscope className="w-4 h-4" />
-              {t('diagnostic.runButton')}
-            </button>
-            {/* Buttons - full width. On a failed pre-flight, swap in a warning
-                with the failing checks + an explicit "save anyway". */}
-            {saveWarning ? (
-              <div className="mt-3 rounded-lg bg-amber-50 dark:bg-amber-500/10 border border-amber-300 dark:border-amber-500/30 p-3 space-y-3">
-                <div className="flex items-start gap-2">
-                  <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0 text-amber-600 dark:text-amber-400" />
-                  <p className="text-sm text-amber-700 dark:text-amber-300">{t('printers.addPreflight.warning')}</p>
+            {/* Right column - Settings */}
+            <div className="space-y-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="cleanup_after_print"
+                    checked={form.cleanup_after_print}
+                    onChange={(e) => setForm({ ...form, cleanup_after_print: e.target.checked })}
+                    className="accent-bambu-green rounded border-bambu-dark-tertiary bg-bambu-dark text-bambu-green focus:ring-bambu-green"
+                  />
+                  <label htmlFor="cleanup_after_print" className="text-sm text-bambu-gray">
+                    {t('printers.modal.cleanupAfterPrintLabel')}
+                  </label>
                 </div>
-                <DiagnosticChecklist result={saveWarning} />
-                <div className="flex gap-3">
-                  <Button type="button" variant="secondary" onClick={() => setSaveWarning(null)} className="flex-1">
-                    {t('printers.addPreflight.back')}
-                  </Button>
-                  <Button type="button" onClick={() => onAdd(form)} className="flex-1">
-                    {t('printers.addPreflight.saveAnyway')}
-                  </Button>
+                <p className="text-xs text-bambu-gray mt-1 ml-6">{t('printers.modal.cleanupAfterPrintHint')}</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-bambu-gray mb-1">
+                  {t('printers.modal.mqttConnectionTimeoutLabel')}
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min="0"
+                    max="3600"
+                    value={form.mqtt_connection_timeout}
+                    onChange={(e) => setForm({ ...form, mqtt_connection_timeout: parseInt(e.target.value) || 0 })}
+                    className="w-24 px-3 py-1.5 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-sm focus:border-bambu-green focus:ring-1 focus:ring-bambu-green"
+                  />
+                  <span className="text-xs text-bambu-gray">{t('printers.modal.mqttConnectionTimeoutHint')}</span>
                 </div>
               </div>
-            ) : (
-              <div className="flex gap-3 pt-4">
-                <Button type="button" variant="secondary" onClick={onClose} className="flex-1">
-                  {t('common.cancel')}
+              <div>
+                <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.staggerInterval')}</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min="0"
+                    max="60"
+                    value={form.stagger_interval_minutes ?? 0}
+                    onChange={(e) => setForm({ ...form, stagger_interval_minutes: parseInt(e.target.value) || 0 })}
+                    className="w-24 px-3 py-1.5 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-sm focus:border-bambu-green focus:ring-1 focus:ring-bambu-green"
+                  />
+                  <span className="text-xs text-bambu-gray">{t('printers.modal.staggerIntervalHint')}</span>
+                </div>
+              </div>
+              {(() => {
+                const modelProfiles = (swapProfiles ?? []).filter((p) =>
+                  form.model ? p.models.includes(form.model) : false
+                );
+                if (modelProfiles.length === 0) return null;
+                return (
+                  <>
+                    <div>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={form.swap_mode_enabled ?? false}
+                          onChange={(e) => {
+                            const enabled = e.target.checked;
+                            setForm({
+                              ...form,
+                              swap_mode_enabled: enabled,
+                              swap_profile: enabled
+                                ? (form.swap_profile ?? modelProfiles[0]?.id ?? null)
+                                : null,
+                              ...(enabled ? { require_plate_clear: false } : {}),
+                            });
+                          }}
+                          className="accent-bambu-green w-4 h-4 rounded border-bambu-dark-tertiary bg-bambu-dark text-bambu-green focus:ring-bambu-green"
+                        />
+                        <span className="text-sm text-white">{t('printers.modal.swapMode')}</span>
+                      </label>
+                      <p className="text-xs text-bambu-gray mt-1 ml-6">{t('printers.modal.swapModeHint')}</p>
+                    </div>
+                    {form.swap_mode_enabled && (
+                      <div className="ml-6">
+                        <label className="block text-xs text-bambu-gray mb-1">
+                          {t('printers.modal.swapProfile')}
+                        </label>
+                        <select
+                          value={form.swap_profile ?? ''}
+                          onChange={(e) => setForm({ ...form, swap_profile: e.target.value || null })}
+                          className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none text-sm"
+                        >
+                          {modelProfiles.map((p) => (
+                            <option key={p.id} value={p.id}>{p.label}</option>
+                          ))}
+                        </select>
+                        {form.swap_profile && (
+                          <p className="text-xs text-bambu-gray mt-1">
+                            {modelProfiles.find((p) => p.id === form.swap_profile)?.description}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
+              {!form.swap_mode_enabled && (
+              <div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={form.require_plate_clear ?? true}
+                    onChange={(e) => setForm({ ...form, require_plate_clear: e.target.checked })}
+                    className="accent-bambu-green w-4 h-4 rounded border-bambu-dark-tertiary bg-bambu-dark text-bambu-green focus:ring-bambu-green"
+                  />
+                  <span className="text-sm text-white">{t('printers.modal.requirePlateClear')}</span>
+                </label>
+                <p className="text-xs text-bambu-gray mt-1 ml-6">{t('printers.modal.requirePlateClearHint')}</p>
+              </div>
+              )}
+            </div>
+          </div>
+
+          {/* Manual connection diagnostic — run it against the entered
+              connection before saving (e.g. to debug a discovery miss). */}
+          <button
+            type="button"
+            onClick={() => setShowDiagnostic(true)}
+            className="mt-4 w-full flex items-center justify-center gap-2 px-3 py-2 text-sm bg-bambu-dark border border-bambu-dark-tertiary hover:bg-bambu-dark-tertiary text-white rounded-lg transition-colors"
+          >
+            <Stethoscope className="w-4 h-4" />
+            {t('diagnostic.runButton')}
+          </button>
+          {/* Buttons - full width. On a failed pre-flight, swap in a warning
+              with the failing checks + an explicit "save anyway". */}
+          {saveWarning ? (
+            <div className="mt-3 rounded-lg bg-amber-50 dark:bg-amber-500/10 border border-amber-300 dark:border-amber-500/30 p-3 space-y-3">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0 text-amber-600 dark:text-amber-400" />
+                <p className="text-sm text-amber-700 dark:text-amber-300">{t('printers.addPreflight.warning')}</p>
+              </div>
+              <DiagnosticChecklist result={saveWarning} />
+              <div className="flex gap-3">
+                <Button type="button" variant="secondary" onClick={() => setSaveWarning(null)} className="flex-1">
+                  {t('printers.addPreflight.back')}
                 </Button>
-                <Button type="submit" disabled={checkingSave} className="flex-1">
-                  {checkingSave ? t('printers.addPreflight.checking') : t('printers.addPrinter')}
+                <Button type="button" onClick={() => onAdd(form)} className="flex-1">
+                  {t('printers.addPreflight.saveAnyway')}
                 </Button>
               </div>
-            )}
-          </form>
-          {showDiagnostic && (
-            <ConnectionDiagnosticModal
-              connection={{
-                ip_address: form.ip_address.trim(),
-                serial_number: form.serial_number.trim() || undefined,
-                access_code: form.access_code || undefined,
-              }}
-              printerName={form.name || null}
-              onClose={() => setShowDiagnostic(false)}
-            />
+            </div>
+          ) : (
+            <div className="flex gap-3 pt-4">
+              <Button type="button" variant="secondary" onClick={onClose} className="flex-1">
+                {t('common.cancel')}
+              </Button>
+              <Button type="submit" disabled={checkingSave} className="flex-1">
+                {checkingSave ? t('printers.addPreflight.checking') : t('printers.addPrinter')}
+              </Button>
+            </div>
           )}
-        </CardContent>
-      </Card>
-    </div>
+        </form>
+        {showDiagnostic && (
+          <ConnectionDiagnosticModal
+            connection={{
+              ip_address: form.ip_address.trim(),
+              serial_number: form.serial_number.trim() || undefined,
+              access_code: form.access_code || undefined,
+            }}
+            printerName={form.name || null}
+            onClose={() => setShowDiagnostic(false)}
+          />
+        )}
+      </div>
+    </Modal>
   );
 }
 
@@ -7828,212 +7814,215 @@ function FirmwareUpdateModal({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
-      <Card className="w-full max-w-md mx-4">
-        <CardContent>
-          <div className="flex items-start gap-3 mb-4">
-            <div className={`p-2 rounded-full ${firmwareInfo.update_available ? 'bg-orange-100 dark:bg-orange-500/20' : 'bg-status-ok/20'}`}>
-              {firmwareInfo.update_available
-                ? <Download className="w-5 h-5 text-orange-600 dark:text-orange-400" />
-                : <CheckCircle className="w-5 h-5 text-status-ok" />}
+    <Modal
+      onClose={onClose}
+      hideClose
+      ariaLabel={firmwareInfo.update_available ? t('printers.firmwareModal.title') : t('printers.firmwareModal.titleUpToDate')}
+      size="md"
+    >
+      <div className="p-4">
+        <div className="flex items-start gap-3 mb-4">
+          <div className={`p-2 rounded-full ${firmwareInfo.update_available ? 'bg-orange-100 dark:bg-orange-500/20' : 'bg-status-ok/20'}`}>
+            {firmwareInfo.update_available
+              ? <Download className="w-5 h-5 text-orange-600 dark:text-orange-400" />
+              : <CheckCircle className="w-5 h-5 text-status-ok" />}
+          </div>
+          <div className="flex-1">
+            <h3 className="text-lg font-semibold text-white">
+              {firmwareInfo.update_available ? t('printers.firmwareModal.title') : t('printers.firmwareModal.titleUpToDate')}
+            </h3>
+            <p className="text-sm text-bambu-gray mt-1">
+              {printer.name}
+            </p>
+          </div>
+        </div>
+
+        {/* Version Info — displays the currently-selected target's release notes,
+            or the latest version's when nothing is selected. */}
+        {(() => {
+          const selectedEntry = selectedVersion
+            ? firmwareInfo.available_versions?.find((v) => v.version === selectedVersion)
+            : null;
+          const displayVersion = selectedVersion ?? firmwareInfo.latest_version;
+          const displayNotes = selectedEntry?.release_notes ?? firmwareInfo.release_notes;
+          const showSecondLine = !!displayVersion && displayVersion !== firmwareInfo.current_version;
+          return (
+            <div className="bg-bambu-dark rounded-lg p-3 mb-4">
+              <div className="flex justify-between items-center text-sm">
+                <span className="text-bambu-gray">{t('printers.firmwareModal.currentVersion')}</span>
+                <span className={`font-mono ${showSecondLine ? 'text-white' : 'text-status-ok'}`}>
+                  {firmwareInfo.current_version || t('common.unknown')}
+                </span>
+              </div>
+              {showSecondLine && (
+                <div className="flex justify-between items-center text-sm mt-1">
+                  <span className="text-bambu-gray">{t('printers.firmwareModal.latestVersion')}</span>
+                  <span className="text-orange-700 dark:text-orange-400 font-mono">{displayVersion}</span>
+                </div>
+              )}
+              {displayNotes && (
+                <details className="mt-3 text-sm" open={!showSecondLine} key={displayVersion ?? 'none'}>
+                  <summary className={`cursor-pointer hover:underline ${showSecondLine ? 'text-orange-700 dark:text-orange-400' : 'text-status-ok'}`}>
+                    {t('printers.firmwareModal.releaseNotes')}
+                  </summary>
+                  <div className="mt-2 text-bambu-gray text-xs max-h-40 overflow-y-auto whitespace-pre-wrap">
+                    {displayNotes}
+                  </div>
+                </details>
+              )}
             </div>
-            <div className="flex-1">
-              <h3 className="text-lg font-semibold text-white">
-                {firmwareInfo.update_available ? t('printers.firmwareModal.title') : t('printers.firmwareModal.titleUpToDate')}
-              </h3>
-              <p className="text-sm text-bambu-gray mt-1">
-                {printer.name}
-              </p>
+          );
+        })()}
+
+        {/* Available versions list — newest-first picker supporting rollback.
+            Hidden once upload is running or completed. */}
+        {firmwareInfo.available_versions && firmwareInfo.available_versions.length > 0 && !isUploading && uploadStatus?.status !== 'complete' && (
+          <div className="mb-4">
+            <div className="text-xs text-bambu-gray mb-2">{t('printers.firmwareModal.availableVersions')}</div>
+            <div className="max-h-56 overflow-y-auto border border-bambu-dark-tertiary rounded-lg divide-y divide-bambu-dark-tertiary">
+              {firmwareInfo.available_versions.map((v) => {
+                const isCurrent = firmwareInfo.current_version === v.version;
+                const isSelected = selectedVersion === v.version;
+                const cmp = firmwareInfo.current_version
+                  ? compareFwVersions(v.version, firmwareInfo.current_version)
+                  : 0;
+                const relLabel = isCurrent
+                  ? t('printers.firmwareModal.currentBadge')
+                  : cmp > 0
+                    ? t('printers.firmwareModal.newerBadge')
+                    : t('printers.firmwareModal.olderBadge');
+                const relClass = isCurrent
+                  ? 'text-bambu-gray'
+                  : cmp > 0
+                    ? 'text-orange-700 dark:text-orange-400'
+                    : 'text-blue-700 dark:text-blue-400';
+                return (
+                  <button
+                    key={v.version}
+                    type="button"
+                    disabled={!v.file_available || !canUpdate || isCurrent}
+                    onClick={() => setSelectedVersion(v.version)}
+                    className={`w-full text-left px-3 py-2 text-sm flex items-center justify-between gap-2 transition-colors ${
+                      isSelected ? 'bg-orange-50 dark:bg-orange-500/10' : 'hover:bg-bambu-dark'
+                    } ${!v.file_available || !canUpdate || isCurrent ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'}`}
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="font-mono text-white">{v.version}</span>
+                      <span className={`text-xs ${relClass}`}>{relLabel}</span>
+                    </div>
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${
+                      isCurrent
+                        ? 'bg-blue-50 dark:bg-blue-500/15 text-blue-700 dark:text-blue-400 border border-blue-300 dark:border-blue-500/30'
+                        : v.file_available
+                          ? 'bg-bambu-green/15 text-bambu-green border border-bambu-green/30'
+                          : 'bg-bambu-gray/10 text-bambu-gray border border-bambu-gray/30'
+                    }`}>
+                      {isCurrent
+                        ? t('printers.firmwareModal.installed')
+                        : v.file_available
+                        ? t('printers.firmwareModal.usable')
+                        : t('printers.firmwareModal.unavailable')}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           </div>
+        )}
 
-          {/* Version Info — displays the currently-selected target's release notes,
-              or the latest version's when nothing is selected. */}
-          {(() => {
-            const selectedEntry = selectedVersion
-              ? firmwareInfo.available_versions?.find((v) => v.version === selectedVersion)
-              : null;
-            const displayVersion = selectedVersion ?? firmwareInfo.latest_version;
-            const displayNotes = selectedEntry?.release_notes ?? firmwareInfo.release_notes;
-            const showSecondLine = !!displayVersion && displayVersion !== firmwareInfo.current_version;
-            return (
-              <div className="bg-bambu-dark rounded-lg p-3 mb-4">
-                <div className="flex justify-between items-center text-sm">
-                  <span className="text-bambu-gray">{t('printers.firmwareModal.currentVersion')}</span>
-                  <span className={`font-mono ${showSecondLine ? 'text-white' : 'text-status-ok'}`}>
-                    {firmwareInfo.current_version || t('common.unknown')}
-                  </span>
-                </div>
-                {showSecondLine && (
-                  <div className="flex justify-between items-center text-sm mt-1">
-                    <span className="text-bambu-gray">{t('printers.firmwareModal.latestVersion')}</span>
-                    <span className="text-orange-700 dark:text-orange-400 font-mono">{displayVersion}</span>
+        {/* Status / Progress (only when a version is selected) */}
+        {!selectedVersion ? null : isPreparing ? (
+          <div className="flex items-center gap-2 text-bambu-gray text-sm mb-4">
+            <Loader2 className="w-4 h-4 animate-spin" />
+            {t('printers.firmwareModal.checkingPrereqs')}
+          </div>
+        ) : prepareInfo && !isUploading && !uploadStatus ? (
+          <div className="mb-4">
+            {prepareInfo.can_proceed ? (
+              <div className="flex items-center gap-2 text-bambu-green text-sm">
+                <Box className="w-4 h-4" />
+                {t('printers.firmwareModal.sdCardReady')}
+              </div>
+            ) : (
+              <div className="space-y-1">
+                {prepareInfo.errors.map((error, i) => (
+                  <div key={i} className="flex items-center gap-2 text-red-700 dark:text-red-400 text-sm">
+                    <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                    {error}
                   </div>
-                )}
-                {displayNotes && (
-                  <details className="mt-3 text-sm" open={!showSecondLine} key={displayVersion ?? 'none'}>
-                    <summary className={`cursor-pointer hover:underline ${showSecondLine ? 'text-orange-700 dark:text-orange-400' : 'text-status-ok'}`}>
-                      {t('printers.firmwareModal.releaseNotes')}
-                    </summary>
-                    <div className="mt-2 text-bambu-gray text-xs max-h-40 overflow-y-auto whitespace-pre-wrap">
-                      {displayNotes}
-                    </div>
-                  </details>
-                )}
+                ))}
               </div>
-            );
-          })()}
-
-          {/* Available versions list — newest-first picker supporting rollback.
-              Hidden once upload is running or completed. */}
-          {firmwareInfo.available_versions && firmwareInfo.available_versions.length > 0 && !isUploading && uploadStatus?.status !== 'complete' && (
-            <div className="mb-4">
-              <div className="text-xs text-bambu-gray mb-2">{t('printers.firmwareModal.availableVersions')}</div>
-              <div className="max-h-56 overflow-y-auto border border-bambu-dark-tertiary rounded-lg divide-y divide-bambu-dark-tertiary">
-                {firmwareInfo.available_versions.map((v) => {
-                  const isCurrent = firmwareInfo.current_version === v.version;
-                  const isSelected = selectedVersion === v.version;
-                  const cmp = firmwareInfo.current_version
-                    ? compareFwVersions(v.version, firmwareInfo.current_version)
-                    : 0;
-                  const relLabel = isCurrent
-                    ? t('printers.firmwareModal.currentBadge')
-                    : cmp > 0
-                      ? t('printers.firmwareModal.newerBadge')
-                      : t('printers.firmwareModal.olderBadge');
-                  const relClass = isCurrent
-                    ? 'text-bambu-gray'
-                    : cmp > 0
-                      ? 'text-orange-700 dark:text-orange-400'
-                      : 'text-blue-700 dark:text-blue-400';
-                  return (
-                    <button
-                      key={v.version}
-                      type="button"
-                      disabled={!v.file_available || !canUpdate || isCurrent}
-                      onClick={() => setSelectedVersion(v.version)}
-                      className={`w-full text-left px-3 py-2 text-sm flex items-center justify-between gap-2 transition-colors ${
-                        isSelected ? 'bg-orange-50 dark:bg-orange-500/10' : 'hover:bg-bambu-dark'
-                      } ${!v.file_available || !canUpdate || isCurrent ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'}`}
-                    >
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="font-mono text-white">{v.version}</span>
-                        <span className={`text-xs ${relClass}`}>{relLabel}</span>
-                      </div>
-                      <span className={`text-xs px-2 py-0.5 rounded-full ${
-                        isCurrent
-                          ? 'bg-blue-50 dark:bg-blue-500/15 text-blue-700 dark:text-blue-400 border border-blue-300 dark:border-blue-500/30'
-                          : v.file_available
-                            ? 'bg-bambu-green/15 text-bambu-green border border-bambu-green/30'
-                            : 'bg-bambu-gray/10 text-bambu-gray border border-bambu-gray/30'
-                      }`}>
-                        {isCurrent
-                          ? t('printers.firmwareModal.installed')
-                          : v.file_available
-                          ? t('printers.firmwareModal.usable')
-                          : t('printers.firmwareModal.unavailable')}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* Status / Progress (only when a version is selected) */}
-          {!selectedVersion ? null : isPreparing ? (
-            <div className="flex items-center gap-2 text-bambu-gray text-sm mb-4">
-              <Loader2 className="w-4 h-4 animate-spin" />
-              {t('printers.firmwareModal.checkingPrereqs')}
-            </div>
-          ) : prepareInfo && !isUploading && !uploadStatus ? (
-            <div className="mb-4">
-              {prepareInfo.can_proceed ? (
-                <div className="flex items-center gap-2 text-bambu-green text-sm">
-                  <Box className="w-4 h-4" />
-                  {t('printers.firmwareModal.sdCardReady')}
-                </div>
-              ) : (
-                <div className="space-y-1">
-                  {prepareInfo.errors.map((error, i) => (
-                    <div key={i} className="flex items-center gap-2 text-red-700 dark:text-red-400 text-sm">
-                      <AlertCircle className="w-4 h-4 flex-shrink-0" />
-                      {error}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          ) : null}
-
-          {/* Upload Progress */}
-          {(isUploading || uploadStatus) && uploadStatus && (
-            <div className="mb-4">
-              <div className="flex items-center justify-between text-sm mb-1">
-                <span className="text-bambu-gray capitalize">{uploadStatus.status}</span>
-                <span className="text-white">{uploadStatus.progress}%</span>
-              </div>
-              <div className="w-full bg-bambu-dark-tertiary rounded-full h-2">
-                <div
-                  className={`h-2 rounded-full transition-all ${
-                    uploadStatus.status === 'error' ? 'bg-status-error' :
-                    uploadStatus.status === 'complete' ? 'bg-status-ok' : 'bg-orange-500'
-                  } ${uploadStatus.status === 'uploading' ? 'animate-pulse' : ''}`}
-                  style={{ width: `${uploadStatus.progress}%` }}
-                />
-              </div>
-              <p className="text-xs text-bambu-gray mt-1">{uploadStatus.message}</p>
-              {uploadStatus.error && (
-                <p className="text-xs text-red-700 dark:text-red-400 mt-1">{uploadStatus.error}</p>
-              )}
-            </div>
-          )}
-
-          {/* Success Message */}
-          {uploadStatus?.status === 'complete' && (
-            <div className="bg-bambu-green/10 border border-bambu-green/30 rounded-lg p-3 mb-4">
-              <p className="text-sm text-bambu-green font-medium mb-2">
-                {t('printers.firmwareModal.uploadedSuccess')}
-              </p>
-              <p className="text-xs text-bambu-gray">
-                {t('printers.firmwareModal.applyInstructions')}
-              </p>
-              <ol className="text-xs text-bambu-gray mt-1 list-decimal list-inside space-y-1">
-                <li dangerouslySetInnerHTML={{ __html: t('printers.firmwareModal.step1') }} />
-                <li dangerouslySetInnerHTML={{ __html: t('printers.firmwareModal.step2') }} />
-                <li dangerouslySetInnerHTML={{ __html: t('printers.firmwareModal.step3') }} />
-                <li>{t('printers.firmwareModal.step4')}</li>
-              </ol>
-            </div>
-          )}
-
-          {/* Buttons */}
-          <div className="flex gap-2 justify-end">
-            <Button variant="secondary" onClick={onClose}>
-              {uploadStatus?.status === 'complete' ? t('printers.firmwareModal.done') : t('common.cancel')}
-            </Button>
-            {prepareInfo?.can_proceed && !isUploading && uploadStatus?.status !== 'complete' && canUpdate && (
-              <Button
-                onClick={handleStartUpload}
-                disabled={uploadMutation.isPending}
-              >
-                {uploadMutation.isPending ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin mr-2" />
-                    {t('printers.firmwareModal.starting')}
-                  </>
-                ) : (
-                  <>
-                    <Download className="w-4 h-4 mr-2" />
-                    {t('printers.firmwareModal.uploadFirmware')}
-                  </>
-                )}
-              </Button>
             )}
           </div>
-        </CardContent>
-      </Card>
-    </div>
+        ) : null}
+
+        {/* Upload Progress */}
+        {(isUploading || uploadStatus) && uploadStatus && (
+          <div className="mb-4">
+            <div className="flex items-center justify-between text-sm mb-1">
+              <span className="text-bambu-gray capitalize">{uploadStatus.status}</span>
+              <span className="text-white">{uploadStatus.progress}%</span>
+            </div>
+            <div className="w-full bg-bambu-dark-tertiary rounded-full h-2">
+              <div
+                className={`h-2 rounded-full transition-all ${
+                  uploadStatus.status === 'error' ? 'bg-status-error' :
+                  uploadStatus.status === 'complete' ? 'bg-status-ok' : 'bg-orange-500'
+                } ${uploadStatus.status === 'uploading' ? 'animate-pulse' : ''}`}
+                style={{ width: `${uploadStatus.progress}%` }}
+              />
+            </div>
+            <p className="text-xs text-bambu-gray mt-1">{uploadStatus.message}</p>
+            {uploadStatus.error && (
+              <p className="text-xs text-red-700 dark:text-red-400 mt-1">{uploadStatus.error}</p>
+            )}
+          </div>
+        )}
+
+        {/* Success Message */}
+        {uploadStatus?.status === 'complete' && (
+          <div className="bg-bambu-green/10 border border-bambu-green/30 rounded-lg p-3 mb-4">
+            <p className="text-sm text-bambu-green font-medium mb-2">
+              {t('printers.firmwareModal.uploadedSuccess')}
+            </p>
+            <p className="text-xs text-bambu-gray">
+              {t('printers.firmwareModal.applyInstructions')}
+            </p>
+            <ol className="text-xs text-bambu-gray mt-1 list-decimal list-inside space-y-1">
+              <li dangerouslySetInnerHTML={{ __html: t('printers.firmwareModal.step1') }} />
+              <li dangerouslySetInnerHTML={{ __html: t('printers.firmwareModal.step2') }} />
+              <li dangerouslySetInnerHTML={{ __html: t('printers.firmwareModal.step3') }} />
+              <li>{t('printers.firmwareModal.step4')}</li>
+            </ol>
+          </div>
+        )}
+
+        {/* Buttons */}
+        <div className="flex gap-2 justify-end">
+          <Button variant="secondary" onClick={onClose}>
+            {uploadStatus?.status === 'complete' ? t('printers.firmwareModal.done') : t('common.cancel')}
+          </Button>
+          {prepareInfo?.can_proceed && !isUploading && uploadStatus?.status !== 'complete' && canUpdate && (
+            <Button
+              onClick={handleStartUpload}
+              disabled={uploadMutation.isPending}
+            >
+              {uploadMutation.isPending ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                  {t('printers.firmwareModal.starting')}
+                </>
+              ) : (
+                <>
+                  <Download className="w-4 h-4 mr-2" />
+                  {t('printers.firmwareModal.uploadFirmware')}
+                </>
+              )}
+            </Button>
+          )}
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -8088,15 +8077,6 @@ function EditPrinterModal({
     onError: (error: Error) => showToast(error.message || t('printers.toast.failedToUpdate'), 'error'),
   });
 
-  // Close on Escape key
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose]);
-
   const doSave = () => {
     const data: Partial<PrinterCreate> = {
       name: form.name,
@@ -8142,294 +8122,288 @@ function EditPrinterModal({
   };
 
   return (
-    <div
-      className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50"
-      onClick={onClose}
-    >
-      <Card className="w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={(e: React.MouseEvent) => e.stopPropagation()}>
-        <CardContent>
-          <h2 className="text-xl font-semibold mb-4">{t('printers.editPrinter')}</h2>
-          <form onSubmit={handleSubmit}>
-            {/* Two-column grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {/* Left column - Connection */}
-              <div className="space-y-3">
-                <div>
-                  <label className="block text-sm text-bambu-gray mb-1">{t('printers.name')}</label>
+    <Modal onClose={onClose} title={t('printers.editPrinter')} size="2xl">
+      <div className="p-4">
+        <form onSubmit={handleSubmit}>
+          {/* Two-column grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {/* Left column - Connection */}
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm text-bambu-gray mb-1">{t('printers.name')}</label>
+                <input
+                  type="text"
+                  required
+                  className="w-full px-3 py-1.5 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  placeholder={t('printers.modal.myPrinter')}
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-bambu-gray mb-1">{t('printers.ipAddress')}</label>
+                <input
+                  type="text"
+                  required
+                  pattern="(\d{1,3}(\.\d{1,3}){3}|[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*)"
+                  className="w-full px-3 py-1.5 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+                  value={form.ip_address}
+                  onChange={(e) => setForm({ ...form, ip_address: e.target.value })}
+                  placeholder="192.168.1.100 or printer.local"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-bambu-gray mb-1">{t('printers.serialNumber')}</label>
+                <input
+                  type="text"
+                  disabled
+                  className="w-full px-3 py-1.5 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-bambu-gray cursor-not-allowed"
+                  value={printer.serial_number}
+                />
+                <p className="text-xs text-bambu-gray mt-1">{t('printers.serialCannotBeChanged')}</p>
+              </div>
+              <div>
+                <label className="block text-sm text-bambu-gray mb-1">{t('printers.accessCode')}</label>
+                <div className="relative">
                   <input
-                    type="text"
-                    required
-                    className="w-full px-3 py-1.5 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
-                    value={form.name}
-                    onChange={(e) => setForm({ ...form, name: e.target.value })}
-                    placeholder={t('printers.modal.myPrinter')}
+                    type={showAccessCode ? 'text' : 'password'}
+                    className="w-full px-3 py-1.5 pr-10 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+                    value={form.access_code}
+                    onChange={(e) => setForm({ ...form, access_code: e.target.value })}
+                    placeholder={t('printers.accessCodePlaceholder')}
                   />
-                </div>
-                <div>
-                  <label className="block text-sm text-bambu-gray mb-1">{t('printers.ipAddress')}</label>
-                  <input
-                    type="text"
-                    required
-                    pattern="(\d{1,3}(\.\d{1,3}){3}|[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*)"
-                    className="w-full px-3 py-1.5 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
-                    value={form.ip_address}
-                    onChange={(e) => setForm({ ...form, ip_address: e.target.value })}
-                    placeholder="192.168.1.100 or printer.local"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm text-bambu-gray mb-1">{t('printers.serialNumber')}</label>
-                  <input
-                    type="text"
-                    disabled
-                    className="w-full px-3 py-1.5 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-bambu-gray cursor-not-allowed"
-                    value={printer.serial_number}
-                  />
-                  <p className="text-xs text-bambu-gray mt-1">{t('printers.serialCannotBeChanged')}</p>
-                </div>
-                <div>
-                  <label className="block text-sm text-bambu-gray mb-1">{t('printers.accessCode')}</label>
-                  <div className="relative">
-                    <input
-                      type={showAccessCode ? 'text' : 'password'}
-                      className="w-full px-3 py-1.5 pr-10 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
-                      value={form.access_code}
-                      onChange={(e) => setForm({ ...form, access_code: e.target.value })}
-                      placeholder={t('printers.accessCodePlaceholder')}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowAccessCode(!showAccessCode)}
-                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-bambu-gray hover:text-white transition-colors"
-                      tabIndex={-1}
-                    >
-                      {showAccessCode ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-sm text-bambu-gray mb-1">{t('printers.model')}</label>
-                  <select
-                    className="w-full px-3 py-1.5 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
-                    value={form.model}
-                    onChange={(e) => setForm({ ...form, model: e.target.value })}
+                  <button
+                    type="button"
+                    onClick={() => setShowAccessCode(!showAccessCode)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-bambu-gray hover:text-white transition-colors"
+                    tabIndex={-1}
                   >
-                    <option value="">{t('printers.modal.selectModel')}</option>
-                    <optgroup label="H2 Series">
-                      <option value="H2C">H2C</option>
-                      <option value="H2D">H2D</option>
-                      <option value="H2D Pro">H2D Pro</option>
-                      <option value="H2S">H2S</option>
-                    </optgroup>
-                    <optgroup label="X2 Series">
-                      <option value="X2D">X2D</option>
-                    </optgroup>
-                    <optgroup label="X1 Series">
-                      <option value="X1E">X1E</option>
-                      <option value="X1C">X1 Carbon</option>
-                      <option value="X1">X1</option>
-                    </optgroup>
-                    <optgroup label="P Series">
-                      <option value="P2S">P2S</option>
-                      <option value="P1S">P1S</option>
-                      <option value="P1P">P1P</option>
-                    </optgroup>
-                    <optgroup label="A1 Series">
-                      <option value="A1">A1</option>
-                      <option value="A1 Mini">A1 Mini</option>
-                    </optgroup>
-                    <optgroup label="A2 Series">
-                      <option value="A2L">A2L</option>
-                    </optgroup>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm text-bambu-gray mb-1">Location / Group</label>
-                  <PrinterLocationSelect
-                    value={form.location_id}
-                    onChange={(id) => setForm({ ...form, location_id: id })}
-                    allowCreate
-                  />
-                  <p className="text-xs text-bambu-gray mt-1">{t('printers.locationHelp')}</p>
-                </div>
-                <div>
-                  <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.tags')}</label>
-                  <PrinterTagsSelect
-                    value={form.tag_ids ?? []}
-                    onChange={(ids) => setForm({ ...form, tag_ids: ids })}
-                    allowCreate
-                  />
+                    {showAccessCode ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
                 </div>
               </div>
-
-              {/* Right column - Settings */}
-              <div className="space-y-3">
-                <div className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    id="edit_cleanup_after_print"
-                    checked={form.cleanup_after_print}
-                    onChange={(e) => setForm({ ...form, cleanup_after_print: e.target.checked })}
-                    className="accent-bambu-green rounded border-bambu-dark-tertiary bg-bambu-dark text-bambu-green focus:ring-bambu-green"
-                  />
-                  <label htmlFor="edit_cleanup_after_print" className="text-sm text-bambu-gray">
-                    {t('printers.modal.cleanupAfterPrintLabel')}
-                  </label>
-                </div>
-                {/* Maintenance Mode (#1476) — checkbox is the inverse of is_active
-                    because the user-facing concept is "is this printer in
-                    maintenance", not "is it active". */}
-                <div className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    id="edit_maintenance_mode"
-                    checked={form.is_active === false}
-                    onChange={(e) => setForm({ ...form, is_active: !e.target.checked })}
-                    className="rounded border-bambu-dark-tertiary bg-bambu-dark text-amber-500 focus:ring-amber-500"
-                  />
-                  <label htmlFor="edit_maintenance_mode" className="text-sm text-bambu-gray">
-                    {t('printers.maintenance.editFieldLabel')}
-                  </label>
-                </div>
-                <p className="text-xs text-bambu-gray/70 -mt-1 ml-6">
-                  {t('printers.maintenance.editFieldHelp')}
-                </p>
-                <div>
-                  <label className="block text-sm font-medium text-bambu-gray mb-1">
-                    {t('printers.modal.mqttConnectionTimeoutLabel')}
-                  </label>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="number"
-                      min="0"
-                      max="3600"
-                      value={form.mqtt_connection_timeout}
-                      onChange={(e) => setForm({ ...form, mqtt_connection_timeout: parseInt(e.target.value) || 0 })}
-                      className="w-24 px-3 py-1.5 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-sm focus:border-bambu-green focus:ring-1 focus:ring-bambu-green"
-                    />
-                    <span className="text-xs text-bambu-gray">{t('printers.modal.mqttConnectionTimeoutHint')}</span>
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-bambu-gray mb-1">{t('printers.modal.staggerInterval')}</label>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="number"
-                      min="0"
-                      max="60"
-                      value={form.stagger_interval_minutes ?? 0}
-                      onChange={(e) => setForm({ ...form, stagger_interval_minutes: parseInt(e.target.value) || 0 })}
-                      className="w-24 px-3 py-1.5 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-sm focus:border-bambu-green focus:ring-1 focus:ring-bambu-green"
-                    />
-                    <span className="text-xs text-bambu-gray">{t('printers.modal.staggerIntervalHint')}</span>
-                  </div>
-                </div>
-                {(() => {
-                  const modelProfiles = (swapProfiles ?? []).filter((p) =>
-                    form.model ? p.models.includes(form.model) : false
-                  );
-                  if (modelProfiles.length === 0) return null;
-                  return (
-                    <>
-                      <div>
-                        <label className="flex items-center gap-2 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={form.swap_mode_enabled ?? false}
-                            onChange={(e) => {
-                              const enabled = e.target.checked;
-                              setForm({
-                                ...form,
-                                swap_mode_enabled: enabled,
-                                swap_profile: enabled
-                                  ? (form.swap_profile ?? modelProfiles[0]?.id ?? null)
-                                  : null,
-                                ...(enabled ? { require_plate_clear: false } : {}),
-                              });
-                            }}
-                            className="accent-bambu-green w-4 h-4 rounded border-bambu-dark-tertiary bg-bambu-dark text-bambu-green focus:ring-bambu-green"
-                          />
-                          <span className="text-sm text-white">{t('printers.modal.swapMode')}</span>
-                        </label>
-                        <p className="text-xs text-bambu-gray mt-1 ml-6">{t('printers.modal.swapModeHint')}</p>
-                      </div>
-                      {form.swap_mode_enabled && (
-                        <div className="ml-6">
-                          <label className="block text-xs text-bambu-gray mb-1">
-                            {t('printers.modal.swapProfile')}
-                          </label>
-                          <select
-                            value={form.swap_profile ?? ''}
-                            onChange={(e) => setForm({ ...form, swap_profile: e.target.value || null })}
-                            className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none text-sm"
-                          >
-                            {modelProfiles.map((p) => (
-                              <option key={p.id} value={p.id}>{p.label}</option>
-                            ))}
-                          </select>
-                          {form.swap_profile && (
-                            <p className="text-xs text-bambu-gray mt-1">
-                              {modelProfiles.find((p) => p.id === form.swap_profile)?.description}
-                            </p>
-                          )}
-                        </div>
-                      )}
-                    </>
-                  );
-                })()}
-                {!form.swap_mode_enabled && (
-                <div>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={form.require_plate_clear ?? true}
-                      onChange={(e) => setForm({ ...form, require_plate_clear: e.target.checked })}
-                      className="accent-bambu-green w-4 h-4 rounded border-bambu-dark-tertiary bg-bambu-dark text-bambu-green focus:ring-bambu-green"
-                    />
-                    <span className="text-sm text-white">{t('printers.modal.requirePlateClear')}</span>
-                  </label>
-                  <p className="text-xs text-bambu-gray mt-1 ml-6">{t('printers.modal.requirePlateClearHint')}</p>
-                </div>
-                )}
+              <div>
+                <label className="block text-sm text-bambu-gray mb-1">{t('printers.model')}</label>
+                <select
+                  className="w-full px-3 py-1.5 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+                  value={form.model}
+                  onChange={(e) => setForm({ ...form, model: e.target.value })}
+                >
+                  <option value="">{t('printers.modal.selectModel')}</option>
+                  <optgroup label="H2 Series">
+                    <option value="H2C">H2C</option>
+                    <option value="H2D">H2D</option>
+                    <option value="H2D Pro">H2D Pro</option>
+                    <option value="H2S">H2S</option>
+                  </optgroup>
+                  <optgroup label="X2 Series">
+                    <option value="X2D">X2D</option>
+                  </optgroup>
+                  <optgroup label="X1 Series">
+                    <option value="X1E">X1E</option>
+                    <option value="X1C">X1 Carbon</option>
+                    <option value="X1">X1</option>
+                  </optgroup>
+                  <optgroup label="P Series">
+                    <option value="P2S">P2S</option>
+                    <option value="P1S">P1S</option>
+                    <option value="P1P">P1P</option>
+                  </optgroup>
+                  <optgroup label="A1 Series">
+                    <option value="A1">A1</option>
+                    <option value="A1 Mini">A1 Mini</option>
+                  </optgroup>
+                  <optgroup label="A2 Series">
+                    <option value="A2L">A2L</option>
+                  </optgroup>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm text-bambu-gray mb-1">Location / Group</label>
+                <PrinterLocationSelect
+                  value={form.location_id}
+                  onChange={(id) => setForm({ ...form, location_id: id })}
+                  allowCreate
+                />
+                <p className="text-xs text-bambu-gray mt-1">{t('printers.locationHelp')}</p>
+              </div>
+              <div>
+                <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.tags')}</label>
+                <PrinterTagsSelect
+                  value={form.tag_ids ?? []}
+                  onChange={(ids) => setForm({ ...form, tag_ids: ids })}
+                  allowCreate
+                />
               </div>
             </div>
 
-            {/* Buttons - full width. On a failed pre-flight, swap in a warning
-                with the failing checks + an explicit "save anyway". */}
-            {saveWarning ? (
-              <div className="rounded-lg bg-amber-50 dark:bg-amber-500/10 border border-amber-300 dark:border-amber-500/30 p-3 space-y-3">
-                <div className="flex items-start gap-2">
-                  <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0 text-amber-600 dark:text-amber-400" />
-                  <p className="text-sm text-amber-700 dark:text-amber-300">{t('printers.addPreflight.warning')}</p>
-                </div>
-                <DiagnosticChecklist result={saveWarning} />
-                <div className="flex gap-3">
-                  <Button type="button" variant="secondary" onClick={() => setSaveWarning(null)} className="flex-1">
-                    {t('printers.addPreflight.back')}
-                  </Button>
-                  <Button type="button" onClick={doSave} className="flex-1" disabled={updateMutation.isPending}>
-                    {t('printers.addPreflight.saveAnyway')}
-                  </Button>
+            {/* Right column - Settings */}
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="edit_cleanup_after_print"
+                  checked={form.cleanup_after_print}
+                  onChange={(e) => setForm({ ...form, cleanup_after_print: e.target.checked })}
+                  className="accent-bambu-green rounded border-bambu-dark-tertiary bg-bambu-dark text-bambu-green focus:ring-bambu-green"
+                />
+                <label htmlFor="edit_cleanup_after_print" className="text-sm text-bambu-gray">
+                  {t('printers.modal.cleanupAfterPrintLabel')}
+                </label>
+              </div>
+              {/* Maintenance Mode (#1476) — checkbox is the inverse of is_active
+                  because the user-facing concept is "is this printer in
+                  maintenance", not "is it active". */}
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="edit_maintenance_mode"
+                  checked={form.is_active === false}
+                  onChange={(e) => setForm({ ...form, is_active: !e.target.checked })}
+                  className="rounded border-bambu-dark-tertiary bg-bambu-dark text-amber-500 focus:ring-amber-500"
+                />
+                <label htmlFor="edit_maintenance_mode" className="text-sm text-bambu-gray">
+                  {t('printers.maintenance.editFieldLabel')}
+                </label>
+              </div>
+              <p className="text-xs text-bambu-gray/70 -mt-1 ml-6">
+                {t('printers.maintenance.editFieldHelp')}
+              </p>
+              <div>
+                <label className="block text-sm font-medium text-bambu-gray mb-1">
+                  {t('printers.modal.mqttConnectionTimeoutLabel')}
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min="0"
+                    max="3600"
+                    value={form.mqtt_connection_timeout}
+                    onChange={(e) => setForm({ ...form, mqtt_connection_timeout: parseInt(e.target.value) || 0 })}
+                    className="w-24 px-3 py-1.5 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-sm focus:border-bambu-green focus:ring-1 focus:ring-bambu-green"
+                  />
+                  <span className="text-xs text-bambu-gray">{t('printers.modal.mqttConnectionTimeoutHint')}</span>
                 </div>
               </div>
-            ) : (
-              <div className="flex gap-3 pt-4">
-                <Button type="button" variant="secondary" onClick={onClose} className="flex-1">
-                  {t('common.cancel')}
+              <div>
+                <label className="block text-sm font-medium text-bambu-gray mb-1">{t('printers.modal.staggerInterval')}</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min="0"
+                    max="60"
+                    value={form.stagger_interval_minutes ?? 0}
+                    onChange={(e) => setForm({ ...form, stagger_interval_minutes: parseInt(e.target.value) || 0 })}
+                    className="w-24 px-3 py-1.5 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-sm focus:border-bambu-green focus:ring-1 focus:ring-bambu-green"
+                  />
+                  <span className="text-xs text-bambu-gray">{t('printers.modal.staggerIntervalHint')}</span>
+                </div>
+              </div>
+              {(() => {
+                const modelProfiles = (swapProfiles ?? []).filter((p) =>
+                  form.model ? p.models.includes(form.model) : false
+                );
+                if (modelProfiles.length === 0) return null;
+                return (
+                  <>
+                    <div>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={form.swap_mode_enabled ?? false}
+                          onChange={(e) => {
+                            const enabled = e.target.checked;
+                            setForm({
+                              ...form,
+                              swap_mode_enabled: enabled,
+                              swap_profile: enabled
+                                ? (form.swap_profile ?? modelProfiles[0]?.id ?? null)
+                                : null,
+                              ...(enabled ? { require_plate_clear: false } : {}),
+                            });
+                          }}
+                          className="accent-bambu-green w-4 h-4 rounded border-bambu-dark-tertiary bg-bambu-dark text-bambu-green focus:ring-bambu-green"
+                        />
+                        <span className="text-sm text-white">{t('printers.modal.swapMode')}</span>
+                      </label>
+                      <p className="text-xs text-bambu-gray mt-1 ml-6">{t('printers.modal.swapModeHint')}</p>
+                    </div>
+                    {form.swap_mode_enabled && (
+                      <div className="ml-6">
+                        <label className="block text-xs text-bambu-gray mb-1">
+                          {t('printers.modal.swapProfile')}
+                        </label>
+                        <select
+                          value={form.swap_profile ?? ''}
+                          onChange={(e) => setForm({ ...form, swap_profile: e.target.value || null })}
+                          className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none text-sm"
+                        >
+                          {modelProfiles.map((p) => (
+                            <option key={p.id} value={p.id}>{p.label}</option>
+                          ))}
+                        </select>
+                        {form.swap_profile && (
+                          <p className="text-xs text-bambu-gray mt-1">
+                            {modelProfiles.find((p) => p.id === form.swap_profile)?.description}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
+              {!form.swap_mode_enabled && (
+              <div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={form.require_plate_clear ?? true}
+                    onChange={(e) => setForm({ ...form, require_plate_clear: e.target.checked })}
+                    className="accent-bambu-green w-4 h-4 rounded border-bambu-dark-tertiary bg-bambu-dark text-bambu-green focus:ring-bambu-green"
+                  />
+                  <span className="text-sm text-white">{t('printers.modal.requirePlateClear')}</span>
+                </label>
+                <p className="text-xs text-bambu-gray mt-1 ml-6">{t('printers.modal.requirePlateClearHint')}</p>
+              </div>
+              )}
+            </div>
+          </div>
+
+          {/* Buttons - full width. On a failed pre-flight, swap in a warning
+              with the failing checks + an explicit "save anyway". */}
+          {saveWarning ? (
+            <div className="rounded-lg bg-amber-50 dark:bg-amber-500/10 border border-amber-300 dark:border-amber-500/30 p-3 space-y-3">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0 text-amber-600 dark:text-amber-400" />
+                <p className="text-sm text-amber-700 dark:text-amber-300">{t('printers.addPreflight.warning')}</p>
+              </div>
+              <DiagnosticChecklist result={saveWarning} />
+              <div className="flex gap-3">
+                <Button type="button" variant="secondary" onClick={() => setSaveWarning(null)} className="flex-1">
+                  {t('printers.addPreflight.back')}
                 </Button>
-                <Button type="submit" className="flex-1" disabled={updateMutation.isPending || checkingSave}>
-                  {checkingSave
-                    ? t('printers.addPreflight.checking')
-                    : updateMutation.isPending
-                      ? t('common.saving')
-                      : t('printers.modal.saveChanges')}
+                <Button type="button" onClick={doSave} className="flex-1" disabled={updateMutation.isPending}>
+                  {t('printers.addPreflight.saveAnyway')}
                 </Button>
               </div>
-            )}
-          </form>
-        </CardContent>
-      </Card>
-    </div>
+            </div>
+          ) : (
+            <div className="flex gap-3 pt-4">
+              <Button type="button" variant="secondary" onClick={onClose} className="flex-1">
+                {t('common.cancel')}
+              </Button>
+              <Button type="submit" className="flex-1" disabled={updateMutation.isPending || checkingSave}>
+                {checkingSave
+                  ? t('printers.addPreflight.checking')
+                  : updateMutation.isPending
+                    ? t('common.saving')
+                    : t('printers.modal.saveChanges')}
+              </Button>
+            </div>
+          )}
+        </form>
+      </div>
+    </Modal>
   );
 }
 
@@ -8600,17 +8574,6 @@ export function PrintersPage() {
   // The popup re-mounts <PrinterCard> with viewMode='expanded' cardSize=2
   // for the picked printer so all M-card affordances work identically.
   const [expandedPrinterId, setExpandedPrinterId] = useState<number | null>(null);
-  // Global Escape handler for the expand popup. Lives at page-scope (not
-  // on the popup div) so it fires regardless of which child element has
-  // focus when the user presses Escape.
-  useEffect(() => {
-    if (expandedPrinterId === null) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setExpandedPrinterId(null);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [expandedPrinterId]);
 
   // Embedded camera viewer state - supports multiple simultaneous viewers
   // Persisted to localStorage so cameras reopen after navigation
@@ -9505,6 +9468,7 @@ export function PrintersPage() {
           </Button>
           {showPowerDropdown && (
             <>
+              {/* not-a-modal: menu */}
               <div className="fixed inset-0 z-10" onClick={() => setShowPowerDropdown(false)} />
               <div className="absolute right-0 mt-2 w-56 bg-white dark:bg-bambu-dark-secondary border border-gray-200 dark:border-bambu-dark-tertiary rounded-lg shadow-lg z-20 py-1">
                 <div className="px-3 py-2 text-xs text-gray-500 dark:text-bambu-gray border-b border-gray-200 dark:border-bambu-dark-tertiary">
@@ -9839,8 +9803,9 @@ export function PrintersPage() {
       )}
 
       {/* Compact-card "expand into popup": re-mount the same PrinterCard
-          with M-size sizing for the picked printer. Backdrop click +
-          Escape close. The popup card itself does NOT receive ``onExpand``
+          with M-size sizing for the picked printer. Closes through the
+          shell's X or Esc — a tap beside the card no longer dismisses it.
+          The popup card itself does NOT receive ``onExpand``
           (no nested popup) and is forced to ``viewMode='expanded'`` /
           ``cardSize=2`` regardless of the page's current sizing.
 
@@ -9852,63 +9817,48 @@ export function PrintersPage() {
         const expandedPrinter = sortedPrinters.find((p) => p.id === expandedPrinterId);
         if (!expandedPrinter) return null;
         return (
-          <div
-            // ``items-center`` centers the card in the viewport so the
-            // three-dot menu dropdown — which opens BELOW the kebab button
-            // — has half the screen of room downward. With the previous
-            // ``items-start + my-8`` the card sat at the top, putting the
-            // kebab right under viewport top; the dropdown still rendered
-            // downward but felt visually clipped because the surrounding
-            // chrome (card header) was right at the screen edge with no
-            // breathing room. ``overflow-y-auto`` keeps tall cards reachable
-            // via scroll on the backdrop itself; the inner div uses ``my-4``
-            // so a tall card has visible top/bottom gutters when scrolled.
-            className="fixed inset-0 bg-black/50 backdrop-blur-sm z-40 flex items-center justify-center p-4 overflow-y-auto"
-            onClick={() => setExpandedPrinterId(null)}
-            onKeyDown={(e) => { if (e.key === 'Escape') setExpandedPrinterId(null); }}
-            role="dialog"
-            tabIndex={-1}
+          <Modal
+            onClose={() => setExpandedPrinterId(null)}
+            title={expandedPrinter.name}
+            size="xl"
+            panelStyle={{ backgroundColor: 'transparent', border: 0, boxShadow: 'none' }}
+            bodyClassName="my-4"
           >
-            <div
-              className="w-full max-w-xl my-4"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <PrinterCard
-                printer={expandedPrinter}
-                hideIfDisconnected={false}
-                maintenanceInfo={maintenanceByPrinter[expandedPrinter.id]}
-                viewMode="expanded"
-                cardSize={2}
-                spoolmanEnabled={spoolmanEnabled}
-                hasUnlinkedSpools={hasUnlinkedSpools}
-                linkedSpools={linkedSpools}
-                spoolmanUrl={spoolmanStatus?.url}
-                spoolmanSyncMode={spoolmanSyncMode}
-                spoolmanSpools={spoolmanSpoolsData}
-                spoolmanSlotAssignments={spoolmanSlotAssignments}
-                spoolmanLoading={spoolmanLoading}
-                onUnassignSpoolmanSpool={(spoolId) => unassignSpoolmanMutation.mutate(spoolId)}
-                onGetAssignment={getAssignment}
-                onUnassignSpool={(pid, aid, tid) => unassignMutation.mutate({ printerId: pid, amsId: aid, trayId: tid })}
-                amsThresholds={settings ? {
-                  humidityGood: Number(settings.ams_humidity_good) || 40,
-                  humidityFair: Number(settings.ams_humidity_fair) || 60,
-                  tempGood: Number(settings.ams_temp_good) || 28,
-                  tempFair: Number(settings.ams_temp_fair) || 35,
-                } : undefined}
-                timeFormat={settings?.time_format || 'system'}
-                dateFormat={settings?.date_format || 'system'}
-                cameraViewMode={settings?.camera_view_mode || 'window'}
-                onOpenEmbeddedCamera={(id, name) => setEmbeddedCameraPrinters(prev => new Map(prev).set(id, { id, name }))}
-                checkPrinterFirmware={settings?.check_printer_firmware !== false}
-                useSlicerApi={settings?.use_slicer_api ?? false}
-                dryingPresets={effectiveDryingPresets}
-                isSelected={selectedPrinterIds.has(expandedPrinter.id)}
-                onSelect={handleSelectPrinter}
-                spoolDisplayTemplate={settings?.spool_display_template || undefined}
-              />
-            </div>
-          </div>
+            <PrinterCard
+              printer={expandedPrinter}
+              hideIfDisconnected={false}
+              maintenanceInfo={maintenanceByPrinter[expandedPrinter.id]}
+              viewMode="expanded"
+              cardSize={2}
+              spoolmanEnabled={spoolmanEnabled}
+              hasUnlinkedSpools={hasUnlinkedSpools}
+              linkedSpools={linkedSpools}
+              spoolmanUrl={spoolmanStatus?.url}
+              spoolmanSyncMode={spoolmanSyncMode}
+              spoolmanSpools={spoolmanSpoolsData}
+              spoolmanSlotAssignments={spoolmanSlotAssignments}
+              spoolmanLoading={spoolmanLoading}
+              onUnassignSpoolmanSpool={(spoolId) => unassignSpoolmanMutation.mutate(spoolId)}
+              onGetAssignment={getAssignment}
+              onUnassignSpool={(pid, aid, tid) => unassignMutation.mutate({ printerId: pid, amsId: aid, trayId: tid })}
+              amsThresholds={settings ? {
+                humidityGood: Number(settings.ams_humidity_good) || 40,
+                humidityFair: Number(settings.ams_humidity_fair) || 60,
+                tempGood: Number(settings.ams_temp_good) || 28,
+                tempFair: Number(settings.ams_temp_fair) || 35,
+              } : undefined}
+              timeFormat={settings?.time_format || 'system'}
+              dateFormat={settings?.date_format || 'system'}
+              cameraViewMode={settings?.camera_view_mode || 'window'}
+              onOpenEmbeddedCamera={(id, name) => setEmbeddedCameraPrinters(prev => new Map(prev).set(id, { id, name }))}
+              checkPrinterFirmware={settings?.check_printer_firmware !== false}
+              useSlicerApi={settings?.use_slicer_api ?? false}
+              dryingPresets={effectiveDryingPresets}
+              isSelected={selectedPrinterIds.has(expandedPrinter.id)}
+              onSelect={handleSelectPrinter}
+              spoolDisplayTemplate={settings?.spool_display_template || undefined}
+            />
+          </Modal>
         );
       })()}
 

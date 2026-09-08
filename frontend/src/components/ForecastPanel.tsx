@@ -27,6 +27,7 @@ import { invalidateSpoolViews } from '../utils/queryInvalidation';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 import { LoadingBlock } from './LoadingBlock';
+import { Modal } from './Modal';
 import { PaginationBar } from './PaginationBar';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -1931,92 +1932,87 @@ function AddToCartModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-      <div className="bg-bambu-dark-secondary rounded-2xl border border-bambu-dark-tertiary w-full max-w-sm shadow-2xl">
-        <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-bambu-dark-tertiary">
-          <div className="flex items-center gap-2">
-            <ShoppingCart className="w-5 h-5 text-bambu-green" />
-            <h2 className="text-base font-semibold text-white">{t('forecast.addToCartTitle')}</h2>
-          </div>
-          <button onClick={onClose} className="p-1 text-bambu-gray hover:text-white transition-colors"><X className="w-5 h-5" /></button>
+    <Modal
+      onClose={onClose}
+      title={t('forecast.addToCartTitle')}
+      icon={<ShoppingCart className="w-5 h-5 text-bambu-green" />}
+      size="sm"
+    >
+      <form onSubmit={submit} className="p-5 space-y-4">
+        <div className="text-sm text-bambu-gray">{label}</div>
+
+        <div className="flex bg-bambu-dark-tertiary rounded-lg p-0.5">
+          <button
+            type="button"
+            onClick={() => setMode('qty')}
+            className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-colors ${mode === 'qty' ? 'bg-bambu-dark-secondary text-white shadow' : 'text-bambu-gray hover:text-white'}`}
+          >
+            {t('forecast.byQuantity')}
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode('duration')}
+            className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-colors ${mode === 'duration' ? 'bg-bambu-dark-secondary text-white shadow' : 'text-bambu-gray hover:text-white'}`}
+          >
+            {t('forecast.byDuration')}
+          </button>
         </div>
 
-        <form onSubmit={submit} className="p-5 space-y-4">
-          <div className="text-sm text-bambu-gray">{label}</div>
-
-          <div className="flex bg-bambu-dark-tertiary rounded-lg p-0.5">
-            <button
-              type="button"
-              onClick={() => setMode('qty')}
-              className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-colors ${mode === 'qty' ? 'bg-bambu-dark-secondary text-white shadow' : 'text-bambu-gray hover:text-white'}`}
-            >
-              {t('forecast.byQuantity')}
-            </button>
-            <button
-              type="button"
-              onClick={() => setMode('duration')}
-              className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-colors ${mode === 'duration' ? 'bg-bambu-dark-secondary text-white shadow' : 'text-bambu-gray hover:text-white'}`}
-            >
-              {t('forecast.byDuration')}
-            </button>
+        {mode === 'qty' ? (
+          <div className="space-y-1.5">
+            <label className="text-xs text-bambu-gray">{t('forecast.numberOfSpools')}</label>
+            <input
+              type="number" min={1} max={99}
+              value={qty} onChange={(e) => setQty(e.target.value)}
+              className="w-full px-3 py-2 bg-bambu-dark-tertiary border border-bambu-dark-tertiary rounded-lg text-white text-sm focus:outline-none focus:border-bambu-green"
+              autoFocus
+            />
           </div>
-
-          {mode === 'qty' ? (
+        ) : (
+          <div className="space-y-2">
             <div className="space-y-1.5">
-              <label className="text-xs text-bambu-gray">{t('forecast.numberOfSpools')}</label>
+              <label className="text-xs text-bambu-gray">{t('forecast.lastHowManyDays')}</label>
               <input
-                type="number" min={1} max={99}
-                value={qty} onChange={(e) => setQty(e.target.value)}
+                type="number" min={1} max={365}
+                value={durationDays} onChange={(e) => setDurationDays(e.target.value)}
                 className="w-full px-3 py-2 bg-bambu-dark-tertiary border border-bambu-dark-tertiary rounded-lg text-white text-sm focus:outline-none focus:border-bambu-green"
                 autoFocus
               />
             </div>
-          ) : (
-            <div className="space-y-2">
-              <div className="space-y-1.5">
-                <label className="text-xs text-bambu-gray">{t('forecast.lastHowManyDays')}</label>
-                <input
-                  type="number" min={1} max={365}
-                  value={durationDays} onChange={(e) => setDurationDays(e.target.value)}
-                  className="w-full px-3 py-2 bg-bambu-dark-tertiary border border-bambu-dark-tertiary rounded-lg text-white text-sm focus:outline-none focus:border-bambu-green"
-                  autoFocus
-                />
+            {f.rate_g_day !== null ? (
+              <div className="flex items-center gap-2 px-3 py-2 bg-bambu-dark-tertiary/50 rounded-lg">
+                <span className="text-xs text-bambu-gray">≈</span>
+                <span className="text-sm font-semibold text-bambu-green">{t('forecast.spoolCount', { count: spoolsForDuration ?? 0 })}</span>
+                <span className="text-xs text-bambu-gray">at {f.rate_g_day.toFixed(1)}g/day</span>
               </div>
-              {f.rate_g_day !== null ? (
-                <div className="flex items-center gap-2 px-3 py-2 bg-bambu-dark-tertiary/50 rounded-lg">
-                  <span className="text-xs text-bambu-gray">≈</span>
-                  <span className="text-sm font-semibold text-bambu-green">{t('forecast.spoolCount', { count: spoolsForDuration ?? 0 })}</span>
-                  <span className="text-xs text-bambu-gray">at {f.rate_g_day.toFixed(1)}g/day</span>
-                </div>
-              ) : (
-                <div className="text-xs text-yellow-700 dark:text-yellow-400 px-1">{t('forecast.noUsageQty')}</div>
-              )}
-            </div>
-          )}
-
-          <div className="space-y-1.5">
-            <label className="text-xs text-bambu-gray">{t('forecast.noteOptional')}</label>
-            <input
-              type="text" maxLength={200}
-              value={note} onChange={(e) => setNote(e.target.value)}
-              placeholder={t('forecast.notePlaceholder')}
-              className="w-full px-3 py-2 bg-bambu-dark-tertiary border border-bambu-dark-tertiary rounded-lg text-white text-sm placeholder:text-bambu-gray/40 focus:outline-none focus:border-bambu-green"
-            />
+            ) : (
+              <div className="text-xs text-yellow-700 dark:text-yellow-400 px-1">{t('forecast.noUsageQty')}</div>
+            )}
           </div>
+        )}
 
-          <div className="flex items-center gap-3 pt-1">
-            <button
-              type="submit"
-              className="flex-1 py-2 bg-bambu-green text-white text-sm font-medium rounded-lg hover:bg-bambu-green/80 transition-colors"
-            >
-              {t('forecast.addNSpools', { count: finalQty })}
-            </button>
-            <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-bambu-gray hover:text-white border border-bambu-dark-tertiary rounded-lg transition-colors">
-              {t('forecast.cancel')}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+        <div className="space-y-1.5">
+          <label className="text-xs text-bambu-gray">{t('forecast.noteOptional')}</label>
+          <input
+            type="text" maxLength={200}
+            value={note} onChange={(e) => setNote(e.target.value)}
+            placeholder={t('forecast.notePlaceholder')}
+            className="w-full px-3 py-2 bg-bambu-dark-tertiary border border-bambu-dark-tertiary rounded-lg text-white text-sm placeholder:text-bambu-gray/40 focus:outline-none focus:border-bambu-green"
+          />
+        </div>
+
+        <div className="flex items-center gap-3 pt-1">
+          <button
+            type="submit"
+            className="flex-1 py-2 bg-bambu-green text-white text-sm font-medium rounded-lg hover:bg-bambu-green/80 transition-colors"
+          >
+            {t('forecast.addNSpools', { count: finalQty })}
+          </button>
+          <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-bambu-gray hover:text-white border border-bambu-dark-tertiary rounded-lg transition-colors">
+            {t('forecast.cancel')}
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 }

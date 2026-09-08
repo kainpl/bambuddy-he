@@ -6,9 +6,9 @@ import { api } from '../../api/client';
 import type { Product, ProductAttachment } from '../../api/client';
 import { useToast } from '../../contexts/ToastContext';
 import { Button } from '../Button';
+import { Modal } from '../Modal';
 import { invalidateOrderViews } from '../../utils/queryInvalidation';
 import { byAttachmentOrder } from './attachmentOrder';
-import { useDialogFocus } from '../../hooks/useDialogFocus';
 
 interface ProductGalleryProps {
   product: Product;
@@ -23,16 +23,6 @@ interface ProductGalleryProps {
    *  than the tests: while the card dialog is open two galleries are live, and
    *  "Pictures" names both of them. */
   headingKey?: string;
-  /** Told whenever the lightbox opens or closes.
-   *
-   *  ⚠️ It exists so an enclosing DIALOG can stand down from Escape. Both
-   *  listeners sit on `window`, and the dialog's is registered first (its
-   *  effect runs on mount, the gallery's only once a picture is enlarged), so
-   *  one Escape closed the dialog out from under the lightbox — and with it
-   *  everything typed into the form behind. `ModelCardModal` has no such prop
-   *  because its lightbox is its own state and it can order the two branches
-   *  in a single handler; here the state lives one component down. */
-  onLightboxOpenChange?: (open: boolean) => void;
 }
 
 const TILE_CLASS = 'w-40 h-40 rounded-xl object-cover bg-bambu-dark border border-bambu-dark-tertiary';
@@ -55,15 +45,14 @@ const ICON_BUTTON_CLASS =
  * is something the operator sets rather than something the upload timestamps
  * decide.
  *
- * The lightbox is a plain fixed overlay: prev / next / Escape, no new
- * dependency for what is three keyboard handlers and an `<img>`.
+ * The lightbox rides the shared shell (`variant="lightbox"`), which owns the
+ * ground, the focus and Escape; what stays here is prev / next and the `<img>`.
  */
 export function ProductGallery({
   product,
   canEdit,
   testIdSuffix = '',
   headingKey = 'products.gallery.title',
-  onLightboxOpenChange,
 }: ProductGalleryProps) {
   const { t } = useTranslation();
   const { showToast } = useToast();
@@ -94,47 +83,12 @@ export function ProductGallery({
   // joined the gallery.
   const coverFilename = product.cover_image_filename ?? pictures[0]?.filename ?? null;
 
-  // ⚠️ Focus moves INTO the overlay when it opens and back to the thumbnail
-  // when it closes — and that is ALL it does. **Tab is not trapped**: it walks
-  // out of the overlay and into the page behind, exactly as it does anywhere
-  // else in this app. What the move fixes is the two ends: a keyboard user who
-  // opened the lightbox would otherwise start at the top of the document, and
-  // on close the focus ring would be left on `<body>`, which is nowhere.
-  // Trapping means inert-ing the rest of the page; it is deliberately not done
-  // here, and this comment is not to grow a claim that it is.
-  const overlay = useDialogFocus<HTMLDivElement>(lightbox !== null);
-
-  // Announce the overlay to whatever is around us — see `onLightboxOpenChange`.
-  // Reported from an effect rather than from each `setLightbox` call site so
-  // that closing by Escape, by the ✕, by the backdrop and by an unmount all
-  // report the same thing; missing one of those would leave a dialog that has
-  // stood down from Escape permanently.
-  //
-  // ⚠️ Through a ref, so the effect depends on the OPEN FLAG alone. With the
-  // callback in the dependency list an inline arrow from the parent would
-  // re-run this on every render — and since the callback sets the parent's
-  // state, that is a render loop rather than a wasted call.
-  //
-  // ⚠️ And the ref is refreshed in an EFFECT, never in the render body. Writing
-  // to a ref while rendering is a side effect in a function React is allowed to
-  // call twice and throw one result away (StrictMode does exactly that, and so
-  // does a render it abandons for a higher-priority update) — the rule this
-  // codebase follows everywhere else. Declared BEFORE the effect below, so on
-  // the commit where `open` flips the callback is already the current one.
-  const open = lightbox !== null;
-  const notify = useRef(onLightboxOpenChange);
-  useEffect(() => {
-    notify.current = onLightboxOpenChange;
-  });
-  useEffect(() => {
-    notify.current?.(open);
-    return () => notify.current?.(false);
-  }, [open]);
-
+  // The arrow keys step through the pictures while the lightbox is up. Escape
+  // is deliberately NOT here: the shell owns it for the topmost modal, and the
+  // lightbox is always the topmost one while it is open.
   useEffect(() => {
     if (lightbox === null || pictures.length === 0) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setLightbox(null);
       if (e.key === 'ArrowRight') setLightbox((i) => (i === null ? null : (i + 1) % pictures.length));
       if (e.key === 'ArrowLeft') setLightbox((i) => (i === null ? null : (i + pictures.length - 1) % pictures.length));
     };
@@ -378,16 +332,7 @@ export function ProductGallery({
       </div>
 
       {lightbox !== null && pictures[lightbox] && (
-        <div
-          ref={overlay}
-          role="dialog"
-          aria-modal="true"
-          aria-label={t('products.gallery.lightbox')}
-          tabIndex={-1}
-          data-testid={testId('gallery-lightbox')}
-          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 outline-none"
-          onClick={() => setLightbox(null)}
-        >
+        <Modal variant="lightbox" onClose={() => setLightbox(null)} ariaLabel={t('products.gallery.lightbox')}>
           <button
             type="button"
             aria-label={t('products.gallery.close')}
@@ -429,7 +374,7 @@ export function ProductGallery({
               <ChevronRight className="w-8 h-8" />
             </button>
           )}
-        </div>
+        </Modal>
       )}
     </section>
   );

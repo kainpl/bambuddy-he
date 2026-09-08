@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Droplets, Copy, Check, Settings2, Package, Unlink } from 'lucide-react';
 import { isLightColor } from '../utils/colors';
+import { Modal } from './Modal';
 
 type CardPlacement = { top: number; left: number; side: 'top' | 'bottom'; arrowLeft: number };
 
@@ -546,41 +547,40 @@ export function FilamentHoverCard({ data, children, disabled, className = '', sp
 
       {/* Unlink Confirmation Dialog */}
       {showUnlinkConfirm && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center" onClick={() => setShowUnlinkConfirm(false)}>
-          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
-          <div
-            className="relative bg-bambu-dark-secondary rounded-lg shadow-xl w-full max-w-sm mx-4 border border-bambu-dark-tertiary"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="p-4 space-y-4">
-              <div className="space-y-2">
-                <h3 className="text-base font-semibold text-white">
-                  {t('spoolman.unlinkConfirmTitle')}
-                </h3>
-                <p className="text-sm text-bambu-gray">
-                  {t('spoolman.unlinkConfirmMessage')}
-                </p>
-              </div>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => setShowUnlinkConfirm(false)}
-                  className="flex-1 px-3 py-2 text-sm font-medium rounded transition-colors bg-bambu-dark hover:bg-bambu-dark-tertiary text-white"
-                >
-                  {t('common.cancel')}
-                </button>
-                <button
-                  onClick={() => {
-                    spoolman?.onUnlinkSpool?.();
-                    setShowUnlinkConfirm(false);
-                  }}
-                  className="flex-1 px-3 py-2 text-sm font-medium rounded transition-colors bg-red-100 dark:bg-red-500/20 hover:bg-red-200 dark:hover:bg-red-500/40 text-red-700 dark:text-red-400"
-                >
-                  {t('inventory.unassignSpool')}
-                </button>
-              </div>
+        <Modal
+          onClose={() => setShowUnlinkConfirm(false)}
+          hideClose
+          ariaLabel={t('spoolman.unlinkConfirmTitle')}
+          size="sm"
+        >
+          <div className="p-4 space-y-4">
+            <div className="space-y-2">
+              <h3 className="text-base font-semibold text-white">
+                {t('spoolman.unlinkConfirmTitle')}
+              </h3>
+              <p className="text-sm text-bambu-gray">
+                {t('spoolman.unlinkConfirmMessage')}
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setShowUnlinkConfirm(false)}
+                className="flex-1 px-3 py-2 text-sm font-medium rounded transition-colors bg-bambu-dark hover:bg-bambu-dark-tertiary text-white"
+              >
+                {t('common.cancel')}
+              </button>
+              <button
+                onClick={() => {
+                  spoolman?.onUnlinkSpool?.();
+                  setShowUnlinkConfirm(false);
+                }}
+                className="flex-1 px-3 py-2 text-sm font-medium rounded transition-colors bg-red-100 dark:bg-red-500/20 hover:bg-red-200 dark:hover:bg-red-500/40 text-red-700 dark:text-red-400"
+              >
+                {t('inventory.unassignSpool')}
+              </button>
             </div>
           </div>
-        </div>
+        </Modal>
       )}
     </div>
   );

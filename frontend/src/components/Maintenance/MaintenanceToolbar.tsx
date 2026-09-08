@@ -67,6 +67,7 @@ function OverflowMenu({
       </button>
       {isOpen && (
         <>
+          {/* not-a-modal: menu */}
           <div className="fixed inset-0 z-10" onClick={() => setIsOpen(false)} />
           <div
             className="absolute right-0 top-full z-20 mt-1 min-w-48 rounded-lg border border-bambu-dark-tertiary bg-bambu-dark-secondary p-2 shadow-xl"

@@ -174,7 +174,7 @@ export default {
       help: 'Показати цю довідку',
     },
     footerPrefix: 'Натисни',
-    footerSuffix: 'або клікни поза вікном для закриття',
+    footerSuffix: 'щоб закрити',
   },
 
   // Printers page

@@ -142,8 +142,9 @@ describe('ProductGallery', () => {
     render(<ProductGallery product={product} canEdit />);
 
     fireEvent.click(screen.getByTestId('gallery-picture-a.png'));
-    const lightbox = screen.getByTestId('gallery-lightbox');
-    expect(lightbox).toBeInTheDocument();
+    // The overlay is the shared shell's now, and it carries no testid — the
+    // three properties that name it (role, modality, accessible name) are.
+    expect(screen.getByRole('dialog', { name: 'Picture viewer' })).toBeInTheDocument();
     expect(screen.getByTestId('gallery-lightbox-image')).toHaveAttribute(
       'src',
       expect.stringContaining('attachment-image/a.png'),
@@ -156,7 +157,7 @@ describe('ProductGallery', () => {
     );
 
     fireEvent.keyDown(window, { key: 'Escape' });
-    expect(screen.queryByTestId('gallery-lightbox')).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Picture viewer' })).not.toBeInTheDocument();
   });
 
   it('marks the EFFECTIVE cover and refuses to set it again', () => {
@@ -249,10 +250,10 @@ describe('ProductGallery', () => {
     opener.focus();
     fireEvent.click(opener);
 
-    expect(screen.getByTestId('gallery-lightbox')).toHaveFocus();
+    expect(screen.getByRole('dialog', { name: 'Picture viewer' })).toHaveFocus();
 
     fireEvent.keyDown(window, { key: 'Escape' });
-    expect(screen.queryByTestId('gallery-lightbox')).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Picture viewer' })).not.toBeInTheDocument();
     expect(opener).toHaveFocus();
   });
 
@@ -265,8 +266,7 @@ describe('ProductGallery', () => {
 
     fireEvent.click(screen.getByTestId('gallery-picture-a.png'));
 
-    const lightbox = screen.getByTestId('gallery-lightbox');
-    expect(lightbox).toHaveAttribute('role', 'dialog');
+    const lightbox = screen.getByRole('dialog');
     expect(lightbox).toHaveAttribute('aria-modal', 'true');
     expect(lightbox).toHaveAccessibleName('Picture viewer');
   });
