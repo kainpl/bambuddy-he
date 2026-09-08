@@ -174,7 +174,7 @@ export default {
       help: 'Show this help',
     },
     footerPrefix: 'Press',
-    footerSuffix: 'or click outside to close',
+    footerSuffix: 'to close',
   },
 
   // Printers page

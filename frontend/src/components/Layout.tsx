@@ -21,11 +21,12 @@ import { useUnknownTagPrompt } from '../hooks/useUnknownTagPrompt';
 import { UnknownSpoolModal } from './UnknownSpoolModal';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
-import { Card, CardHeader, CardContent } from './Card';
+import { CardContent } from './Card';
 import { parseUTCDate } from '../utils/date';
 import { Button } from './Button';
 import { BugReportBubble } from './BugReportBubble';
 import { isAnyModalOpen } from './modalStack';
+import { Modal } from './Modal';
 
 
 // Sidebar groups (for visual section dividers + labels). Group membership
@@ -656,6 +657,21 @@ export function Layout() {
     return () => window.removeEventListener('plate-not-empty', handlePlateNotEmpty);
   }, [hasPermission]);
 
+  // A file dropped beside its drop zone must not open in the browser and take
+  // the app with it. Only real file drags: in-app drags (queue cards, sidebar
+  // items) carry their own dataTransfer types and keep their own handling.
+  useEffect(() => {
+    const swallowFileDrop = (e: DragEvent) => {
+      if (e.dataTransfer?.types.includes('Files')) e.preventDefault();
+    };
+    window.addEventListener('dragover', swallowFileDrop);
+    window.addEventListener('drop', swallowFileDrop);
+    return () => {
+      window.removeEventListener('dragover', swallowFileDrop);
+      window.removeEventListener('drop', swallowFileDrop);
+    };
+  }, []);
+
   // Global keyboard shortcuts for navigation
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     const target = e.target as HTMLElement;
@@ -819,6 +835,7 @@ export function Layout() {
 
       {/* Compact Drawer Backdrop */}
       {isSidebarCompact && mobileDrawerOpen && (
+        // not-a-modal: drawer
         <div
           className="fixed inset-0 bg-black/50 backdrop-blur-sm z-40 transition-opacity"
           onClick={() => setMobileDrawerOpen(false)}
@@ -1342,182 +1359,168 @@ export function Layout() {
 
       {/* Plate Detection Alert Modal */}
       {plateDetectionAlert && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
-          <div className="bg-bambu-dark-secondary border-2 border-yellow-500 rounded-xl shadow-2xl max-w-md w-full animate-in fade-in zoom-in duration-200">
-            <div className="p-6 text-center">
-              <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-yellow-500/20 flex items-center justify-center">
-                <svg className="w-10 h-10 text-yellow-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                </svg>
-              </div>
-              <h2 className="text-xl font-bold text-yellow-700 dark:text-yellow-400 mb-2">
-                {t('plateAlert.title')}
-              </h2>
-              <p className="text-lg text-white mb-2">
-                {plateDetectionAlert.printer_name}
-              </p>
-              <p className="text-bambu-gray mb-6">
-                {t('plateAlert.message')}
-              </p>
-              <button
-                onClick={() => setPlateDetectionAlert(null)}
-                className="w-full py-3 px-6 bg-yellow-500 hover:bg-yellow-600 text-black font-semibold rounded-lg transition-colors"
-              >
-                {t('plateAlert.understand')}
-              </button>
+        // The yellow accent border is this alert's whole point; an inline style
+        // beats the shell's `border-bambu-dark-tertiary` whatever the emit order.
+        <Modal
+          onClose={() => setPlateDetectionAlert(null)}
+          hideClose
+          ariaLabel={t('plateAlert.title')}
+          size="md"
+          panelClassName="animate-in fade-in zoom-in duration-200"
+          panelStyle={{ borderWidth: 2, borderColor: 'var(--color-yellow-500)' }}
+        >
+          <div className="p-6 text-center">
+            <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-yellow-500/20 flex items-center justify-center">
+              <svg className="w-10 h-10 text-yellow-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
             </div>
+            <h2 className="text-xl font-bold text-yellow-700 dark:text-yellow-400 mb-2">
+              {t('plateAlert.title')}
+            </h2>
+            <p className="text-lg text-white mb-2">
+              {plateDetectionAlert.printer_name}
+            </p>
+            <p className="text-bambu-gray mb-6">
+              {t('plateAlert.message')}
+            </p>
+            <button
+              onClick={() => setPlateDetectionAlert(null)}
+              className="w-full py-3 px-6 bg-yellow-500 hover:bg-yellow-600 text-black font-semibold rounded-lg transition-colors"
+            >
+              {t('plateAlert.understand')}
+            </button>
           </div>
-        </div>
+        </Modal>
       )}
 
       {/* Change Password Modal */}
       {showChangePasswordModal && (
-        <div
-          className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
-          onClick={() => {
+        <Modal
+          onClose={() => {
             setShowChangePasswordModal(false);
             setChangePasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
           }}
+          title={t('changePassword.title')}
+          icon={<Key className="w-5 h-5 text-bambu-green" />}
+          size="md"
         >
-          <Card
-            className="w-full max-w-md"
-            onClick={(e: React.MouseEvent) => e.stopPropagation()}
-          >
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Key className="w-5 h-5 text-bambu-green" />
-                  <h2 className="text-lg font-semibold text-white">{t('changePassword.title')}</h2>
-                </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    setShowChangePasswordModal(false);
-                    setChangePasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
-                  }}
-                >
-                  <X className="w-5 h-5" />
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                {/* Hidden username anchor so password-manager extensions (1Password,
-                    Bitwarden, browser built-ins) key the Change Password flow to
-                    the current user instead of hunting the DOM for a generic text
-                    input (which used to latch onto the Printers-page search bar
-                    and render it as a masked field — upstream #597d961b). */}
+          <CardContent>
+            <div className="space-y-4">
+              {/* Hidden username anchor so password-manager extensions (1Password,
+                  Bitwarden, browser built-ins) key the Change Password flow to
+                  the current user instead of hunting the DOM for a generic text
+                  input (which used to latch onto the Printers-page search bar
+                  and render it as a masked field — upstream #597d961b). */}
+              <input
+                type="text"
+                name="username"
+                autoComplete="username"
+                value={user?.username ?? ''}
+                readOnly
+                hidden
+                aria-hidden="true"
+                tabIndex={-1}
+              />
+              <div>
+                <label className="block text-sm font-medium text-white mb-2">
+                  {t('changePassword.currentPassword')}
+                </label>
                 <input
-                  type="text"
-                  name="username"
-                  autoComplete="username"
-                  value={user?.username ?? ''}
-                  readOnly
-                  hidden
-                  aria-hidden="true"
-                  tabIndex={-1}
+                  type="password"
+                  value={changePasswordData.currentPassword}
+                  onChange={(e) => setChangePasswordData({ ...changePasswordData, currentPassword: e.target.value })}
+                  className="w-full px-4 py-3 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors"
+                  placeholder={t('changePassword.currentPasswordPlaceholder')}
+                  autoComplete="current-password"
                 />
-                <div>
-                  <label className="block text-sm font-medium text-white mb-2">
-                    {t('changePassword.currentPassword')}
-                  </label>
-                  <input
-                    type="password"
-                    value={changePasswordData.currentPassword}
-                    onChange={(e) => setChangePasswordData({ ...changePasswordData, currentPassword: e.target.value })}
-                    className="w-full px-4 py-3 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors"
-                    placeholder={t('changePassword.currentPasswordPlaceholder')}
-                    autoComplete="current-password"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-white mb-2">
-                    {t('changePassword.newPassword')}
-                  </label>
-                  <input
-                    type="password"
-                    value={changePasswordData.newPassword}
-                    onChange={(e) => setChangePasswordData({ ...changePasswordData, newPassword: e.target.value })}
-                    className="w-full px-4 py-3 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors"
-                    placeholder={t('changePassword.newPasswordPlaceholder')}
-                    autoComplete="new-password"
-                    minLength={6}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-white mb-2">
-                    {t('changePassword.confirmPassword')}
-                  </label>
-                  <input
-                    type="password"
-                    value={changePasswordData.confirmPassword}
-                    onChange={(e) => setChangePasswordData({ ...changePasswordData, confirmPassword: e.target.value })}
-                    className={`w-full px-4 py-3 bg-bambu-dark-secondary border rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors ${
-                      changePasswordData.confirmPassword && changePasswordData.newPassword !== changePasswordData.confirmPassword
-                        ? 'border-red-500'
-                        : 'border-bambu-dark-tertiary'
-                    }`}
-                    placeholder={t('changePassword.confirmPasswordPlaceholder')}
-                    autoComplete="new-password"
-                    minLength={6}
-                  />
-                  {changePasswordData.confirmPassword && changePasswordData.newPassword !== changePasswordData.confirmPassword && (
-                    <p className="text-red-700 dark:text-red-400 text-xs mt-1">{t('changePassword.passwordsDoNotMatch')}</p>
-                  )}
-                </div>
               </div>
-              <div className="mt-6 flex justify-end gap-3">
-                <Button
-                  variant="secondary"
-                  onClick={() => {
+              <div>
+                <label className="block text-sm font-medium text-white mb-2">
+                  {t('changePassword.newPassword')}
+                </label>
+                <input
+                  type="password"
+                  value={changePasswordData.newPassword}
+                  onChange={(e) => setChangePasswordData({ ...changePasswordData, newPassword: e.target.value })}
+                  className="w-full px-4 py-3 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors"
+                  placeholder={t('changePassword.newPasswordPlaceholder')}
+                  autoComplete="new-password"
+                  minLength={6}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-white mb-2">
+                  {t('changePassword.confirmPassword')}
+                </label>
+                <input
+                  type="password"
+                  value={changePasswordData.confirmPassword}
+                  onChange={(e) => setChangePasswordData({ ...changePasswordData, confirmPassword: e.target.value })}
+                  className={`w-full px-4 py-3 bg-bambu-dark-secondary border rounded-lg text-white placeholder-bambu-gray focus:outline-none focus:ring-2 focus:ring-bambu-green/50 focus:border-bambu-green transition-colors ${
+                    changePasswordData.confirmPassword && changePasswordData.newPassword !== changePasswordData.confirmPassword
+                      ? 'border-red-500'
+                      : 'border-bambu-dark-tertiary'
+                  }`}
+                  placeholder={t('changePassword.confirmPasswordPlaceholder')}
+                  autoComplete="new-password"
+                  minLength={6}
+                />
+                {changePasswordData.confirmPassword && changePasswordData.newPassword !== changePasswordData.confirmPassword && (
+                  <p className="text-red-700 dark:text-red-400 text-xs mt-1">{t('changePassword.passwordsDoNotMatch')}</p>
+                )}
+              </div>
+            </div>
+            <div className="mt-6 flex justify-end gap-3">
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setShowChangePasswordModal(false);
+                  setChangePasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
+                }}
+              >
+                {t('common.cancel')}
+              </Button>
+              <Button
+                onClick={async () => {
+                  if (changePasswordData.newPassword !== changePasswordData.confirmPassword) {
+                    showToast(t('changePassword.passwordsDoNotMatch'), 'error');
+                    return;
+                  }
+                  if (changePasswordData.newPassword.length < 6) {
+                    showToast(t('changePassword.passwordTooShort'), 'error');
+                    return;
+                  }
+                  setChangePasswordLoading(true);
+                  try {
+                    await api.changePassword(changePasswordData.currentPassword, changePasswordData.newPassword);
+                    showToast(t('changePassword.success'), 'success');
                     setShowChangePasswordModal(false);
                     setChangePasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
-                  }}
-                >
-                  {t('common.cancel')}
-                </Button>
-                <Button
-                  onClick={async () => {
-                    if (changePasswordData.newPassword !== changePasswordData.confirmPassword) {
-                      showToast(t('changePassword.passwordsDoNotMatch'), 'error');
-                      return;
-                    }
-                    if (changePasswordData.newPassword.length < 6) {
-                      showToast(t('changePassword.passwordTooShort'), 'error');
-                      return;
-                    }
-                    setChangePasswordLoading(true);
-                    try {
-                      await api.changePassword(changePasswordData.currentPassword, changePasswordData.newPassword);
-                      showToast(t('changePassword.success'), 'success');
-                      setShowChangePasswordModal(false);
-                      setChangePasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
-                    } catch (error: unknown) {
-                      const message = error instanceof Error ? error.message : t('changePassword.failed');
-                      showToast(message, 'error');
-                    } finally {
-                      setChangePasswordLoading(false);
-                    }
-                  }}
-                  disabled={changePasswordLoading || !changePasswordData.currentPassword || !changePasswordData.newPassword || changePasswordData.newPassword !== changePasswordData.confirmPassword || changePasswordData.newPassword.length < 6}
-                >
-                  {changePasswordLoading ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      {t('changePassword.changing')}
-                    </>
-                  ) : (
-                    <>
-                      <Key className="w-4 h-4" />
-                      {t('changePassword.title')}
-                    </>
-                  )}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+                  } catch (error: unknown) {
+                    const message = error instanceof Error ? error.message : t('changePassword.failed');
+                    showToast(message, 'error');
+                  } finally {
+                    setChangePasswordLoading(false);
+                  }
+                }}
+                disabled={changePasswordLoading || !changePasswordData.currentPassword || !changePasswordData.newPassword || changePasswordData.newPassword !== changePasswordData.confirmPassword || changePasswordData.newPassword.length < 6}
+              >
+                {changePasswordLoading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    {t('changePassword.changing')}
+                  </>
+                ) : (
+                  <>
+                    <Key className="w-4 h-4" />
+                    {t('changePassword.title')}
+                  </>
+                )}
+              </Button>
+            </div>
+          </CardContent>
+        </Modal>
       )}
 
       {/* ⚠️ The panel always mounts HERE, at the Layout root. It must not move
