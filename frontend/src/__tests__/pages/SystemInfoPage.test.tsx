@@ -68,8 +68,11 @@ const mockDbHealth = {
     temp_files: 0,
     temp_bytes: 0,
   },
-  largest_tables: null,
-  scans: null,
+  largest_tables: [
+    { table: 'print_archives', bytes: 512_000_000, rows: 184_320 },
+    { table: 'spool_usage_history', bytes: 96_000_000, rows: 902_100 },
+  ],
+  scans: [{ table: 'print_archives', seq_scan: 41_200, idx_scan: 12 }],
   probes_failed: [],
 };
 
@@ -475,6 +478,19 @@ describe('SystemInfoPage Zigbee diagnostics', () => {
       });
       render(<SystemInfoPage />);
       expect(await screen.findByText(/slow_query_ms/)).toBeInTheDocument();
+    });
+
+    it('shows what PostgreSQL knows about where its space went', async () => {
+      // The same question pgAdmin answers, and the reason the size figure had
+      // to stop being a file stat.
+      render(<SystemInfoPage />);
+
+      expect(await screen.findByText('print_archives')).toBeInTheDocument();
+      expect(screen.getByText('488.3 MB')).toBeInTheDocument();
+      // Sequential scans beside index scans: the shape that wants an index.
+      // Tolerant of the runtime's thousands separator, which is not what
+      // this test is about.
+      expect(screen.getByText(/41.200\s*\/\s*12/)).toBeInTheDocument();
     });
 
     it('names the probes that could not be read', async () => {

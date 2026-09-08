@@ -92,6 +92,8 @@
 
 ### Fixed
 
+- **The System page reported a database size of 0 on PostgreSQL.** It measured the size by looking at the `bamdude.db` file, which does not exist on a PostgreSQL install — so every one of them showed nothing, including the bundled server whose data sits in your data folder the whole time. The figure now comes from the database itself on either backend, the storage breakdown counts the bundled server'''s files instead of omitting them, and the new database card lists the largest tables with their row counts and how they are being read.
+
 - **«Optimise database» works on PostgreSQL.** The button ran a SQLite-only command with no check for which backend you use, so on any PostgreSQL install it failed every single time while the UI still offered it. It now runs the maintenance that backend actually supports and says which it did.
 
 - **The inventory summary no longer waits for the spool list.** The farm-wide figures at the top of the page have their own query and their own data, but were hidden until a page of rows arrived — so the number you look at first was held up by the slower half of the page. A loading list now keeps the table'''s shape instead of replacing the whole thing with one spinner (which also covers the first flip of «Group similar», the one case that still genuinely reloads), and a filter change dims the rows and shows a small spinner so stale numbers cannot read as current.

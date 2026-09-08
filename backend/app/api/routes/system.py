@@ -100,6 +100,20 @@ def _get_database_paths() -> list[Path]:
 
 def _get_database_items() -> list[dict]:
     items: list[dict] = []
+    embedded_pg_dir = _get_embedded_pg_dir()
+    if embedded_pg_dir is not None and embedded_pg_dir.exists():
+        # One entry for the whole cluster: a PostgreSQL data directory is
+        # thousands of files, and listing them would bury the page it is meant
+        # to explain.
+        size = get_directory_size(embedded_pg_dir)
+        items.append(
+            {
+                "name": embedded_pg_dir.name,
+                "path": str(embedded_pg_dir),
+                "bytes": size,
+                "formatted": format_bytes(size),
+            }
+        )
     for path in _get_database_paths():
         try:
             size = path.stat().st_size
@@ -115,6 +129,22 @@ def _get_database_items() -> list[dict]:
         )
     items.sort(key=lambda item: item["bytes"], reverse=True)
     return items
+
+
+def _get_embedded_pg_dir() -> Path | None:
+    """``DATA_DIR/postgres`` when BamDude runs the bundled server.
+
+    The cluster is the largest thing in DATA_DIR on such an install, and the
+    storage breakdown — the page whose whole job is «where did the space go» —
+    listed nothing for it, because the classifier only knew about SQLite files.
+
+    An external server's files live on another machine, so there is nothing of
+    ours to count and this returns None.
+    """
+    data_dir = getattr(settings, "embedded_pg_data_dir", None)
+    if not settings.embedded_postgres or data_dir is None:
+        return None
+    return Path(data_dir).parent
 
 
 def _get_app_dir() -> Path:
@@ -146,12 +176,13 @@ def _get_storage_rules() -> list[tuple[str, str, Callable]]:
     upload_dir = virtual_printer_dir / "uploads"
 
     db_paths = set(_get_database_paths())
+    embedded_pg_dir = _get_embedded_pg_dir()
 
     return [
         (
             "database",
             "Database",
-            lambda path: path in db_paths,
+            lambda path: path in db_paths or (embedded_pg_dir is not None and _is_under(path, embedded_pg_dir)),
         ),
         (
             "library_thumbnails",
@@ -466,10 +497,17 @@ async def get_system_info(
     archive_dir = settings.archive_dir
     archive_size = get_directory_size(archive_dir) if archive_dir.exists() else 0
 
-    # Database file size — ``bamdude.db``; the pre-rename name reported 0 here
-    # on every current install. See routes/support.py for the same fix.
-    db_path = settings.base_dir / "bamdude.db"
-    db_size = db_path.stat().st_size if db_path.exists() else 0
+    # Database size, per backend. Statting ``bamdude.db`` is right only on
+    # SQLite; on PostgreSQL that file does not exist, so this field reported
+    # **0** on every PostgreSQL install — including the bundled one, whose
+    # cluster is sitting in DATA_DIR the whole time. PostgreSQL can answer for
+    # itself (``pg_database_size``), so ask it.
+    #
+    # Best-effort: the System page must render even if the probe cannot run.
+    try:
+        db_size = await db_health.probe_size_bytes(db) or 0
+    except Exception:  # noqa: BLE001
+        db_size = 0
 
     # Disk usage
     disk = psutil.disk_usage(str(settings.base_dir))
