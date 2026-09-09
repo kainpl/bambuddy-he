@@ -529,6 +529,9 @@ cd frontend && npm install && npm run dev
 
 Want to contribute? [CONTRIBUTING.md](CONTRIBUTING.md) has the setup, the checks
 CI runs and the house rules; [SECURITY.md](SECURITY.md) is for vulnerabilities.
+Working with a coding agent? [CLAUDE.md](CLAUDE.md) is the engineering guide it
+should read first ([AGENTS.md](AGENTS.md) points there for other tools), and
+each release attaches the repository's code graph (`bamdude-code-graph-*.json.gz`).
 
 ---
 

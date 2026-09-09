@@ -27,6 +27,7 @@ The short version:
 - [Testing](#testing)
 - [Telegram bot](#telegram-bot)
 - [Documentation](#documentation)
+- [Working with an AI assistant](#working-with-an-ai-assistant)
 - [Submitting a pull request](#submitting-a-pull-request)
 - [How we merge and credit](#how-we-merge-and-credit)
 - [License](#license)
@@ -370,6 +371,48 @@ The bot is a full aiogram 3.x interface, not just a notification channel.
 - In code, prefer a comment that says *why* over one that says *what*. If you
   tried an approach and rejected it, leave one line saying so next to the code
   that won — the repository only keeps the winner otherwise.
+
+## Working with an AI assistant
+
+Coding agents are welcome here — as the author of a PR and as the maintainer's
+own daily tools. What the repository gives them:
+
+- **`CLAUDE.md`** — the engineering guide: architecture, the invariants that
+  must not be broken, the commands that actually verify a change, and the
+  checklists for adding an endpoint, a column, a permission or a translation.
+  Claude Code loads it by itself; **`AGENTS.md`** points every other tool at it.
+  Read it before the first change, not after the first failing test.
+- **A code graph.** Every release attaches `bamdude-code-graph-<version>.json.gz`
+  (and a `.report.md` overview) — the functions, classes and cross-file
+  relationships of the whole repository, clustered into communities. Gunzip it
+  to `graphify-out/graph.json` at the repo root and, with `pip install graphifyy`,
+  ask `graphify query "<question>"` before grepping; `graphify update .`
+  refreshes it after your edits, with no API key.
+- **A knowledge base.** Design decisions, rejected alternatives and known traps
+  live in an Obsidian vault (`bamdude.obsidian`) that is being prepared for
+  publication; the `Vault:` pointers in `CLAUDE.md` are paths inside it.
+- **`.mcp.example.json`** — the MCP servers the maintainer wires into Claude
+  Code (filesystem, GitHub, Playwright, the SQLite database, the vault), with
+  placeholders where a token goes. Copy it to `.mcp.json` (ignored) and keep
+  what you use.
+
+House rules for an agent-made change are the same as for a human one; these
+are the ones agents get wrong, so they are spelled out:
+
+- **Say so in the PR.** One line — which assistant, and what you checked
+  yourself. It changes how the review reads, not whether the PR is accepted.
+- **Tests are run, not described.** "Tests should pass" means they were not
+  run. Paste the command you ran; CI runs it again.
+- **No drive-by reformatting.** Touch the lines the change needs. A diff that
+  re-wraps a file it does not otherwise change is asked to be split.
+- **One change per PR.** An agent's habit of also fixing three things it
+  noticed on the way is exactly what "unrelated cleanup is welcome in its own
+  PR" is about.
+- **Invariants are not suggestions.** If a change needs to break something
+  `CLAUDE.md` says must not be broken, the PR description names which one and
+  why — that is a design conversation, not a code review.
+- **The guide is code.** A sentence in `CLAUDE.md` the code no longer agrees
+  with is a bug; fix it in the same PR as the code.
 
 ## Submitting a pull request
 
