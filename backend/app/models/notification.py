@@ -219,5 +219,27 @@ _M045_SHIM_COLUMNS = (
     "on_queue_job_failed",
     "on_queue_completed",
 )
+# ``info["migration_shim"]`` marks every one of these as NOT part of the
+# canonical schema: ``db_portable.conform_imported_schema`` adds the columns
+# a moved database lacks against the models, and without the mark it put
+# all 24 flags and ``printer_id`` back the moment m157 had dropped them
+# (measured 2026-09-09).
 for _shim_name in _M045_SHIM_COLUMNS:
-    NotificationProvider.__table__.append_column(Column(_shim_name, Boolean))
+    NotificationProvider.__table__.append_column(Column(_shim_name, Boolean, info={"migration_shim": True}))
+
+# ⚠️ ``printer_id`` is here for the same reason, and it was missing. m157 turns
+# a provider's single-printer binding into the ``printer_ids`` list, guarded by
+# ``column_exists(..., "printer_id")``. On a SQLite -> PostgreSQL move the
+# schema is built by ``create_all`` FIRST and the import copies only the
+# columns that schema has, so without this the column never arrives, the guard
+# is False, and the conversion silently does not happen.
+#
+# The binding was then lost in the worst direction: ``printer_ids IS NULL``
+# means "every printer", so a channel scoped to one machine came out of the
+# move notifying about the whole farm. Verified on a real server before and
+# after this line (2026-09-09).
+#
+# No ForeignKey: this is a transient carrier that m157 drops at its own point
+# in the chain, and an FK would outlive the column in the metadata other
+# migrations reason about.
+NotificationProvider.__table__.append_column(Column("printer_id", Integer, info={"migration_shim": True}))

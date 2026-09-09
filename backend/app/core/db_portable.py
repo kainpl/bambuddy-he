@@ -6,11 +6,12 @@ Auto-migration transfers data from local SQLite to PostgreSQL on first PG start.
 """
 
 import logging
+import re
 import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-from sqlalchemy import text
+from sqlalchemy import MetaData, text
 
 logger = logging.getLogger(__name__)
 
@@ -148,10 +149,512 @@ async def _export_pg_to_sqlite(engine, metadata, output_path: Path) -> None:
     logger.info("PostgreSQL exported to portable SQLite: %s", output_path)
 
 
-async def import_sqlite_to_postgres(engine, metadata, sqlite_path: Path) -> int:
-    """Import data from a SQLite file into the current PostgreSQL database.
+def _pg_predicate(sql: str, booleans: set[str]) -> str:
+    """A SQLite boolean test, spelled for PostgreSQL.
 
-    Used for cross-database restore and auto-migration.
+    SQLite has no boolean type, so its migrations wrote ``is_active = 1`` and
+    ``auto_link_existing_accounts = 0`` — and reflection hands those back
+    verbatim, inside CHECK constraints and partial-index WHERE clauses.
+    PostgreSQL has no ``boolean = integer`` operator and refuses the DDL
+    (measured on three real files, 2026-09-09). Only the table's own boolean
+    columns are rewritten, and only against a bare or quoted 0/1; everything
+    else in the predicate is left exactly as the file had it.
+    """
+    if not booleans:
+        return sql
+    names = "|".join(re.escape(c) for c in sorted(booleans, key=len, reverse=True))
+    pattern = re.compile(r"(?<![\w.])(" + names + r")\s*(=|!=|<>)\s*'?([01])'?(?![\w'])")
+    return pattern.sub(lambda m: f"{m.group(1)} {m.group(2)} {'true' if m.group(3) == '1' else 'false'}", sql)
+
+
+def _reflect_sqlite_schema(sqlite_path: Path, models_metadata) -> MetaData:
+    """The SQLite file's OWN schema, translated for PostgreSQL.
+
+    ⚠️ This replaced ``models_metadata.create_all``, and the difference is the
+    whole point. The models describe the schema at the newest migration; a
+    user's file is at whatever migration it last ran. Building the target from
+    the models and then copying "the columns that fit" silently discarded every
+    column and table the models had since retired — and those are precisely
+    the SOURCES the later migrations convert from. Measured 2026-09-09 on a
+    real server: a project's file links, parts and plan vanished (m158's whole
+    input), a channel's printer binding vanished (m157's ``printer_id``), and
+    then the entire chain re-ran from m001 because ``_migrations`` was skipped
+    too — which is how a dialect fault in m157 could take a tester's install
+    down at all.
+
+    So: reflect the file, import it at its own level WITH ``_migrations``, and
+    ``init_db`` carries on from the next migration exactly as a SQLite upgrade
+    would. What is translated, and why each:
+
+    * A column the current model still declares takes the MODEL's type —
+      every one, not a chosen few. SQLite enforces neither a ``VARCHAR``
+      width nor a ``BOOLEAN``, so an upgraded file still says
+      ``key_hash VARCHAR(64)`` from the SHA-256 days under 87-character
+      pbkdf2 hashes, and ``is_active INTEGER`` under a model ``Boolean`` —
+      PostgreSQL would refuse the row for the first and the partial index
+      ``WHERE is_active = TRUE`` for the second (measured on four real files,
+      2026-09-09). The model is also how ``Column(JSON)`` comes out ``json``
+      rather than the ``TEXT`` SQLite stored it as. A column the models no
+      longer know keeps its reflected type, with ``DATETIME`` → ``TIMESTAMP``
+      and ``BLOB`` → ``BYTEA`` (PostgreSQL has neither spelling): it is on
+      its way to being converted and dropped by a migration, which is the
+      only reader it has left.
+    * A boolean's ``DEFAULT 0|1`` becomes ``false|true``, and the boolean
+      tests inside CHECKs and partial-index predicates likewise — see
+      ``_pg_predicate``.
+    * ``INTEGER PRIMARY KEY`` reflects with ``autoincrement="auto"`` and
+      renders ``SERIAL`` — the ``<table>_id_seq`` names the sequence reset in
+      Phase 3 already expects.
+
+    Foreign keys are reflected and emitted as-is; Phase 1 below drops them
+    from the catalogue for the load and Phase 3 restores them, so load order
+    does not matter. Reflection cannot carry an expression index (it warns
+    and skips), which ``conform_imported_schema`` covers after the chain.
+    """
+    from sqlalchemy import TIMESTAMP, Boolean, CheckConstraint, MetaData, create_engine, text as sa_text
+    from sqlalchemy.dialects.postgresql import BYTEA
+    from sqlalchemy.schema import DefaultClause
+    from sqlalchemy.types import DateTime, LargeBinary, _Binary
+
+    reflected = MetaData()
+    sync_engine = create_engine(f"sqlite:///{sqlite_path}")
+    try:
+        reflected.reflect(bind=sync_engine)
+    finally:
+        sync_engine.dispose()
+
+    for name in list(reflected.tables):
+        if name.startswith("sqlite_") or name.startswith("archive_fts"):
+            reflected.remove(reflected.tables[name])
+            continue
+        table = reflected.tables[name]
+        model_table = models_metadata.tables.get(name)
+        for column in table.columns:
+            model_col = model_table.columns.get(column.name) if model_table is not None else None
+            if model_col is not None:
+                column.type = model_col.type.copy()
+            elif isinstance(column.type, DateTime):
+                column.type = TIMESTAMP()
+            elif isinstance(column.type, (LargeBinary, _Binary)):
+                column.type = BYTEA()
+
+            # SQLite-first migrations wrote ``BOOLEAN DEFAULT 0|1``; PostgreSQL
+            # refuses an integer default on a boolean column ("default
+            # expression is of type integer") and aborts the whole CREATE. Same
+            # rule ``helpers._to_postgres_column_def`` applies to add_column,
+            # here per reflected column — including the quoted spellings a
+            # ``create_all`` on SQLite leaves behind ('0', '1', 'true').
+            # ``DefaultClause``, not a bare TextClause: that is the shape
+            # reflection produces and the only one the DDL compiler (and
+            # SQLAlchemy's own repr) can read — a bare clause has no ``.arg``
+            # and refuses ``__bool__``.
+            if isinstance(column.type, Boolean) and column.server_default is not None:
+                raw = str(getattr(column.server_default, "arg", column.server_default)).strip().strip("'").lower()
+                if raw in ("0", "false", "f"):
+                    column.server_default = DefaultClause(sa_text("false"))
+                elif raw in ("1", "true", "t"):
+                    column.server_default = DefaultClause(sa_text("true"))
+
+        # The predicates the file carries — CHECK constraints and the WHERE of
+        # a partial index — in PostgreSQL's spelling of a boolean test (see
+        # _pg_predicate). A partial index reflects with ``sqlite_where`` only,
+        # which PostgreSQL DDL ignores: without the copy below a UNIQUE partial
+        # index would come across as a UNIQUE index over the whole table.
+        booleans = {c.name for c in table.columns if isinstance(c.type, Boolean)}
+        for con in [c for c in table.constraints if isinstance(c, CheckConstraint)]:
+            table.constraints.discard(con)
+            CheckConstraint(sa_text(_pg_predicate(str(con.sqltext), booleans)), name=con.name, table=table)
+        for index in table.indexes:
+            where = index.kwargs.get("sqlite_where")
+            if where is not None:
+                index.dialect_options["postgresql"]["where"] = sa_text(_pg_predicate(str(where), booleans))
+
+    # ⚠️ The foreign keys stay ON the reflected schema. Stripping them from the
+    # Table objects was tried and does not work: ``create_all`` emits the FKs
+    # of the cyclic group (auto_queue_items ↔ library_files ↔ library_folders ↔
+    # print_archives ↔ print_queue) as separate ``ALTER TABLE ... ADD`` built
+    # from the metadata's own FK registry, which that surgery never reaches —
+    # the compiled ``CreateTable`` looked clean and the catalogue still had
+    # every constraint (measured on a real file, 2026-09-09). Phase 1 drops
+    # them from the CATALOGUE after creation and Phase 3 puts them back from
+    # ``pg_get_constraintdef``, exactly as before; that is immune to how
+    # SQLAlchemy chooses to emit DDL.
+    return reflected
+
+
+async def _restore_model_indexes(conn, models_metadata) -> None:
+    """Create any model-declared index the reflected DDL could not carry.
+
+    SQLAlchemy skips expression-based indexes on reflection (it says so, once,
+    as a warning). On a file already at the newest migration nothing would ever
+    recreate it — every ``CREATE INDEX IF NOT EXISTS`` in the chain has already
+    run. ``checkfirst`` keeps this a no-op for everything that did come across.
+    """
+    from sqlalchemy import inspect as sqla_inspect
+    from sqlalchemy.sql import visitors
+    from sqlalchemy.sql.elements import ColumnClause
+
+    def _do(sync_conn):
+        inspector = sqla_inspect(sync_conn)
+        existing_tables = set(inspector.get_table_names())
+        for table in models_metadata.sorted_tables:
+            if table.name not in existing_tables:
+                continue
+            # ⚠️ The columns that exist in PostgreSQL right now, not the
+            # model's. This used to read ``table.columns`` (the model), which
+            # made the check below trivially true and, when this still ran
+            # BEFORE the chain, created
+            # ``ix_product_part_stock_movements_project_line_id`` on a database
+            # three migrations short of having that column (measured on a real
+            # 31-Aug file, 2026-09-09). It runs after the chain now, so the two
+            # sets normally agree; the guard stays because it is cheap and the
+            # failure it prevents is a boot that stops.
+            present = {c["name"] for c in inspector.get_columns(table.name)}
+            for index in table.indexes:
+                # Every column the index touches, plain or inside an expression
+                # (``COALESCE(a, b)`` names two), must already exist here.
+                # ``visitors.iterate`` walks the expression tree and yields the
+                # column clauses inside it; a plain Column yields itself.
+                needed = {
+                    node.name
+                    for expr in index.expressions
+                    for node in visitors.iterate(expr)
+                    if isinstance(node, ColumnClause) and getattr(node, "name", None)
+                }
+                if needed and needed <= present:
+                    index.create(sync_conn, checkfirst=True)
+
+    await conn.run_sync(_do)
+
+
+async def _add_foreign_key(engine, tbl, label, ddl, parent, ccols, pcols, set_null, repaired) -> str | None:
+    """Run one ``ALTER TABLE … ADD … FOREIGN KEY``, repairing the rows that forbid it.
+
+    A failure here is NOT cosmetic: it means the rows contain references the
+    constraint forbids. SQLite does not enforce foreign keys unless
+    ``PRAGMA foreign_keys=ON`` is set per connection (this codebase never
+    does), so a long-lived database accumulates these silently — a plan item
+    for a deleted project, say, which no screen can reach anyway. The repair
+    is what the constraint would have done had it been enforced: an
+    ``ON DELETE SET NULL`` reference is nulled, any other orphan row is
+    deleted (NULL references are legal and left alone). Say how many and
+    from where, then retry once. Refusing to migrate over unreachable junk
+    would be worse; dropping it without a word would be worse still.
+
+    Returns the error text if the constraint still cannot be added.
+    """
+    for attempt in (1, 2):
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(text(ddl))
+            return None
+        except Exception as e:  # noqa: BLE001
+            if attempt == 2:
+                logger.error("Could not add FK %s on %s: %s", label, tbl, e)
+                return f"{tbl}.{label}: {e}"
+            on = " AND ".join(f"p.{pc} = c.{cc}" for cc, pc in zip(ccols, pcols, strict=True))
+            notnull = " AND ".join(f"c.{cc} IS NOT NULL" for cc in ccols)
+            orphans = f"WHERE {notnull} AND NOT EXISTS (SELECT 1 FROM {parent} p WHERE {on})"
+            if set_null:
+                assigns = ", ".join(f"{cc} = NULL" for cc in ccols)
+                repair = f"UPDATE {tbl} c SET {assigns} {orphans}"  # noqa: S608
+            else:
+                repair = f"DELETE FROM {tbl} c {orphans}"  # noqa: S608
+            async with engine.begin() as conn:
+                res = await conn.execute(text(repair))
+            if res.rowcount:
+                verb = "Nulled" if set_null else "Purged"
+                repaired.append(f"{tbl}: {res.rowcount} row(s) referencing missing {parent} ({verb.lower()})")
+                logger.warning("%s %d orphaned row(s) in %s (dangling %s reference)", verb, res.rowcount, tbl, parent)
+    return None
+
+
+def _fk_rule(value) -> str:
+    """``ondelete``/``onupdate`` normalised: PostgreSQL reports the default as NO ACTION, the models say None."""
+    return (value or "NO ACTION").upper()
+
+
+def _model_fk_rules(models_metadata) -> dict[tuple[str, tuple[str, ...]], tuple[str, str]]:
+    """(table, constrained columns) -> (ON DELETE, ON UPDATE) as the models declare them."""
+    rules = {}
+    for table in models_metadata.tables.values():
+        for fk in table.foreign_key_constraints:
+            rules[(table.name, tuple(c.name for c in fk.columns))] = (_fk_rule(fk.ondelete), _fk_rule(fk.onupdate))
+    return rules
+
+
+async def _apply_ddl(engine, what: str, items: list[tuple[str, str]]) -> None:
+    """Run each ``(label, statement)`` in its own transaction; one summary line, one error line per failure.
+
+    Never raises: by the time this runs the import is done and the file
+    renamed, so a raise would stop every later boot with nothing left to
+    retry. Each thing that could not be added is named, and the database
+    goes on without it — exactly as its SQLite did.
+    """
+    done, failed = [], []
+    for label, sql in items:
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(text(sql))
+            done.append(label)
+        except Exception as e:  # noqa: BLE001
+            failed.append(f"{label}: {e}")
+    if done:
+        logger.info("Conformed to the models — %s (%d): %s", what, len(done), "; ".join(done))
+    for f in failed:
+        logger.error("Could not conform to the models — %s: %s", what, f)
+
+
+async def _reconcile_columns(engine, models_metadata) -> None:
+    """Add every model column the database lacks, then match NOT NULL to the model.
+
+    A SQLite ``add_column`` cannot say NOT NULL without a default, and a
+    table a migration created by hand rarely repeats every NOT NULL the
+    model has — so an upgraded file is looser than a fresh one. Tightening
+    fails on a column that holds NULLs today, and that is reported and
+    left; loosening (the model went nullable, the file did not follow — the
+    ``password_hash`` of m002) always succeeds. Primary keys are never touched.
+    """
+    from sqlalchemy import inspect as sqla_inspect
+
+    ddl = engine.dialect.ddl_compiler(engine.dialect, None)
+
+    def _plan(sync_conn):
+        inspector = sqla_inspect(sync_conn)
+        existing = set(inspector.get_table_names())
+        adds, nulls = [], []
+        for table in models_metadata.tables.values():
+            if table.name not in existing:
+                continue
+            present = {c["name"]: c for c in inspector.get_columns(table.name)}
+            for col in table.columns:
+                if col.info.get("migration_shim"):
+                    # Declared for the ORM's sake mid-chain only (notification.py);
+                    # a migration drops it, and a fresh install ends without it.
+                    continue
+                if col.name not in present:
+                    adds.append(
+                        (
+                            f"{table.name}.{col.name}",
+                            f"ALTER TABLE {table.name} ADD COLUMN {ddl.get_column_specification(col)}",
+                        )
+                    )
+                elif not col.primary_key and bool(present[col.name]["nullable"]) != bool(col.nullable):
+                    verb = "DROP" if col.nullable else "SET"
+                    nulls.append(
+                        (
+                            f"{table.name}.{col.name} {verb} NOT NULL",
+                            f"ALTER TABLE {table.name} ALTER COLUMN {col.name} {verb} NOT NULL",
+                        )
+                    )
+        return adds, nulls
+
+    async with engine.connect() as conn:
+        adds, nulls = await conn.run_sync(_plan)
+    await _apply_ddl(engine, "columns the models declare and the file did not carry", adds)
+    await _apply_ddl(engine, "NOT NULL as the models declare it", nulls)
+
+
+async def _reconcile_unique_constraints(engine, models_metadata) -> None:
+    """Add every model UNIQUE the database does not enforce, by column set (a unique index counts)."""
+    from sqlalchemy import UniqueConstraint, inspect as sqla_inspect
+    from sqlalchemy.schema import AddConstraint
+
+    def _plan(sync_conn):
+        inspector = sqla_inspect(sync_conn)
+        existing = set(inspector.get_table_names())
+        items = []
+        for table in models_metadata.tables.values():
+            if table.name not in existing:
+                continue
+            present = {c["name"] for c in inspector.get_columns(table.name)}
+            have = {tuple(u["column_names"]) for u in inspector.get_unique_constraints(table.name)}
+            have |= {tuple(i["column_names"]) for i in inspector.get_indexes(table.name) if i.get("unique")}
+            for con in table.constraints:
+                if not isinstance(con, UniqueConstraint):
+                    continue
+                cols = tuple(c.name for c in con.columns)
+                if cols not in have and set(cols) <= present:
+                    items.append(
+                        (f"{table.name}({', '.join(cols)})", str(AddConstraint(con).compile(dialect=engine.dialect)))
+                    )
+        return items
+
+    async with engine.connect() as conn:
+        items = await conn.run_sync(_plan)
+    await _apply_ddl(engine, "UNIQUE constraints", items)
+
+
+async def _reconcile_foreign_keys(engine, models_metadata) -> None:
+    """Every model foreign key, with the model's ON DELETE / ON UPDATE rule.
+
+    Matched by (table, constrained columns). One the database lacks is added
+    (m144 ``smart_sensors.printer_id``, m166 ``products.origin_file_id`` —
+    bare ``add_column("… INTEGER")``, because SQLite cannot put a constraint
+    on an existing table without rebuilding it). One that exists with a
+    different target or rule — SQLite never enforced the rule, so migrations
+    rarely bothered to write it — is dropped and re-added the model's way.
+    Rows that forbid a key are repaired by that same rule (``_add_foreign_key``).
+    The name is PostgreSQL's own (``<table>_<col>_fkey``, what a fresh
+    ``create_all`` gets).
+    """
+    from sqlalchemy import inspect as sqla_inspect
+    from sqlalchemy.schema import AddConstraint
+
+    def _plan(sync_conn):
+        inspector = sqla_inspect(sync_conn)
+        existing = set(inspector.get_table_names())
+        items = []
+        for table in models_metadata.tables.values():
+            if table.name not in existing:
+                continue
+            present = {c["name"] for c in inspector.get_columns(table.name)}
+            have = {tuple(fk["constrained_columns"]): fk for fk in inspector.get_foreign_keys(table.name)}
+            for fk in table.foreign_key_constraints:
+                cols = tuple(c.name for c in fk.columns)
+                parent = fk.referred_table.name
+                pcols = [e.column.name for e in fk.elements]
+                if not set(cols) <= present or parent not in existing:
+                    continue
+                current = have.get(cols)
+                drop = None
+                if current is not None:
+                    same = (
+                        current["referred_table"] == parent
+                        and list(current["referred_columns"]) == pcols
+                        and _fk_rule(current.get("options", {}).get("ondelete")) == _fk_rule(fk.ondelete)
+                        and _fk_rule(current.get("options", {}).get("onupdate")) == _fk_rule(fk.onupdate)
+                    )
+                    if same:
+                        continue
+                    drop = current["name"]
+                items.append((table.name, list(cols), parent, pcols, fk, drop))
+        return items
+
+    async with engine.connect() as conn:
+        items = await conn.run_sync(_plan)
+
+    done, failed, repaired = [], [], []
+    for tbl, cols, parent, pcols, fk, drop in items:
+        label = f"{tbl}({', '.join(cols)}) -> {parent}" + (f" [was {drop}]" if drop else "")
+        if drop:
+            try:
+                async with engine.begin() as conn:
+                    await conn.execute(text(f'ALTER TABLE {tbl} DROP CONSTRAINT "{drop}"'))
+            except Exception as e:  # noqa: BLE001
+                failed.append(f"{label}: {e}")
+                continue
+        ddl = str(AddConstraint(fk).compile(dialect=engine.dialect))
+        err = await _add_foreign_key(
+            engine, tbl, label, ddl, parent, cols, pcols, _fk_rule(fk.ondelete) == "SET NULL", repaired
+        )
+        (failed if err else done).append(err or label)
+    if done:
+        logger.info("Conformed to the models — foreign keys (%d): %s", len(done), "; ".join(done))
+    if repaired:
+        logger.warning("Rows the imported file was carrying against those keys: %s", "; ".join(repaired))
+    for f in failed:
+        logger.error("Could not conform to the models — foreign key %s", f)
+
+
+async def _reconcile_check_constraints(engine, models_metadata) -> None:
+    """Add every named CHECK the models declare and the database does not have.
+
+    A SQLite upgrade cannot add a CHECK to an existing table without
+    rebuilding it, so a migration that declared one for fresh installs only
+    (``ck_oidc_icon_triplet_co_null``) leaves the upgraded file without it.
+    Matched by name; an unnamed model CHECK is not matched and not added.
+    Rows that violate one are reported, not repaired — there is no right
+    repair to guess.
+    """
+    from sqlalchemy import CheckConstraint, inspect as sqla_inspect
+    from sqlalchemy.schema import AddConstraint
+
+    def _plan(sync_conn):
+        inspector = sqla_inspect(sync_conn)
+        existing = set(inspector.get_table_names())
+        items = []
+        for table in models_metadata.tables.values():
+            if table.name not in existing:
+                continue
+            have = {c["name"] for c in inspector.get_check_constraints(table.name)}
+            for con in table.constraints:
+                if isinstance(con, CheckConstraint) and con.name and con.name not in have:
+                    items.append((f"{table.name}.{con.name}", str(AddConstraint(con).compile(dialect=engine.dialect))))
+        return items
+
+    async with engine.connect() as conn:
+        items = await conn.run_sync(_plan)
+    await _apply_ddl(engine, "CHECK constraints", items)
+
+
+# Set by a successful ``import_sqlite_to_postgres``, consumed by
+# ``conform_imported_schema`` once the migration chain has run after it.
+_conform_pending = False
+
+
+async def conform_imported_schema(engine, models_metadata) -> None:
+    """After an import and the chain that followed it: what a fresh install has, the moved one gets.
+
+    A file that upgraded through the migrations is the models MINUS
+    whatever a migration never did on SQLite, and PostgreSQL-only work a
+    migration did do — but on SQLite, where it counted as applied:
+
+    * a foreign key added as a bare ``add_column("… INTEGER")``, or written
+      without the ``ON DELETE`` rule SQLite would not have enforced anyway;
+    * a NOT NULL, UNIQUE or named CHECK that ``add_column`` / a hand-written
+      ``CREATE TABLE`` left out;
+    * a column that exists for PostgreSQL only — ``print_archives.search_vector``,
+      with its GIN index, trigger function and trigger, which m001 creates
+      on PostgreSQL and which archive search on PostgreSQL queries directly;
+    * an expression index reflection could not carry.
+
+    Measured against a fresh ``create_all`` + chain on the same PostgreSQL
+    (2026-09-09): after this pass the two schemas differ in nothing that
+    changes behaviour. Runs exactly once, after the chain that followed an
+    ``import_sqlite_to_postgres`` in this process — never on an ordinary
+    boot: migrations are frozen, and a working install is not repaired
+    behind its back.
+    """
+    global _conform_pending
+    if not _conform_pending:
+        return
+    _conform_pending = False
+
+    # m001's PostgreSQL half: the tsvector column, its index, the trigger
+    # function and the trigger, plus the backfill — every statement of it is
+    # idempotent, which is why the migration's own function is called rather
+    # than copied. On the file m001 is "applied", but it was applied on
+    # SQLite, where it built an FTS5 table that stayed behind.
+    from backend.app.migrations.m001_bamdude_baseline import _setup_postgres_fts
+
+    async with engine.begin() as conn:
+        await _setup_postgres_fts(conn)
+    logger.info("Conformed to the models — PostgreSQL archive search (tsvector, index, trigger)")
+
+    await _reconcile_columns(engine, models_metadata)
+    await _reconcile_unique_constraints(engine, models_metadata)
+    await _reconcile_foreign_keys(engine, models_metadata)
+    async with engine.begin() as conn:
+        await _restore_model_indexes(conn, models_metadata)
+    await _reconcile_check_constraints(engine, models_metadata)
+
+
+def _request_conform() -> None:
+    global _conform_pending
+    _conform_pending = True
+
+
+async def import_sqlite_to_postgres(engine, metadata, sqlite_path: Path) -> int:
+    """Import a SQLite file into PostgreSQL at the FILE's migration level.
+
+    Used for the first-start move and for restoring a SQLite backup. The
+    schema is reflected from the file (``_reflect_sqlite_schema``), the rows
+    are copied verbatim, ``_migrations`` comes along, and the caller's
+    ``init_db`` then applies only what the file had not yet seen. ``metadata``
+    is the models' metadata, consulted for column TYPES only — never for which
+    tables or columns exist; that is the file's business.
+
     Drops and recreates tables without FKs, imports data, then restores FKs.
 
     Returns number of tables imported.
@@ -159,16 +662,11 @@ async def import_sqlite_to_postgres(engine, metadata, sqlite_path: Path) -> int:
     src = sqlite3.connect(str(sqlite_path))
     src.row_factory = sqlite3.Row
 
-    # Get source tables (skip internal/FTS)
-    cursor = src.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' "
-        "AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'archive_fts%' "
-        "AND name != '_migrations'"
-    )
-    src_tables = {row["name"] for row in cursor.fetchall()}
-    pg_tables = set(metadata.tables.keys())
-    tables_to_import = src_tables & pg_tables
-    sorted_tables = [t.name for t in metadata.sorted_tables if t.name in tables_to_import]
+    # The schema to build is the file's own. ``_migrations`` is deliberately
+    # IN: it is what lets the chain resume at the right place instead of
+    # replaying from m001 against data that has already been through it.
+    reflected = _reflect_sqlite_schema(sqlite_path, metadata)
+    sorted_tables = [t.name for t in reflected.sorted_tables]
 
     # Phase 1: Drop and recreate the schema, then strip foreign keys IN THE
     # DATABASE before loading data.
@@ -216,12 +714,16 @@ async def import_sqlite_to_postgres(engine, metadata, sqlite_path: Path) -> int:
             )
         else:
             await conn.run_sync(metadata.drop_all)
-        await conn.run_sync(metadata.create_all)
+            await conn.run_sync(reflected.drop_all)
+        # The file's schema, at the file's level — see _reflect_sqlite_schema.
+        await conn.run_sync(reflected.create_all)
 
         # Now strip the foreign keys from the catalogue itself, remembering each
         # definition verbatim so Phase 3 can put it back exactly as PostgreSQL
         # rendered it. ``pg_get_constraintdef`` gives us the full
-        # ``FOREIGN KEY (...) REFERENCES ... ON DELETE ...`` clause.
+        # ``FOREIGN KEY (...) REFERENCES ... ON DELETE ...`` clause. This is the
+        # one place FKs are handled — see the note at the end of
+        # ``_reflect_sqlite_schema`` for why it cannot be done on the metadata.
         saved_db_fks = []
         if is_postgres():
             rows = (
@@ -254,9 +756,10 @@ async def import_sqlite_to_postgres(engine, metadata, sqlite_path: Path) -> int:
             if not rows:
                 continue
 
-            # Filter to columns that exist in PG table
+            # Every source column exists in PostgreSQL now — the target IS the
+            # file's schema. The intersection stays as a belt-and-braces check.
             src_columns = rows[0].keys()
-            pg_table = metadata.tables.get(table_name)
+            pg_table = reflected.tables.get(table_name)
             if pg_table is None:
                 continue
             pg_columns = {c.name for c in pg_table.columns}
@@ -329,60 +832,38 @@ async def import_sqlite_to_postgres(engine, metadata, sqlite_path: Path) -> int:
 
     src.close()
 
-    # Phase 3: Put the foreign keys back, exactly as they were.
-    #
-    # A failure here is NOT cosmetic: it means the imported rows contain
-    # references the constraint forbids. SQLite does not enforce foreign keys
-    # unless ``PRAGMA foreign_keys=ON`` is set per connection, so a legacy
-    # database can genuinely carry orphans that PostgreSQL will refuse. Log each
-    # one by name and raise — a database silently missing constraints is a worse
-    # outcome than a migration that stops and says why.
+    # Phase 3: Put the foreign keys back, exactly as they were. One that the
+    # rows forbid is repaired the way the key itself would have — see
+    # _add_foreign_key — and one that still fails stops the import: a database
+    # silently missing constraints is a worse outcome than a migration that
+    # stops and says why.
     if is_postgres():
-        failed, purged = [], []
+        failed, repaired = [], []
+        model_rules = _model_fk_rules(metadata)
         for tbl, conname, cdef, parent, ccols, pcols in saved_db_fks:
-            for attempt in (1, 2):
-                try:
-                    async with engine.begin() as fk_conn:
-                        await fk_conn.execute(text(f'ALTER TABLE {tbl} ADD CONSTRAINT "{conname}" {cdef}'))
-                    break
-                except Exception as e:  # noqa: BLE001
-                    if attempt == 2:
-                        failed.append(f"{tbl}.{conname}: {e}")
-                        logger.error("Could not restore FK %s on %s: %s", conname, tbl, e)
-                        break
-                    # First failure means the source carries rows pointing at a
-                    # parent that no longer exists. SQLite does not enforce
-                    # foreign keys unless PRAGMA foreign_keys=ON, so a long-lived
-                    # database accumulates these silently — a plan item for a
-                    # deleted project, say, which no screen can reach anyway.
-                    # Delete exactly those rows (NULL references are legal and
-                    # left alone), say how many and from where, then retry once.
-                    # Refusing to migrate over unreachable junk would be worse;
-                    # dropping it without a word would be worse still.
-                    on = " AND ".join(f"p.{pc} = c.{cc}" for cc, pc in zip(ccols, pcols, strict=True))
-                    notnull = " AND ".join(f"c.{cc} IS NOT NULL" for cc in ccols)
-                    async with engine.begin() as fk_conn:
-                        res = await fk_conn.execute(
-                            text(
-                                f"DELETE FROM {tbl} c WHERE {notnull} "  # noqa: S608
-                                f"AND NOT EXISTS (SELECT 1 FROM {parent} p WHERE {on})"
-                            )
-                        )
-                        if res.rowcount:
-                            purged.append(f"{tbl}: {res.rowcount} row(s) referencing missing {parent}")
-                            logger.warning(
-                                "Purged %d orphaned row(s) from %s (dangling %s reference)",
-                                res.rowcount,
-                                tbl,
-                                parent,
-                            )
+            ddl = f'ALTER TABLE {tbl} ADD CONSTRAINT "{conname}" {cdef}'
+            # The repair follows the MODEL's ON DELETE rule for this key where
+            # the model still has it — the file's own spelling rarely carries
+            # one (SQLite never enforced it), and conform_imported_schema is
+            # about to rewrite the key the model's way regardless.
+            file_rule = "SET NULL" if "ON DELETE SET NULL" in cdef.upper() else ""
+            rule = model_rules.get((tbl, tuple(ccols)), (file_rule, ""))[0]
+            err = await _add_foreign_key(engine, tbl, conname, ddl, parent, ccols, pcols, rule == "SET NULL", repaired)
+            if err:
+                failed.append(err)
         if failed:
             raise RuntimeError(
                 f"{len(failed)} foreign key(s) could not be restored after import: {'; '.join(failed[:5])}"
             )
         logger.info("Restored %d foreign keys", len(saved_db_fks))
-        if purged:
-            logger.warning("Import dropped orphaned rows the source database was carrying: %s", "; ".join(purged))
+        if repaired:
+            logger.warning("Import repaired orphaned rows the source database was carrying: %s", "; ".join(repaired))
+
+    # What the models declare beyond the file — indexes reflection could not
+    # carry, foreign keys no migration ever created — is added AFTER the
+    # pending migrations, when the tables they belong to exist. See
+    # conform_imported_schema.
+    _request_conform()
 
     logger.info("Cross-database import complete: %d tables imported", imported)
     return imported

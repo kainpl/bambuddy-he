@@ -234,6 +234,14 @@ async def run_all_migrations(engine, session_factory) -> None:
     # Run all pending migrations sequentially
     await _run_pending(engine, session_factory)
 
+    # A SQLite file imported this boot arrived at ITS migration level and the
+    # chain has just brought it to the head; now add what the models declare
+    # and no migration ever created. A no-op on every other boot.
+    if not is_sqlite():
+        from backend.app.core.db_portable import conform_imported_schema
+
+        await conform_imported_schema(engine, Base.metadata)
+
     # Every boot, not once, and on every engine: the FILE is what matters, and a
     # PostgreSQL install with a stray bambuddy.db in its data directory deserves
     # the same sentence (two stat calls). See _warn_if_foreign_bambuddy_file.
