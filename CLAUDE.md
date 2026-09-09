@@ -15,9 +15,9 @@ BamDude — self-hosted print archive + farm management for Bambu Lab. Hard fork
 
 Architecture rationale, rejected alternatives and the "why" behind every
 invariant below are recorded in a separate Obsidian vault (`bamdude.obsidian`,
-maintained alongside this repo; publication is being prepared). The `Vault:`
-pointers in this file are paths inside it. Until it is public, the record a
-contributor can read is: the Key Invariants below, each migration's docstring,
+maintained alongside this repo and not public). The `Vault:` pointers in this
+file are paths inside it — for the maintainer. The record a contributor can
+read is: the Key Invariants below, each migration's docstring,
 `CONTRIBUTING.md`, and `CHANGELOG.md` — the changelog is written as prose that
 says what changed and why, not as a commit list.
 

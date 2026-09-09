@@ -389,8 +389,10 @@ own daily tools. What the repository gives them:
   ask `graphify query "<question>"` before grepping; `graphify update .`
   refreshes it after your edits, with no API key.
 - **A knowledge base.** Design decisions, rejected alternatives and known traps
-  live in an Obsidian vault (`bamdude.obsidian`) that is being prepared for
-  publication; the `Vault:` pointers in `CLAUDE.md` are paths inside it.
+  live in the maintainer's Obsidian vault (`bamdude.obsidian`), which is not
+  public; the `Vault:` pointers in `CLAUDE.md` are paths inside it. What a
+  contributor needs from it is in `CLAUDE.md` itself, the migration docstrings
+  and the CHANGELOG.
 - **`.mcp.example.json`** — the MCP servers the maintainer wires into Claude
   Code (filesystem, GitHub, Playwright, the SQLite database, the vault), with
   placeholders where a token goes. Copy it to `.mcp.json` (ignored) and keep
