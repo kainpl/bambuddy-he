@@ -48,9 +48,8 @@ would otherwise hold the same SQLite WAL. All of these default to a dry run.
 |---|---|
 | `prune_orphan_archive_files.py` | Reconciles `DATA_DIR/archive/` against the file columns of `print_archives` and `library_files`, and deletes what no row names. `--apply` to actually delete. Documented for users on the docs site. **SQLite only** — refuses on PostgreSQL and on an empty database. |
 | `normalize_db.py` | Rebuilds a SQLite database with the canonical schema by replaying `create_all` + every migration and copying the rows across. For a database that drifted structurally through SQLite's limited `ALTER TABLE`. **SQLite only, by design.** |
-| `backfill_archive_parts.py` | Seeds `archive_parts` for archives that predate m158 (products and orders). Dialect-agnostic — goes through the app's own session. |
+| `backfill_archive_parts.py` | Re-runs the `archive_parts` derivation for existing archives. ⚠️ Not an upgrade step — m158 populates them for everyone automatically; this is the **manual re-run** for a changed rule or for troubleshooting, and m158's own docstring says so. Idempotent: archives that already have rows are skipped. Dialect-agnostic. |
 | `merge_race_duplicate_archives.py` | One-shot: merges the duplicate `print_archives` rows that two orchestrators could create for one physical print before the single-dispatch refactor. The race is architecturally gone; this is for a database that still carries its leftovers. **SQLite only.** |
-| `update_archive_quantities.py` | One-shot, historical: fills `print_archives.quantity` from the object count in each 3MF. Only useful on an install older than parts tracking — a current one sets it when the archive is created. Kept because it still works and costs nothing; delete it when no such install can plausibly remain. |
 
 ## Bringing data in
 
