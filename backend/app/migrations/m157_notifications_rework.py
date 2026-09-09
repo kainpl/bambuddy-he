@@ -35,7 +35,14 @@ a ``DEBUG=true`` re-run after the fact is a no-op.
 
 from sqlalchemy import text
 
-from backend.app.migrations.helpers import add_column, column_exists, drop_column, recreate_table
+from backend.app.migrations.helpers import (
+    add_column,
+    as_json,
+    column_exists,
+    drop_column,
+    json_column_type,
+    recreate_table,
+)
 
 version = 157
 name = "notifications_rework"
@@ -89,7 +96,7 @@ async def upgrade(conn):
     await add_column(conn, "notification_providers", "progress_min_duration_minutes INTEGER")
 
     # --- 3: per-chat printer scope ---------------------------------------
-    await add_column(conn, "telegram_chats", "printer_ids TEXT")
+    await add_column(conn, "telegram_chats", f"printer_ids {json_column_type()}")
 
     # Copy a telegram provider's printer binding down onto the chats, then
     # clear it (only where the chat has no scope of its own yet). Guarded:
@@ -106,20 +113,23 @@ async def upgrade(conn):
         row = result.first()
         if row and row[0] is not None:
             await conn.execute(
-                text("UPDATE telegram_chats SET printer_ids = :scope WHERE printer_ids IS NULL").bindparams(
-                    scope=f"[{int(row[0])}]"
-                )
+                text(
+                    f"UPDATE telegram_chats SET printer_ids = {as_json(':scope')} WHERE printer_ids IS NULL"
+                ).bindparams(scope=f"[{int(row[0])}]")
             )
         await conn.execute(text("UPDATE notification_providers SET printer_id = NULL WHERE provider_type = 'telegram'"))
 
     # --- 3b: per-provider printer scope (non-telegram channels) ----------
-    await add_column(conn, "notification_providers", "printer_ids TEXT")
+    await add_column(conn, "notification_providers", f"printer_ids {json_column_type()}")
     if await column_exists(conn, "notification_providers", "printer_id"):
         # '[' || id || ']' is valid JSON for a one-element int list and works
-        # on both dialects (PG's textanycat casts the integer).
+        # on both dialects (PG's textanycat casts the integer). The result is
+        # ``text`` though, so PostgreSQL needs it cast before it lands in a json
+        # column — see ``as_json``.
+        one_element_list = "'[' || printer_id || ']'"
         await conn.execute(
             text(
-                "UPDATE notification_providers SET printer_ids = '[' || printer_id || ']' "
+                f"UPDATE notification_providers SET printer_ids = {as_json(one_element_list)} "
                 "WHERE printer_id IS NOT NULL AND printer_ids IS NULL"
             )
         )
@@ -128,7 +138,7 @@ async def upgrade(conn):
         # SQLite's ALTER DROP COLUMN refuses a column named by an FK.
 
     # --- 4: subscriptions become one JSON list ---------------------------
-    await add_column(conn, "notification_providers", "subscribed_events TEXT")
+    await add_column(conn, "notification_providers", f"subscribed_events {json_column_type()}")
 
     if not await column_exists(conn, "notification_providers", "on_print_start"):
         return  # already migrated (DEBUG re-run)
@@ -145,9 +155,9 @@ async def upgrade(conn):
     for provider_row in rows:
         enabled = [col for col, value in zip(present, provider_row[1:], strict=True) if value]
         await conn.execute(
-            text("UPDATE notification_providers SET subscribed_events = :events WHERE id = :id").bindparams(
-                events=json.dumps(sorted(enabled)), id=provider_row[0]
-            )
+            text(
+                f"UPDATE notification_providers SET subscribed_events = {as_json(':events')} WHERE id = :id"
+            ).bindparams(events=json.dumps(sorted(enabled)), id=provider_row[0])
         )
 
     for col in _LEGACY_EVENT_COLUMNS:
