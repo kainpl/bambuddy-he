@@ -96,8 +96,10 @@ operations.
    A beta **must** be marked pre-release, or GitHub shows it as *Latest* and
    displaces the stable.
 6. The `v*` tag triggers `docker-publish-tag.yml` (GHCR + Docker Hub,
-   `linux/amd64` + `linux/arm64`) and `windows-installer.yml` (attaches the
-   `.exe` to the release). Both call `require-green-ci.yml` first, whose rule is
+   `linux/amd64` + `linux/arm64`), `windows-installer.yml` (attaches the
+   `.exe` to the release) and `publish-code-graph.yml` (attaches the code graph,
+   ~3 MB gzipped, for anyone using an LLM assistant — it is a release asset
+   precisely so it never enters git history). Both call `require-green-ci.yml` first, whose rule is
    *"no CI run for this SHA failed"*, not *"some run succeeded"* — the
    duplicate-skipped run on `main` would satisfy the weaker rule.
 
