@@ -1140,7 +1140,13 @@ class SpoolGroupItem(BaseModel):
     ⚠️ No ``lot``: it stopped being a key on 2026-09-07 (an operator numbering
     each spool's lot individually got one group per spool), so a group may span
     lots and has no single one to report. The representative still carries its
-    own."""
+    own.
+
+    ⚠️ Members may be started (2026-09-10 — only a spool loaded in a printer
+    stays out of a group), so their remaining weights differ:
+    ``remaining_total`` and ``weight_used_total`` are the real sums over the
+    members, and a client must use them for the header figure rather than
+    multiply the representative's by ``group_count``."""
 
     material: str
     subtype: str
@@ -1150,6 +1156,8 @@ class SpoolGroupItem(BaseModel):
     label_weight: int
     group_count: int
     ids: list[int]
+    remaining_total: float
+    weight_used_total: float
     representative: SpoolListItem
 
 
@@ -1310,6 +1318,8 @@ async def list_spools(
                     label_weight=g["label_weight"],
                     group_count=g["group_count"],
                     ids=g["ids"],
+                    remaining_total=g["remaining_total"],
+                    weight_used_total=g["weight_used_total"],
                     representative=_spool_to_list_item(
                         g["representative"],
                         include_k_profiles=include_k_profiles,

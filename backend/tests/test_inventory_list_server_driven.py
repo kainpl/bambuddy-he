@@ -1048,8 +1048,10 @@ class TestCategoryFacetFilterRoundTrip:
 # InventoryPage.tsx:83-87) + ``group_count`` + complete member ``ids`` + the
 # min(id) row as representative, paged over GROUPS under the same
 # ``build_spool_filters`` list. The CLIENT code is the behavioral spec,
-# including its consumers (:1402-1439): used (``weight_used > 0``) or
-# assigned spools are NEVER merged — each stays its own singleton group.
+# including its consumers: a spool loaded in a printer (assigned) is NEVER
+# merged — it stays its own singleton group. A started spool DOES merge
+# (operator ruling 2026-09-10; before that ``weight_used > 0`` excluded too),
+# which is why a group reports the real remaining/used sums over its members.
 
 
 async def _groups(db_session, sort_by=None, limit=None, offset=0, **filter_kwargs):
@@ -1120,18 +1122,22 @@ class TestGroupedModeService:
         groups = await _groups(db_session)
         assert "lot" not in groups[0]
 
-    async def test_used_spool_never_merges(self, db_session):
-        """Client consumers (InventoryPage.tsx:1407-1424): only unused spools
-        are eligible — a used spool with an identical key stays its own row."""
+    async def test_a_started_spool_merges_and_the_group_sums_what_is_really_left(self, db_session):
+        """A started spool on the shelf groups with its full twins (2026-09-10);
+        the group's remaining/used figures are the sums over the members, not
+        the representative's figure times the count — the representative
+        (min id) is a full spool here, so the multiplication would say 3000."""
         fresh_a = await _spool(db_session, weight_used=0)
         fresh_b = await _spool(db_session, weight_used=0)
         used = await _spool(db_session, weight_used=500)
+        over = await _spool(db_session, weight_used=1200)  # past its label: contributes 0, never negative
 
         groups = await _groups(db_session)
-        assert len(groups) == 2
-        by_count = {g["group_count"]: g for g in groups}
-        assert by_count[2]["ids"] == sorted([fresh_a.id, fresh_b.id])
-        assert by_count[1]["ids"] == [used.id]
+        assert len(groups) == 1
+        assert groups[0]["ids"] == sorted([fresh_a.id, fresh_b.id, used.id, over.id])
+        assert groups[0]["representative"].id == fresh_a.id
+        assert groups[0]["remaining_total"] == 1000 + 1000 + 500 + 0
+        assert groups[0]["weight_used_total"] == 500 + 1200
 
     async def test_assigned_spool_never_merges(self, db_session, printer_factory):
         printer = await printer_factory()
@@ -1147,17 +1153,21 @@ class TestGroupedModeService:
         assert by_count[2]["ids"] == sorted([fresh_a.id, fresh_b.id])
         assert by_count[1]["ids"] == [assigned.id]
 
-    async def test_two_identical_ineligible_spools_stay_two_singles(self, db_session):
-        """Two USED spools sharing the whole key must NOT merge with each
+    async def test_two_identical_ineligible_spools_stay_two_singles(self, db_session, printer_factory):
+        """Two LOADED spools sharing the whole key must NOT merge with each
         other either (the client renders every ineligible spool individually)
         — the eligibility discriminator has to key them apart, not just apart
         from the eligible group."""
-        used_a = await _spool(db_session, weight_used=100)
-        used_b = await _spool(db_session, weight_used=100)
+        printer = await printer_factory()
+        loaded_a = await _spool(db_session, weight_used=100)
+        loaded_b = await _spool(db_session, weight_used=100)
+        db_session.add(SpoolAssignment(spool_id=loaded_a.id, printer_id=printer.id, ams_id=0, tray_id=0))
+        db_session.add(SpoolAssignment(spool_id=loaded_b.id, printer_id=printer.id, ams_id=0, tray_id=1))
+        await db_session.commit()
 
         groups = await _groups(db_session)
         assert len(groups) == 2
-        assert sorted(g["ids"][0] for g in groups) == sorted([used_a.id, used_b.id])
+        assert sorted(g["ids"][0] for g in groups) == sorted([loaded_a.id, loaded_b.id])
         assert await _group_total(db_session) == 2
 
     async def test_filters_apply_before_grouping(self, db_session):

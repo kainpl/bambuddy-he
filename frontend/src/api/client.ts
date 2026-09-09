@@ -5086,6 +5086,13 @@ export interface SpoolGroupItem {
   group_count: number;
   /** Complete member ids, ascending — group expansion + selection feed. */
   ids: number[];
+  /**
+   * Real sums over the members. Members may be started (only a spool loaded
+   * in a printer stays out of a group), so the header must read these rather
+   * than multiply the representative's figures by `group_count`.
+   */
+  remaining_total: number;
+  weight_used_total: number;
   /** The min(id) member, in the slim list projection. */
   representative: SpoolListItem;
 }

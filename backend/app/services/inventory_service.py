@@ -830,14 +830,23 @@ def _spool_group_key_exprs() -> dict[str, Any]:
 
 def _spool_group_single_id_expr():
     """The eligibility discriminator, joined into GROUP BY: NULL for a spool
-    the client would merge (unused AND unassigned), the spool's own id
-    otherwise. Eligible rows share the NULL and group by the key alone;
-    every ineligible row gets a unique value and therefore stays a singleton
-    group — including two ineligible twins, which the client also never
-    merged with each other (InventoryPage.tsx:1407-1424). The assignment
-    check is the same correlated EXISTS the ``assigned`` filter uses."""
+    the client would merge, the spool's own id otherwise. Eligible rows share
+    the NULL and group by the key alone; every ineligible row gets a unique
+    value and therefore stays a singleton group — including two ineligible
+    twins, which the client never merges with each other either. The
+    assignment check is the same correlated EXISTS the ``assigned`` filter uses.
+
+    ⚠️ Only a spool LOADED IN A PRINTER is ineligible (operator ruling
+    2026-09-10). ``weight_used > 0`` used to exclude as well — a started spool
+    was "its own", so a shelf of half-used twins never grouped — but the
+    operator wants the shelf grouped whatever the spools' fill, and only the
+    ones sitting in a slot kept apart, because those are the ones you need to
+    tell from each other. The consequence is that a group's members no longer
+    share one remaining weight: ``remaining_total`` / ``weight_used_total``
+    in the grouped subquery carry the real sums, and the client must read
+    those rather than multiply the representative's figure by the count."""
     assigned = select(SpoolAssignment.spool_id).where(SpoolAssignment.spool_id == Spool.id).exists()
-    return case((or_(Spool.weight_used > 0, assigned), Spool.id))
+    return case((assigned, Spool.id))
 
 
 def assert_group_sort_supported(sort_by: str | None) -> None:
@@ -870,12 +879,18 @@ def _spool_groups_subquery(filters: list):
     migrations helpers)."""
     keys = _spool_group_key_exprs()
     member_ids = func.array_agg(Spool.id) if is_postgres() else func.group_concat(Spool.id)
+    # Per-member remaining, clamped at zero exactly as the client clamps a
+    # single spool's (``Math.max(0, label_weight - weight_used)``) — a spool
+    # over-consumed past its label must not pull the group's total negative.
+    remaining = case((Spool.label_weight > Spool.weight_used, Spool.label_weight - Spool.weight_used), else_=0)
     return (
         select(
             *(expr.label(name) for name, expr in keys.items()),
             func.count().label("group_count"),
             func.min(Spool.id).label("rep_id"),
             member_ids.label("member_ids"),
+            func.sum(remaining).label("remaining_total"),
+            func.sum(Spool.weight_used).label("weight_used_total"),
         )
         .where(*filters)
         .group_by(*keys.values(), _spool_group_single_id_expr())
@@ -963,6 +978,8 @@ async def list_spool_groups(
             sub.c.label_weight,
             sub.c.group_count,
             sub.c.member_ids,
+            sub.c.remaining_total,
+            sub.c.weight_used_total,
         )
         .join(sub, Spool.id == sub.c.rep_id)
         .options(selectinload(Spool.k_profiles))
@@ -984,6 +1001,8 @@ async def list_spool_groups(
             "label_weight": int(row.label_weight),
             "group_count": int(row.group_count),
             "ids": _parse_member_ids(row.member_ids),
+            "remaining_total": float(row.remaining_total or 0),
+            "weight_used_total": float(row.weight_used_total or 0),
             "representative": row.Spool,
         }
         for row in rows

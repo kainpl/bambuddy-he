@@ -100,6 +100,8 @@ function pagedPayload(groupSimilar: boolean) {
         lot: null,
         group_count: 1,
         ids: [s.id],
+        remaining_total: Math.max(0, s.label_weight - s.weight_used),
+        weight_used_total: s.weight_used,
         representative: { ...s, k_profile_count: 0, k_profiles: null },
       })),
       meta: { total: SPOOLS.length, current_page: 1, per_page: 24, last_page: 1 },

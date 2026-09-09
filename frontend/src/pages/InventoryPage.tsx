@@ -69,8 +69,19 @@ type DisplayItem =
   // `ids` is always the complete member list. `spools` carries the member
   // objects when the source has them inline (Spoolman mode's client-side
   // grouping); in server mode (task 4) it stays undefined and the members
-  // are fetched lazily on expansion via their ids.
-  | { type: 'group'; key: string; ids: number[]; representative: InventorySpool; spools?: InventorySpool[] };
+  // are fetched lazily on expansion via their ids — and the server's exact
+  // sums ride along instead, because members may be started (only a spool
+  // loaded in a printer stays out of a group) and so do not share one
+  // remaining weight.
+  | {
+      type: 'group';
+      key: string;
+      ids: number[];
+      representative: InventorySpool;
+      spools?: InventorySpool[];
+      remainingTotal?: number;
+      weightUsedTotal?: number;
+    };
 
 /**
  * B.1 / A.17 — render the swatch as a layered CSS background composed by the
@@ -1933,8 +1944,11 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
     const groups = new Map<string, InventorySpool[]>();
 
     for (const spool of sortedSpools) {
-      // Only group unused & unassigned spools
-      if (spool.weight_used > 0 || assignmentMap[spool.id]) {
+      // Only a spool loaded in a printer stays out of a group (2026-09-10 —
+      // `weight_used > 0` used to exclude as well; a started spool on the
+      // shelf now groups with its twins). Same rule as the server's
+      // `_spool_group_single_id_expr`; the two modes must agree.
+      if (assignmentMap[spool.id]) {
         // Will be added as singles in the walk below
       } else {
         const key = spoolGroupKey(spool);
@@ -1949,7 +1963,7 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
 
     // Walk sortedSpools order so groups appear at the position of their first member
     for (const spool of sortedSpools) {
-      if (spool.weight_used > 0 || assignmentMap[spool.id]) {
+      if (assignmentMap[spool.id]) {
         items.push({ type: 'single', spool });
         continue;
       }
@@ -1982,7 +1996,14 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
     if (groupSimilar) {
       return (groupPageQuery.data?.items ?? []).map((g): DisplayItem => {
         if (g.group_count === 1) return { type: 'single', spool: g.representative };
-        return { type: 'group', key: serverGroupKey(g), ids: g.ids, representative: g.representative };
+        return {
+          type: 'group',
+          key: serverGroupKey(g),
+          ids: g.ids,
+          representative: g.representative,
+          remainingTotal: g.remaining_total,
+          weightUsedTotal: g.weight_used_total,
+        };
       });
     }
     return (flatPageQuery.data?.items ?? []).map((s): DisplayItem => ({ type: 'single', spool: s }));
@@ -3457,13 +3478,14 @@ function SpoolCardGroup({
   const members = useGroupMembers(item.ids, item.spools, isExpanded);
   const rep = item.representative;
   // Total remaining filament across the group (#1368) — the headline number
-  // for the collapsed card. Inline members (Spoolman) sum exactly; server
-  // groups contain only UNUSED members (the ported eligibility rule — a
-  // used or assigned spool never merges), so count × the representative's
-  // remaining IS that sum.
+  // for the collapsed card. Inline members (Spoolman) sum exactly; a server
+  // group carries the server's exact sum, because its members may be started
+  // (only a spool loaded in a printer stays out of a group) and the
+  // representative's remaining says nothing about the others'. The
+  // multiplication is only the fallback for a row without the sum.
   const groupRemaining = item.spools
     ? item.spools.reduce((sum, s) => sum + Math.max(0, s.label_weight - s.weight_used), 0)
-    : item.ids.length * Math.max(0, rep.label_weight - rep.weight_used);
+    : (item.remainingTotal ?? item.ids.length * Math.max(0, rep.label_weight - rep.weight_used));
   const colorStyle = rep.rgba ? `#${rep.rgba.substring(0, 6)}` : '#808080';
   return (
     <div className="col-span-full">
@@ -3655,12 +3677,16 @@ function SpoolTableGroupContainer({
   spoolDisplayTemplate: string;
 }) {
   const members = useGroupMembers(item.ids, item.spools, isExpanded);
+  // label_weight is a key field, so count × representative is exact; the used
+  // weight is the server's sum (members may be started), and core_weight is
+  // the one approximation left (not a key field — divergence within a group
+  // is rare and only shifts the net figure).
   const headerSpool = item.spools
     ? aggregateGroupSpool(item.spools)
     : {
         ...item.representative,
         label_weight: item.representative.label_weight * item.ids.length,
-        weight_used: item.representative.weight_used * item.ids.length,
+        weight_used: item.weightUsedTotal ?? item.representative.weight_used * item.ids.length,
         core_weight: item.representative.core_weight * item.ids.length,
       };
   const remaining = Math.max(0, headerSpool.label_weight - headerSpool.weight_used);
