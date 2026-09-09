@@ -101,6 +101,14 @@ operations.
    *"no CI run for this SHA failed"*, not *"some run succeeded"* — the
    duplicate-skipped run on `main` would satisfy the weaker rule.
 
+7. **Once the newer release of that line is out**, retire the betas it
+   supersedes: `./scripts/cleanup-betas.sh X.Y.Z` (dry-run; `--apply` to do it).
+   It pulls their GitHub pre-releases, Docker Hub tags and GHCR versions, and
+   leaves a 14-day grace period so anything pinned to a fresh beta has time to
+   move. It never deletes git tags — see the immutability rule below.
+
+`scripts/README.md` lists every tool in that folder and what it is for.
+
 Rules that came from shipping it wrong:
 
 - **Never run `docker-publish.sh` after a tag.** Two builders pushing the same

@@ -71,6 +71,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -364,7 +365,36 @@ def main() -> int:
         print(f"error: db not found at {args.db}", file=sys.stderr)
         return 2
 
+    # ⚠️ SQLite only, and it says so before it looks. Two ways this used to
+    # arrive somewhere useless: the install is on PostgreSQL (the rows are
+    # elsewhere, and a migrated install keeps a 0-byte data/bamdude.db beside
+    # bamdude.db.migrated), or the file is an empty leftover that SQLite opens
+    # as a perfectly valid empty database. Both then failed on the first query
+    # with "no such table", which reads like a bug in the script rather than a
+    # database it was never pointed at. Same guard as
+    # ``prune_orphan_archive_files.py``.
+    database_url = os.environ.get("DATABASE_URL", "").strip()
+    if database_url:
+        where = "the bundled PostgreSQL" if database_url == "embedded" else database_url.split("@")[-1]
+        print(
+            f"error: DATABASE_URL is set ({where}), so this install's archives are not in {args.db}.\n"
+            "This script reads SQLite only.",
+            file=sys.stderr,
+        )
+        return 2
+
     con = sqlite3.connect(args.db)
+    present = {row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    missing = [name for name in ("print_archives", "print_queue") if name not in present]
+    if missing:
+        con.close()
+        print(
+            f"error: {args.db} has no {', '.join(missing)} table — that is not a BamDude database "
+            "(or it is an empty leftover).",
+            file=sys.stderr,
+        )
+        return 2
+
     con.row_factory = sqlite3.Row
 
     queue_ref = _queue_referenced_ids(con)

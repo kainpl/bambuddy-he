@@ -192,6 +192,12 @@ python scripts/api_error_catalog.py sync    # adds the new sentence with an empt
 # fill in the Ukrainian (or English, see above) in backend/app/data/api_errors_uk.json
 ```
 
+`scripts/i18n_audit.py` answers the other direction — which frontend keys
+nothing asks for any more, and where `en` and `uk` have drifted apart. It knows
+about literal `t('x')`, template prefixes `` t(`x.${…}`) ``, `<Trans>` and
+plural siblings, so its "unused" list is one you can act on rather than a pile
+of false positives. `scripts/README.md` lists every tool in that folder.
+
 `tests/unit/test_api_error_details_have_ukrainian.py` fails on a missing
 sentence, a stale key or a placeholder mismatch. Anything the **frontend must
 react to** travels as a machine code — `{"error": "not_sliced", "message": …}` —

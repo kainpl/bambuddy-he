@@ -104,6 +104,8 @@
 
 ### Fixed
 
+- **The duplicate-archive merge script refuses the same two databases** it could never read — a PostgreSQL install, or an empty leftover SQLite file — instead of failing on its first query with an error that reads like a bug in the script.
+
 - **The orphan-file cleanup script refuses to run when it cannot see the database.** `scripts/prune_orphan_archive_files.py` deletes the files no database row names, and it reads SQLite. On a PostgreSQL install — or on any install where `data/bamdude.db` is an empty leftover, which is exactly what a migrated one keeps beside `bamdude.db.migrated` — it opened that file, printed two warnings nobody would read as fatal, concluded that no file was referenced, and offered `--apply` to delete every archived 3MF, thumbnail and preview on the machine. It now stops with an explanation in both cases. Nothing changes for a healthy SQLite install.
 
 - **The login page stops offering a password reset it cannot perform.** With no mail server configured there is no self-service recovery, so the link is replaced by a plain line saying to ask your administrator — instead of a form that collects an address and silently fails. The rule is the server's answer, not the browser's guess, so what the page offers and what the API will do cannot drift apart again.
