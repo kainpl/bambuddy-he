@@ -69,7 +69,7 @@ function getSeverityInfo(severity: number): { label: string; color: string; bgCo
   }
 }
 
-function getShortCode(attr: number, code: number): string {
+export function getShortCode(attr: number, code: number): string {
   // Convert attr and code to short format: XXXX_YYYY
   // attr contains the module info, code contains the error number
   const module = ((attr >> 16) & 0xFFFF) || ((attr >> 8) & 0xFF) << 8 | (attr & 0xFF);
@@ -86,7 +86,7 @@ function getShortCode(attr: number, code: number): string {
 //
 // Returns undefined for an uncatalogued error so callers can tell "no
 // description" from "described as blank".
-function lookupDescription(
+export function lookupDescription(
   catalogue: Record<string, string> | undefined,
   fullCode: string | undefined,
   shortCode: string,
@@ -94,6 +94,26 @@ function lookupDescription(
   if (!catalogue) return undefined;
   if (fullCode && catalogue[fullCode] !== undefined) return catalogue[fullCode];
   return catalogue[shortCode.replace('_', '')];
+}
+
+/**
+ * The one-line form of an HMS error for places that cannot afford the dialog's
+ * block — the compact printer card. The code is written the way the printer's
+ * own screen writes it (four groups when the catalogue knows the full code,
+ * the short form otherwise) and the description is the catalogue's, when it
+ * has one. Same lookup as the dialog below; keep the two in step.
+ */
+export function hmsBrief(
+  error: HMSError,
+  descriptions: Record<string, string> | undefined,
+): { code: string; description: string | undefined } {
+  const codeNum = parseInt(error.code.replace('0x', ''), 16) || 0;
+  const shortCode = getShortCode(error.attr, codeNum);
+  const matchedFullCode = !!error.full_code && descriptions?.[error.full_code] !== undefined;
+  const code = matchedFullCode
+    ? (error.full_code!.match(/.{1,4}/g) ?? [shortCode]).join('-')
+    : shortCode.replace('_', '-');
+  return { code, description: lookupDescription(descriptions, error.full_code, shortCode) };
 }
 
 /**

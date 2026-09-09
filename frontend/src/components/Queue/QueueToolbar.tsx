@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
+import { CardSizeSwitch } from '../CardSizeSwitch';
 import {
   Search, X, ArrowUpNarrowWide, ArrowDownWideNarrow,
   LayoutGrid, List, Activity, Filter, SlidersHorizontal,
@@ -29,6 +30,10 @@ interface QueueToolbarProps {
 
   viewMode: ViewMode;
   onViewModeChange: (value: ViewMode) => void;
+
+  /** S · M · L · XL — how many cards share a row in the cards view. */
+  cardSize: number;
+  onCardSizeChange: (size: number) => void;
 
   hideOffline: boolean;
   onHideOfflineToggle: () => void;
@@ -103,6 +108,8 @@ export function QueueToolbar({
   onSortDirectionToggle,
   viewMode,
   onViewModeChange,
+  cardSize,
+  onCardSizeChange,
   hideOffline,
   onHideOfflineToggle,
 }: QueueToolbarProps) {
@@ -201,6 +208,8 @@ export function QueueToolbar({
             <option value="status">{t('printers.sort.status')}</option>
             <option value="model">{t('printers.sort.model')}</option>
             <option value="location">{t('printers.sort.location')}</option>
+            <option value="eta">{t('printers.sort.eta')}</option>
+            <option value="freeAt">{t('printers.sort.freeAt')}</option>
           </select>
           <button
             type="button"
@@ -267,6 +276,12 @@ export function QueueToolbar({
               );
             })}
           </div>
+        )}
+
+        {/* Card size — only the cards view has a grid to size, so the list
+            and timeline views do not show the control at all. */}
+        {viewMode === 'expanded' && (
+          <CardSizeSwitch value={cardSize} onChange={onCardSizeChange} fullWidth={inMenu} />
         )}
       </>
     );

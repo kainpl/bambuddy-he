@@ -72,13 +72,22 @@ async function waitForCard() {
 describe('size S (compact)', () => {
   beforeEach(() => localStorage.setItem('printerCardSize', '1'));
 
+  it('names the next queued job in its queue strip', async () => {
+    mockApi([pendingItem]);
+    render(<PrintersPage />);
+    await waitForCard();
+    await waitFor(() => {
+      expect(screen.getByText('Next: next_job.gcode.3mf')).toBeInTheDocument();
+    });
+  });
+
   it('offers both actions when a queue is waiting', async () => {
     mockApi([pendingItem]);
     render(<PrintersPage />);
     await waitForCard();
     await waitFor(() => {
-      expect(screen.getByLabelText('Mark plate as cleared')).toBeInTheDocument();
-      expect(screen.getByLabelText('Repeat print')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Clear plate/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Repeat print/i })).toBeInTheDocument();
     });
   });
 
@@ -87,8 +96,8 @@ describe('size S (compact)', () => {
     render(<PrintersPage />);
     await waitForCard();
     await waitFor(() => {
-      expect(screen.getByLabelText('Mark plate as cleared')).toBeInTheDocument();
-      expect(screen.getByLabelText('Repeat print')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Clear plate/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Repeat print/i })).toBeInTheDocument();
     });
   });
 });

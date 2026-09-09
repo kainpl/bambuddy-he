@@ -162,6 +162,28 @@ def test_the_farm_free_at_is_the_last_printer():
     assert simulate_farm(snap).free_seconds == 3 * H
 
 
+def test_every_printer_carries_its_own_free_at():
+    """The «free at» sorts order by this. Printer 1 owes its running hour;
+    printer 2 owes its queued two hours plus the staged X1C hour the
+    simulation deals to it; printer 3 holds a row with no estimate, so its
+    number is zero AND its counter says why — an idle machine and a busy one
+    with no estimate must not read alike."""
+    snap = FarmSnapshot(
+        printers=[
+            _machine(1, running=H),
+            _machine(2, "X1C", queued=[(None, 2 * H)]),
+            _machine(3, queued=[(None, None)]),
+        ],
+        staged=[StagedJob(order_id=None, target_model="X1C", seconds=H)],
+    )
+    farm = simulate_farm(snap)
+    rows = {p.printer_id: (p.free_seconds, p.unknown_prints) for p in farm.printers}
+    assert rows == {1: (H, 0), 2: (3 * H, 0), 3: (0, 1)}
+    # The farm's own number is the last of them, and its counter the sum of theirs.
+    assert farm.free_seconds == max(secs for secs, _ in rows.values())
+    assert farm.unknown_prints == sum(unknown for _, unknown in rows.values())
+
+
 def test_models_match_after_normalisation():
     snap = FarmSnapshot(printers=[_machine(1, "Bambu Lab P1S")], staged=[])
     f = _one(snap, _plan(7, [(100, 1, H, "P1S", [])]))

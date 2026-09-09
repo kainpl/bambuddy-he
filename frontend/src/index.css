@@ -500,9 +500,50 @@ body {
   animation: slide-in-left 0.3s ease-out;
 }
 
-/* Card shadows - uses theme-specific shadow */
-.card-shadow {
-  box-shadow: var(--card-shadow);
+/* Card shadows - uses theme-specific shadow.
+
+   ⚠️ A `@utility`, not a plain class, and it fills Tailwind's `--tw-shadow`
+   slot instead of setting `box-shadow` outright. A plain `.card-shadow` rule
+   sits outside Tailwind's cascade layers and therefore beats every layered
+   utility that also paints through `box-shadow` — which is how `ring-*` and
+   `shadow-*` work in Tailwind 4 — so a `ring-2` on the same element never
+   showed. Composing the same five slots Tailwind's own utilities compose
+   keeps the card's shadow AND lets a ring or an extra shadow draw beside it. */
+@utility card-shadow {
+  --tw-shadow: var(--card-shadow);
+  box-shadow: var(--tw-inset-shadow), var(--tw-inset-ring-shadow), var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow);
+}
+
+/* Compact (size S) printer card — the 2026-09-09 redesign.
+
+   The header actions (select · expand · menu) sit over the card's top-right
+   corner and show on hover or keyboard focus, or for as long as the printer is
+   selected; a device without a hover pointer always sees them. `.group` is
+   Tailwind's bare marker class on the card root. */
+.card-actions-reveal {
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.group:hover .card-actions-reveal,
+.group:focus-within .card-actions-reveal,
+.card-actions-reveal[data-locked="true"] {
+  opacity: 1;
+}
+@media (hover: none) {
+  .card-actions-reveal {
+    opacity: 1;
+  }
+}
+/* Their backdrop: half the card colour, blurred, so the name underneath stays legible. */
+.card-actions-pill {
+  background: color-mix(in srgb, var(--bg-secondary) 50%, transparent);
+  backdrop-filter: blur(2px);
+}
+/* An offline printer's card fades. On the content blocks, never on the card
+   root, so the header actions and the kebab menu stay crisp. */
+.card-dimmed {
+  opacity: 0.38;
+  filter: grayscale(0.65);
 }
 
 /* Calendar selected-day list scrollbar theming */

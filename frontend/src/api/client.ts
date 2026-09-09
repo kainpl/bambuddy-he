@@ -4102,11 +4102,21 @@ export interface StaggerState {
 
 // ---- farm forecast (spec 2026-09-06) ----
 
+/** One machine's «free at» — the running head, its queue, and the staged work the simulation dealt to it. */
+export interface PrinterForecast {
+  printer_id: number;
+  free_at: string | null;
+  free_seconds: number;
+  /** This machine's own rows without an estimate — why its number can read 0 while it is busy. */
+  unknown_prints: number;
+}
 export interface FarmForecast {
   free_at: string | null;
   free_seconds: number;
   /** Rows in the queues with no estimate — why «free at» can read 0m while printers are busy. */
   unknown_prints: number;
+  /** Every non-archived printer — what the «free at» sorts of the printers and queue pages order by. */
+  printers: PrinterForecast[];
 }
 export interface RowForecast { plate_id: number; proposed_split: Record<number, number> | null }
 export interface LineForecast {

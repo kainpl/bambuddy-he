@@ -176,6 +176,63 @@ describe('QueuePage', () => {
     });
   });
 
+  describe('sort', () => {
+    it('offers both ETA orders and remembers the queue-aware one', async () => {
+      // «ETA (job)» and «ETA (queue)» — the same pair the
+      // printers page has, under the same keys, so the two pages read alike.
+      const user = userEvent.setup();
+      render(<QueuePage />);
+      await waitFor(() => {
+        expect(screen.getByText('X1 Carbon')).toBeInTheDocument();
+      });
+      const sortSelect = [...document.querySelectorAll('select')].find((select) =>
+        [...select.options].some((option) => option.value === 'freeAt'),
+      )!;
+      expect([...sortSelect.options].map((option) => option.value)).toEqual(
+        expect.arrayContaining(['eta', 'freeAt']),
+      );
+      // By the option's own text: the toolbar renders once more inside its
+      // overflow menu, hidden from the accessibility tree, so a role query is ambiguous.
+      expect([...sortSelect.options].find((option) => option.value === 'eta')?.text).toBe('ETA (job)');
+      expect([...sortSelect.options].find((option) => option.value === 'freeAt')?.text).toBe('ETA (queue)');
+      await user.selectOptions(sortSelect, 'freeAt');
+      expect(localStorage.getItem('queueSortBy')).toBe('freeAt');
+      expect((sortSelect as HTMLSelectElement).value).toBe('freeAt');
+    });
+  });
+
+  describe('card size', () => {
+    it('remembers the picked size and lays the grid out for it', async () => {
+      const user = userEvent.setup();
+      const { container } = render(<QueuePage />);
+      await waitFor(() => {
+        expect(screen.getByText('S')).toBeInTheDocument();
+      });
+      // M by default — three columns at the widest, the table the page always had.
+      expect(container.querySelector('.grid.gap-4')?.className).toContain('xl:grid-cols-3');
+      await user.click(screen.getByText('S'));
+      expect(localStorage.getItem('queueCardSize')).toBe('1');
+      await waitFor(() => {
+        expect(container.querySelector('.grid.gap-4')?.className).toContain('xl:grid-cols-4');
+      });
+      await user.click(screen.getByText('XL'));
+      expect(localStorage.getItem('queueCardSize')).toBe('4');
+      await waitFor(() => {
+        expect(container.querySelector('.grid.gap-4')?.className).toContain('grid-cols-1');
+        expect(container.querySelector('.grid.gap-4')?.className).not.toContain('xl:grid-cols');
+      });
+    });
+
+    it('starts from the remembered size', async () => {
+      localStorage.setItem('queueCardSize', '3');
+      const { container } = render(<QueuePage />);
+      await waitFor(() => {
+        expect(container.querySelector('.grid.gap-4')?.className).toContain('lg:grid-cols-2');
+      });
+      expect(screen.getByText('L')).toHaveAttribute('aria-pressed', 'true');
+    });
+  });
+
   describe('view modes', () => {
     it('switches to List view when clicking the List button', async () => {
       const user = userEvent.setup();

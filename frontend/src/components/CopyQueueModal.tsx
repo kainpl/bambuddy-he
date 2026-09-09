@@ -11,6 +11,7 @@ import type { SequencedFile } from './QueueSequencer';
 import { copyTargets, type CopyableItem } from '../lib/copyQueue';
 import { groupByLocation } from '../utils/locationGroups';
 import { readStoredQueueSort, sortQueues } from '../utils/queueOrder';
+import { forecastById } from '../utils/etaSort';
 import { formatDuration } from '../utils/date';
 
 interface CopyQueueModalProps {
@@ -53,9 +54,30 @@ export function CopyQueueModal({ source, items, droppedCount = 0, onCancel, onCo
   const { data: queues } = useQuery({ queryKey: ['queues'], queryFn: api.getQueues });
   const targets = useMemo(() => copyTargets(queues, source), [queues, source]);
 
-  // The order the Queues screen is in — the cards behind this dialog.
+  // Shares its keys with the cards on the page behind, so this costs no extra
+  // polling — it reads the same cache and re-renders when it moves. Asked for
+  // the unsorted targets: the order below is computed FROM these statuses.
+  const statuses = useQueries({
+    queries: targets.map((queue) => ({
+      queryKey: ['printerStatus', queue.printer_id],
+      queryFn: () => api.getPrinterStatus(queue.printer_id),
+      refetchInterval: 10_000,
+    })),
+  });
+  const statusOf = (printerId: number) => statuses[targets.findIndex((queue) => queue.printer_id === printerId)]?.data;
+
+  // The order the Queues screen is in — the cards behind this dialog. The two
+  // ETA orders need what the screen reads too: the live statuses above and,
+  // for «free at», the server's forecast (the stats bar's query, so cached
+  // whenever the dialog opens from the queue page).
   const [{ sortBy, sortAsc }] = useState(readStoredQueueSort);
-  const sortedTargets = useMemo(() => sortQueues(targets, sortBy, sortAsc), [targets, sortBy, sortAsc]);
+  const { data: forecast } = useQuery({ queryKey: ['queue-forecast'], queryFn: api.getQueueForecast, enabled: sortBy === 'freeAt' });
+  const forecastRows = useMemo(() => forecastById(forecast), [forecast]);
+  const sortedTargets = useMemo(
+    () => sortQueues(targets, sortBy, sortAsc, { statusOf, forecastOf: (printerId) => forecastRows.get(printerId) }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- statusOf closes over `statuses`, a fresh array each render; the list is a dozen rows
+    [targets, sortBy, sortAsc, statuses, forecastRows],
+  );
   // Headers only when the screen behind is grouped by location; otherwise one
   // unlabelled group, so the list renders through the same branch either way.
   const groups: { key: string; label: string | null; items: PrinterQueue[] }[] = useMemo(
@@ -67,18 +89,6 @@ export function CopyQueueModal({ source, items, droppedCount = 0, onCancel, onCo
         : [{ key: 'all', label: null, items: sortedTargets }],
     [sortBy, sortedTargets, t],
   );
-
-  // Shares its keys with the cards on the page behind, so this costs no extra
-  // polling — it reads the same cache and re-renders when it moves.
-  const statuses = useQueries({
-    queries: sortedTargets.map((queue) => ({
-      queryKey: ['printerStatus', queue.printer_id],
-      queryFn: () => api.getPrinterStatus(queue.printer_id),
-      refetchInterval: 10_000,
-    })),
-  });
-  const statusOf = (printerId: number) =>
-    statuses[sortedTargets.findIndex((queue) => queue.printer_id === printerId)]?.data;
 
   const toggle = <T,>(set: Set<T>, value: T): Set<T> => {
     const next = new Set(set);

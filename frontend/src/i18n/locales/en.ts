@@ -264,6 +264,8 @@ export default {
     },
     expandCard: 'Expand card',
     expandCardHint: 'Open this printer in a popup with full controls',
+    collapseCard: 'Close the popup',
+    collapseCardHint: 'Back to the compact grid',
     editPrinter: 'Edit Printer',
     serialNumber: 'Serial Number',
     ipAddress: 'IP Address / Hostname',
@@ -323,6 +325,7 @@ export default {
       problem: 'Problem',
       error: 'Error',
       finished: 'Finished',
+      failed: 'Print stopped',
       unknown: 'Unknown'
     },
     // Pluralised labels used in the StatusSummaryBar. English has just
@@ -418,12 +421,14 @@ export default {
       model: 'Model',
       location: 'Location',
       tag: 'Tag',
-      eta: 'ETA',
+      eta: 'ETA (job)',
+      freeAt: 'ETA (queue)',
       ascending: 'Sort ascending',
       descending: 'Sort descending'
     },
     // Card size
     cardSize: {
+      groupLabel: 'Card size',
       small: 'Small cards',
       medium: 'Medium cards',
       large: 'Large cards',
@@ -638,6 +643,10 @@ export default {
       inUse: 'Plate in Use'
     },
     // Queue info
+    // The size-S card's one-line queue strip
+    queueStrip: {
+      next: 'Next: {{name}}'
+    },
     queue: {
       inQueue_one: '{{count}} print in queue',
       inQueue_other: '{{count}} prints in queue'
@@ -3188,6 +3197,7 @@ export default {
   // HMS Errors modal
   hmsErrors: {
     title: 'Errors - {{name}}',
+    openFromCard: 'HMS: show the messages',
     noErrors: 'No errors',
     viewOnWiki: 'View on Bambu Lab Wiki',
     unknownCode: 'Unknown HMS code — see the Bambu Lab wiki for details.',

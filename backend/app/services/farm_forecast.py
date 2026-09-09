@@ -134,12 +134,29 @@ class OrderForecast:
 
 
 @dataclass
+class PrinterForecast:
+    """One machine's share of the farm's «free at»: when IT is free, given
+    what it already holds — the running head, its pending rows, and whatever
+    staged auto-queue work the simulation dealt to it. The two «free at»
+    sorts (printers page, queue page) read this instead of re-deriving it in
+    the browser, so the card order and the queue tile can never disagree."""
+
+    printer_id: int
+    free_seconds: int
+    #: This machine's own rows without an estimate — why ITS number can read
+    #: zero while the machine is busy (the farm's counter, per printer).
+    unknown_prints: int = 0
+
+
+@dataclass
 class FarmForecast:
     free_seconds: int
     #: Σ rows of the snapshot with no estimate — queued rows (the running head
     #: among them) and staged auto-queue jobs, whatever order they belong to.
     #: The queue tile says with it why «free at» reads what it reads.
     unknown_prints: int = 0
+    #: Every machine of the snapshot, parked ones included, in snapshot order.
+    printers: list[PrinterForecast] = field(default_factory=list)
 
 
 # ---------- the simulation ----------
@@ -171,6 +188,9 @@ class _State:
     #: The snapshot's own estimate-less rows, counted whether or not they name
     #: an order — the farm header's counter, not any order's.
     farm_unknown: int = 0
+    #: The same rows, per machine — a queued row belongs to exactly one
+    #: printer, so these sum to ``farm_unknown`` minus the staged jobs.
+    machine_unknown: Counter = field(default_factory=Counter)
 
     def farm_finish(self) -> float:
         return max((m.free_at for m in self.machines), default=0.0)
@@ -202,6 +222,7 @@ def _initial_state(snapshot: FarmSnapshot) -> _State:
         for row in machine.queued:
             if row.seconds is None:
                 state.farm_unknown += 1
+                state.machine_unknown[machine.printer_id] += 1
                 if row.order_id is not None:
                     state.unknown[row.order_id] += 1
                 continue
@@ -292,9 +313,22 @@ def machine_seconds_of(plan: OrderPlan | None) -> int | None:
 
 def simulate_farm(snapshot: FarmSnapshot) -> FarmForecast:
     """When the last printer is free, given what the queues already hold — and
-    how many of those rows carry no estimate, so a small number can say why."""
+    how many of those rows carry no estimate, so a small number can say why.
+    Beside the farm's number, every machine's own: the same walk, read per
+    printer, so a «free at» order of the cards is the queue tile's arithmetic."""
     state = _initial_state(snapshot)
-    return FarmForecast(free_seconds=int(round(state.farm_finish())), unknown_prints=state.farm_unknown)
+    return FarmForecast(
+        free_seconds=int(round(state.farm_finish())),
+        unknown_prints=state.farm_unknown,
+        printers=[
+            PrinterForecast(
+                printer_id=m.printer_id,
+                free_seconds=int(round(m.free_at)),
+                unknown_prints=state.machine_unknown[m.printer_id],
+            )
+            for m in state.machines
+        ],
+    )
 
 
 def _eta(now: datetime, seconds: float | None) -> tuple[datetime | None, int | None]:

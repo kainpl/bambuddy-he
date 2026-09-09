@@ -268,6 +268,8 @@ export default {
     },
     expandCard: 'Розгорнути картку',
     expandCardHint: 'Відкрити принтер у попапі з повним керуванням',
+    collapseCard: 'Закрити попап',
+    collapseCardHint: 'Повернутись до компактної сітки',
     editPrinter: 'Редагувати принтер',
     serialNumber: 'Серійний номер',
     ipAddress: 'IP-адреса / Ім\'я хоста',
@@ -327,6 +329,7 @@ export default {
       problem: 'Проблема',
       error: 'Помилка',
       finished: 'Завершено',
+      failed: 'Друк зупинено',
       unknown: 'Невідомо'
     },
     // Pluralised labels used in the StatusSummaryBar. i18next resolves the
@@ -430,12 +433,14 @@ export default {
       model: 'Модель',
       location: 'Розташування',
       tag: 'Тег',
-      eta: 'ETA',
+      eta: 'ETA (завдання)',
+      freeAt: 'ETA (черга)',
       ascending: 'Сортувати за зростанням',
       descending: 'Сортувати за спаданням'
     },
     // Card size
     cardSize: {
+      groupLabel: 'Розмір карток',
       small: 'Маленькі картки',
       medium: 'Середні картки',
       large: 'Великі картки',
@@ -650,6 +655,10 @@ export default {
       inUse: 'Стіл в роботі'
     },
     // Queue info
+    // Рядок черги на картці розміру S
+    queueStrip: {
+      next: 'Далі: {{name}}'
+    },
     queue: {
       inQueue_one: '{{count}} друк у черзі',
       inQueue_few: '{{count}} друки у черзі',
@@ -3215,6 +3224,7 @@ export default {
   // HMS Errors modal
   hmsErrors: {
     title: 'Помилки - {{name}}',
+    openFromCard: 'HMS: показати повідомлення',
     noErrors: 'Немає помилок',
     viewOnWiki: 'Переглянути на Bambu Lab Wiki',
     unknownCode: 'Невідомий код HMS — деталі дивіться у вікі Bambu Lab.',

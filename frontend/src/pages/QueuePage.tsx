@@ -7,6 +7,7 @@ import { api } from '../api/client';
 import { usePendingQueueItems, usePrintingQueueItems } from '../hooks/useQueueItems';
 import { compareLocationNames } from '../utils/locationOrder';
 import { readStoredQueueSort, sortQueues, type QueueSortOption } from '../utils/queueOrder';
+import { forecastById, type EtaStatus } from '../utils/etaSort';
 import { buildLocationIndex, readStoredLocationFilter } from '../utils/locationTree';
 import { groupByLocation } from '../utils/locationGroups';
 import type { PrinterQueue, PrintQueueItem } from '../api/client';
@@ -17,9 +18,18 @@ import { StaggerBanner } from '../components/Queue/StaggerBanner';
 import { QueueTimelineView } from '../components/Queue/QueueTimelineView';
 import { AutoQueuePanel } from '../components/Queue/AutoQueuePanel';
 import { QueueToolbar } from '../components/Queue/QueueToolbar';
+import { readStoredCardSize } from '../utils/cardSize';
 import { PrintModal } from '../components/PrintModal';
 
 type ViewMode = 'expanded' | 'all' | 'timeline';
+
+// 1 = S … 4 = XL. Columns only — every card is the same card at every size.
+const QUEUE_GRID_CLASSES: Record<number, string> = {
+  1: 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4',
+  2: 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3',
+  3: 'grid-cols-1 lg:grid-cols-2',
+  4: 'grid-cols-1',
+};
 
 const VALID_VIEW_MODES: ViewMode[] = ['expanded', 'all', 'timeline'];
 
@@ -39,6 +49,15 @@ export function QueuePage() {
   });
 
   const [editingItem, setEditingItem] = useState<PrintQueueItem | null>(null);
+
+  // Card size — the same S · M · L · XL scale as the Printers page. For now it
+  // only decides how many queue cards share a row; the card itself does not
+  // change yet (2026-09-09).
+  const [cardSize, setCardSize] = useState<number>(() => readStoredCardSize('queueCardSize'));
+  const handleCardSizeChange = (size: number) => {
+    setCardSize(size);
+    localStorage.setItem('queueCardSize', String(size));
+  };
 
   // Read once, from the one place that knows how these two keys are spelled —
   // the same helper the copy-queue dialog reads, so both are in step.
@@ -87,6 +106,12 @@ export function QueuePage() {
     queryFn: api.getQueues,
     refetchInterval: 15000,
   });
+
+  // The server's per-printer «free at» — what the queue-aware sort orders by.
+  // The stats bar holds the same query, so this is a second observer of one
+  // fetch, not a second fetch.
+  const { data: forecast } = useQuery({ queryKey: ['queue-forecast'], queryFn: api.getQueueForecast, refetchInterval: 30_000 });
+  const forecastRows = useMemo(() => forecastById(forecast), [forecast]);
 
   // Fetch all pending items - used by stats bar + "All" view + Timeline.
   // Shared with the order page's queue panel through `useQueueItems`.
@@ -139,8 +164,9 @@ export function QueuePage() {
     });
   };
 
-  // Grid classes for the cards view
-  const gridClasses = 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3';
+  // Grid classes for the cards view, by card size — the Printers page's table
+  // (its S row included), so the two fleet pages breathe the same way.
+  const gridClasses = QUEUE_GRID_CLASSES[cardSize] ?? QUEUE_GRID_CLASSES[2];
 
   // The locations themselves, not the distinct values on screen: a parent with
   // no queues directly on it has to be selectable, and a name stopped being an
@@ -180,9 +206,12 @@ export function QueuePage() {
       return true;
     });
 
-    return sortQueues(filtered, sortBy, sortAsc);
+    return sortQueues(filtered, sortBy, sortAsc, {
+      statusOf: (printerId) => queryClient.getQueryData<EtaStatus>(['printerStatus', printerId]),
+      forecastOf: (printerId) => forecastRows.get(printerId),
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- statusCacheVersion is intentional: it forces recompute when WS / poll updates printer status cache; queryClient is stable
-  }, [queues, search, statusFilter, locationFilter, locationIndex, hideOffline, sortBy, sortAsc, statusCacheVersion]);
+  }, [queues, search, statusFilter, locationFilter, locationIndex, hideOffline, sortBy, sortAsc, statusCacheVersion, forecastRows]);
 
   const hasActiveFilters = search.trim() !== '' || statusFilter !== 'all' || locationFilter !== 'all';
 
@@ -226,6 +255,8 @@ export function QueuePage() {
             onSortDirectionToggle={toggleSortDirection}
             viewMode={viewMode}
             onViewModeChange={handleViewChange}
+            cardSize={cardSize}
+            onCardSizeChange={handleCardSizeChange}
             hideOffline={hideOffline}
             onHideOfflineToggle={toggleHideOffline}
           />

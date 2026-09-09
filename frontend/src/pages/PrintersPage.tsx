@@ -6,9 +6,12 @@ import { PrinterLocationSelect } from '../components/PrinterLocationSelect';
 import { PrinterTagsSelect } from '../components/PrinterTagsSelect';
 import { PrinterTagChip } from '../components/PrinterTagChip';
 import { UsageProjection } from '../components/UsageProjection';
+import { CardSizeSwitch } from '../components/CardSizeSwitch';
+import { readStoredCardSize } from '../utils/cardSize';
 import { LoadingBlock } from '../components/LoadingBlock';
 import { formatFileSize } from '../utils/file';
 import { compareLocationNames } from '../utils/locationOrder';
+import { compareCurrentJobEta, compareFreeAt, forecastById, type EtaStatus } from '../utils/etaSort';
 import { buildLocationIndex } from '../utils/locationTree';
 import { useTheme } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -53,6 +56,7 @@ import {
   ListPlus,
   Video,
   Search,
+  List,
   Loader2,
   Square,
   Maximize2,
@@ -90,7 +94,7 @@ import { Link as RouterLink, useNavigate } from 'react-router-dom';
 import { api, discoveryApi, firmwareApi, macrosApi, withStreamToken } from '../api/client';
 import { BulkPrinterToolbar } from '../components/BulkPrinterToolbar';
 import { PauseChip } from '../components/PauseChip';
-import { formatDateOnly, formatETA, formatDuration } from '../utils/date';
+import { formatDateOnly, formatETA, formatDuration, formatTimeOnly, parseUTCDate } from '../utils/date';
 import type { Printer, PrinterCreate, PrinterStatus, AirductFan, AMSUnit, DiscoveredPrinter, FirmwareUpdateInfo, FirmwareUploadStatus, LinkedSpoolInfo, SpoolAssignment, HMSError, Macro, InventorySpool, SmartPlug, PrinterDiagnosticResult, HeaterSensorKind } from '../api/client';
 
 // Source of truth for Spoolman ↔ AMS slot binding (upstream PR #1241).
@@ -128,7 +132,7 @@ import { EmbeddedCameraViewer } from '../components/EmbeddedCameraViewer';
 import { CameraWall } from '../components/CameraWall';
 import { MQTTDebugModal } from '../components/MQTTDebugModal';
 import { CalibrationModal } from '../components/CalibrationModal';
-import { HMSErrorModal, filterKnownHMSErrors } from '../components/HMSErrorModal';
+import { HMSErrorModal, filterKnownHMSErrors, hmsBrief } from '../components/HMSErrorModal';
 import { PrinterQueueWidget } from '../components/PrinterQueueWidget';
 import { AMSHistoryModal } from '../components/AMSHistoryModal';
 import { HeaterHistoryModal } from '../components/HeaterHistoryModal';
@@ -1136,7 +1140,7 @@ function StatusSummaryBar({ printers }: { printers: Printer[] | undefined }) {
   );
 }
 
-type SortOption = 'name' | 'status' | 'model' | 'location' | 'eta' | 'tag';
+type SortOption = 'name' | 'status' | 'model' | 'location' | 'eta' | 'freeAt' | 'tag';
 
 // The sort dropdown's options, and the only values the saved sort may hold. ⚠️
 // One list, the way STATUS_FILTER_OPTIONS is one list: a sort read back from
@@ -1150,6 +1154,7 @@ const SORT_OPTIONS: { value: SortOption; labelKey: string }[] = [
   { value: 'location', labelKey: 'printers.sort.location' },
   { value: 'tag', labelKey: 'printers.sort.tag' },
   { value: 'eta', labelKey: 'printers.sort.eta' },
+  { value: 'freeAt', labelKey: 'printers.sort.freeAt' },
 ];
 
 function isKnownSortOption(value: string | null): value is SortOption {
@@ -1264,26 +1269,30 @@ function ToolbarMenu({
  * Uses stg_cur_name for detailed calibration/preparation stages,
  * otherwise formats the gcode_state nicely.
  */
-function getStatusDisplay(state: string | null | undefined, stg_cur_name: string | null | undefined): string {
-  // If we have a specific stage name (calibration, heating, etc.), use it
+// The status word for a card. The firmware's stage name wins when there is
+// one (calibrating, heating …); otherwise the gcode_state, translated — these
+// used to be English literals, so a Ukrainian UI said "Finished" (2026-09-09).
+function getStatusDisplay(
+  state: string | null | undefined,
+  stg_cur_name: string | null | undefined,
+  t: (key: string) => string,
+): string {
   if (stg_cur_name) {
     return stg_cur_name;
   }
-
-  // Format the gcode_state nicely
   switch (state) {
     case 'RUNNING':
-      return 'Printing';
+      return t('printers.status.printing');
     case 'PAUSE':
-      return 'Paused';
+      return t('printers.status.paused');
     case 'FINISH':
-      return 'Finished';
+      return t('printers.status.finished');
     case 'FAILED':
-      return 'Failed';
+      return t('printers.status.failed');
     case 'IDLE':
-      return 'Idle';
+      return t('printers.status.idle');
     default:
-      return state ? state.charAt(0) + state.slice(1).toLowerCase() : 'Idle';
+      return state ? state.charAt(0) + state.slice(1).toLowerCase() : t('printers.status.idle');
   }
 }
 
@@ -1701,6 +1710,12 @@ function buildCardScaleStyle(cardSize: number): React.CSSProperties {
   } as React.CSSProperties;
 }
 
+// Size S has no status pip since the 2026-09-09 redesign: the card's shadow
+// says it instead. Set through `--card-shadow`, the variable the `card-shadow`
+// utility reads, so the theme's own shadow is replaced rather than stacked.
+const COMPACT_SHADOW_WARNING = '0 0 0 1px rgba(245, 158, 11, 0.45), 0 4px 18px rgba(245, 158, 11, 0.28)';
+const COMPACT_SHADOW_ERROR = '0 0 0 1px rgba(239, 68, 68, 0.5), 0 4px 18px rgba(239, 68, 68, 0.32)';
+
 function PrinterCard({
   printer,
   hideIfDisconnected,
@@ -1728,6 +1743,7 @@ function PrinterCard({
   isSelected = false,
   onSelect,
   onExpand,
+  onCollapse,
   spoolDisplayTemplate,
 }: {
   printer: Printer;
@@ -1778,9 +1794,14 @@ function PrinterCard({
   // way nothing is duplicated and the controls inside the popup behave
   // identically to a real M-size card.
   onExpand?: (id: number) => void;
+  // Close handler for the card rendered INSIDE the expand popup. Renders an
+  // X in the header cluster where the compact card shows its maximise
+  // button; the popup shell passes it and hides its own header, so this is
+  // the popup's only visible close control (Esc is the other).
+  onCollapse?: () => void;
   spoolDisplayTemplate?: string;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const effectiveSpoolTemplate = spoolDisplayTemplate || DEFAULT_SPOOL_DISPLAY_TEMPLATE;
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -2216,6 +2237,63 @@ function PrinterCard({
     <span className={`inline-flex flex-shrink-0 items-center rounded-full px-2 py-0.5 text-[length:var(--pc-t10,10px)] font-medium ${plateStatus.className}`}>
       {plateStatus.label}
     </span>
+  ) : null;
+
+  // ── Size S (compact) — the 2026-09-09 redesign ───────────────────────────
+  // No thumbnail, no status pip: model and name on one line, the state and
+  // every chip on the next, the printer's condition in the card's shadow, the
+  // job and the queue named. Everything below is derived once, for both the
+  // header and the body.
+  const compact = viewMode === 'compact';
+  const hmsErrors = status?.connected && status.hms_errors ? filterKnownHMSErrors(status.hms_errors) : [];
+  const hmsSevere = hmsErrors.some((e) => e.severity <= 2);
+  const worstHms = hmsErrors.length ? [...hmsErrors].sort((a, b) => a.severity - b.severity)[0] : null;
+  // The same catalogue query the HMS dialog runs, same key — react-query
+  // shares it, so opening the dialog costs nothing more. Only asked for while
+  // a compact card has an error to describe.
+  const hmsDevicePrefix = (printer.serial_number ?? '').slice(0, 3).toUpperCase();
+  const { data: hmsCatalogue } = useQuery({
+    queryKey: ['hms-descriptions', hmsDevicePrefix, i18n.language],
+    queryFn: () => api.getHMSDescriptions(hmsDevicePrefix, i18n.language),
+    staleTime: Infinity,
+    gcTime: Infinity,
+    enabled: compact && hmsDevicePrefix.length === 3 && hmsErrors.length > 0,
+  });
+  const compactHms = worstHms ? hmsBrief(worstHms, hmsCatalogue?.descriptions) : null;
+  const compactPaused = status?.connected === true && status.state === 'PAUSE';
+  const compactShadow = !compact || !status?.connected
+    ? undefined
+    : hmsSevere || status.state === 'FAILED'
+      ? COMPACT_SHADOW_ERROR
+      : hmsErrors.length > 0 || compactPaused
+        ? COMPACT_SHADOW_WARNING
+        : undefined;
+  // An offline card fades — its content, not the header actions or the menu.
+  const compactDim = compact && status?.connected === false ? 'card-dimmed' : '';
+  const compactStatusWord = !status?.connected
+    ? t('printers.status.offline')
+    : getStatusDisplay(status.state, status.stg_cur_name, t);
+  const compactJobName = compact && status?.connected && (status.state === 'RUNNING' || status.state === 'PAUSE')
+    ? formatPrintName(status.subtask_name || status.current_print, status.gcode_file, t, activePlateLabel)
+    : '';
+  // "Далі: …" — the head of this printer's own queue, from the query the
+  // green CTA decision already runs; nothing new on the wire.
+  const nextQueued = pendingQueue?.[0];
+  const nextQueuedName = nextQueued
+    ? nextQueued.archive_name || nextQueued.library_file_name || `File #${nextQueued.archive_id || nextQueued.library_file_id}`
+    : '';
+  const queueStrip = compact && status?.connected && nextQueued && pendingQueue ? (
+    <div className="mt-1.5 flex min-w-0 items-center gap-1.5 text-xs text-bambu-gray-light">
+      <List className="w-[var(--pc-i3,0.75rem)] h-[var(--pc-i3,0.75rem)] shrink-0" />
+      <span className="min-w-0 truncate" title={`${t('queue.nextInQueue')}: ${nextQueuedName}`}>
+        {t('printers.queueStrip.next', { name: nextQueuedName })}
+      </span>
+      {pendingQueue.length > 1 && (
+        <span className="shrink-0 rounded-full bg-yellow-500/20 px-1.5 py-px text-[length:var(--pc-t10,10px)] font-medium leading-none text-yellow-400">
+          +{pendingQueue.length - 1}
+        </span>
+      )}
+    </div>
   ) : null;
 
   // Determine if this card should be hidden (use cached connected state to prevent flicker)
@@ -2951,14 +3029,58 @@ function PrinterCard({
   };
 
 
+  // Two answers to a full plate, side by side: print it again, or clear and
+  // let the queue move on. One element for both sizes — the expanded card
+  // hides it while the queue widget draws its green pair (see
+  // shouldShowClearPlateButton), the compact card never has that pair.
+  // ⚠️ The `mt-2` lives on the row rather than each button — on both it
+  // doubles the gap.
+  const plateClearButtons = showClearPlateButton ? (
+    <div className="mt-2 flex gap-2">
+      {repeatAvailable && (
+        <button
+          type="button"
+          onClick={() => repeatPrintMutation.mutate()}
+          disabled={repeatPrintMutation.isPending || !hasPermission('printers:clear_plate')}
+          className="flex-1 inline-flex items-center justify-center gap-2 px-3 py-1.5 rounded-lg bg-yellow-100 dark:bg-yellow-500/20 border border-yellow-300 dark:border-yellow-400/40 text-yellow-700 dark:text-yellow-400 hover:bg-yellow-500/30 transition-colors text-xs font-medium disabled:opacity-50"
+          title={!hasPermission('printers:clear_plate') ? t('printers.permission.noControl') : t('queue.repeatPrint')}
+        >
+          {repeatPrintMutation.isPending ? (
+            <Loader2 className="w-[var(--pc-i3,0.75rem)] h-[var(--pc-i3,0.75rem)] animate-spin" />
+          ) : (
+            <RotateCcw className="w-[var(--pc-i4,1rem)] h-[var(--pc-i4,1rem)]" />
+          )}
+          {t('queue.repeatPrint')}
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={() => clearPlateMutation.mutate()}
+        disabled={clearPlateMutation.isPending || !hasPermission('printers:clear_plate')}
+        className="flex-1 inline-flex items-center justify-center gap-2 px-3 py-1.5 rounded-lg bg-yellow-100 dark:bg-yellow-500/20 border border-yellow-300 dark:border-yellow-400/40 text-yellow-700 dark:text-yellow-400 hover:bg-yellow-500/30 transition-colors text-xs font-medium disabled:opacity-50"
+        title={!hasPermission('printers:clear_plate') ? t('printers.permission.noControl') : t('printers.plateStatus.markCleared')}
+      >
+        {clearPlateMutation.isPending ? (
+          <Loader2 className="w-[var(--pc-i3,0.75rem)] h-[var(--pc-i3,0.75rem)] animate-spin" />
+        ) : (
+          <PlateClearedIcon className="w-[var(--pc-i4,1rem)] h-[var(--pc-i4,1rem)]" />
+        )}
+        {t('queue.clearPlateShort')}
+      </button>
+    </div>
+  ) : null;
+
   return (
     <Card
       id={`printer-${printer.id}`}
       // The click handler below only acts on modifier clicks — a plain click
       // is a no-op, so the card must not wear a link cursor.
       pointer={false}
-      className={`relative scroll-mt-20 ${isSelected ? 'ring-2 ring-bambu-green' : ''}`}
-      style={buildCardScaleStyle(cardSize)}
+      className={`relative scroll-mt-20 ${compact ? 'group' : ''}`}
+      style={{
+        ...buildCardScaleStyle(cardSize),
+        ...(compactShadow ? ({ '--card-shadow': compactShadow } as React.CSSProperties) : {}),
+      }}
       onDragEnter={handleCardDragEnter}
       onDragOver={handleCardDragOver}
       onDragLeave={handleCardDragLeave}
@@ -2976,11 +3098,13 @@ function PrinterCard({
         }
       }}
     >
-      {/* Selection checkbox is rendered inside the three-dot menu (see
-          below) as a regular menu row — keeps the card visual clean and
-          surfaces the same Ctrl/Shift modifiers via the menu-item click
-          event. The ``ring-2 ring-bambu-green`` on the Card root above is
-          the only at-a-glance "this printer is selected" indicator. */}
+      {/* The ticked ``SelectionBox`` in the header cluster (see below) is
+          the "this printer is selected" indicator. The card root used to
+          add ``ring-2 ring-bambu-green`` as well, but ``card-shadow`` was a
+          plain class that overrode the ring's box-shadow, so it never
+          painted — removed rather than resurrected: the tick already says
+          it, and a green frame on a 300 px card would compete with the
+          drop-zone overlay's border. */}
 
       {/* Drop zone overlay */}
       {(isDraggingFile || isDropUploading) && (
@@ -3013,35 +3137,100 @@ function PrinterCard({
           </div>
         </div>
       )}
-      <CardContent className={cardSize >= 3 ? 'p-5' : ''}>
+      <CardContent className={cardSize >= 3 ? 'p-5' : compact ? 'p-3' : ''}>
         {/* Header */}
         <div className={getSpacing()}>
           {/* Top row: Image, Name, Menu */}
           <div className="flex items-start justify-between gap-2">
-            <div className="flex items-center gap-3 min-w-0 flex-1">
-              {/* Printer Model Image (or print preview in compact mode) */}
-              {cardSize === 1 && status?.cover_url && (status.state === 'RUNNING' || status.state === 'PAUSE') ? (
-                <div className={`relative flex-shrink-0 ${getImageSize()}`}>
-                  <img
-                    src={withStreamToken(status.cover_url)}
-                    alt={status.subtask_name || t('printers.printPreview')}
-                    className="object-cover rounded-lg bg-bambu-dark w-full h-full"
-                  />
-                  {/* Paused overlay — scaled-down twin of the expanded-card
-                      glyph; the compact preview is small but still readable. */}
-                  {status.state === 'PAUSE' && (
-                    <div className="absolute inset-0 flex items-center justify-center bg-black/35 rounded-lg pointer-events-none">
-                      <Pause className="w-6 h-6 text-status-warning drop-shadow-md opacity-50" fill="currentColor" />
-                    </div>
+            <div className={`flex items-center gap-3 min-w-0 flex-1 ${compactDim}`}>
+              {compact ? (
+                /* Size S: no thumbnail. Model and name share the first line;
+                   the state, the pause chip, the recording badge, the plate
+                   pill and any HMS text share the second. Tags and the SWAP
+                   badge are deliberately absent at this size (owner's call,
+                   2026-09-09) — the expanded card keeps both. A name with an
+                   HMS error behind it is the way into the HMS dialog —
+                   underlined in the severity colour, no extra badge on a
+                   300 px card. */
+                <div className="min-w-0 flex-1">
+                  <div className="flex min-w-0 items-center gap-1">
+                    <span className="shrink-0 text-sm leading-none text-bambu-gray">{printer.model || 'Unknown Model'}</span>
+                    <span className="shrink-0 text-sm leading-none text-bambu-gray/50" aria-hidden="true">|</span>
+                    <h3 className="min-w-0 truncate text-base font-semibold leading-none text-white">
+                      {hmsErrors.length > 0 ? (
+                        <button
+                          type="button"
+                          onClick={() => setShowHMSModal(true)}
+                          title={t('hmsErrors.openFromCard')}
+                          className={`max-w-full truncate text-left underline decoration-2 underline-offset-[3px] transition-colors ${
+                            hmsSevere ? 'decoration-status-error/70 hover:text-status-error' : 'decoration-status-warning/60 hover:text-status-warning'
+                          }`}
+                        >
+                          {printer.name}
+                        </button>
+                      ) : (
+                        printer.name
+                      )}
+                    </h3>
+                  </div>
+                  <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5">
+                    <span
+                      className={`min-w-0 truncate text-xs ${
+                        !status?.connected ? 'text-red-400' : compactPaused ? 'text-amber-400' : 'text-bambu-gray'
+                      }`}
+                    >
+                      {compactStatusWord}
+                    </span>
+                    <PauseChip
+                      state={status?.state}
+                      pauseReason={status?.pause_reason}
+                      pauseReasonLabel={status?.pause_reason_label}
+                      pauseStartedAt={status?.pause_started_at}
+                      size="xs"
+                    />
+                    {status?.mqtt_recording && (
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-1 text-[length:var(--pc-t10,10px)] font-semibold px-1.5 py-0.5 rounded bg-red-900/50 text-red-300 flex-shrink-0 hover:bg-red-900/70 transition-colors"
+                        title={t('printers.mqttRecording.tooltip')}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setShowMQTTDebug(true);
+                        }}
+                      >
+                        <span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-pulse" />
+                        {t('printers.mqttRecording.badge', { size: formatFileSize(status.mqtt_recording_bytes ?? 0) })}
+                      </button>
+                    )}
+                    {printer.is_active === false && (
+                      <span className="inline-flex flex-shrink-0 items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[length:var(--pc-t10,10px)] font-medium text-amber-700 dark:bg-amber-500/20 dark:text-amber-400">
+                        <Wrench className="w-[var(--pc-i25,0.625rem)] h-[var(--pc-i25,0.625rem)]" />
+                        {t('printers.maintenance.pillLabel')}
+                      </span>
+                    )}
+                    {status?.connected && plateStatusPill}
+                    {compactHms && !hmsSevere && (
+                      <span className="min-w-0 truncate text-xs text-amber-400" title={compactHms.description}>
+                        HMS {compactHms.code}
+                        {compactHms.description ? ` · ${compactHms.description}` : ''}
+                      </span>
+                    )}
+                  </div>
+                  {compactHms && hmsSevere && (
+                    <p className="mt-1 min-w-0 truncate text-xs text-red-300" title={compactHms.description}>
+                      HMS {compactHms.code}
+                      {compactHms.description ? ` · ${compactHms.description}` : ''}
+                    </p>
                   )}
                 </div>
               ) : (
-                <img
-                  src={getPrinterImage(printer.model)}
-                  alt={printer.model || t('common.printer')}
-                  className={`object-contain rounded-lg bg-bambu-dark flex-shrink-0 ${getImageSize()}`}
-                />
-              )}
+              <>
+              {/* Printer Model Image */}
+              <img
+                src={getPrinterImage(printer.model)}
+                alt={printer.model || t('common.printer')}
+                className={`object-contain rounded-lg bg-bambu-dark flex-shrink-0 ${getImageSize()}`}
+              />
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2 flex-wrap">
                   <h3 className={`font-semibold text-white ${getTitleSize()}`}>{printer.name}</h3>
@@ -3054,7 +3243,7 @@ function PrinterCard({
                     pauseReason={status?.pause_reason}
                     pauseReasonLabel={status?.pause_reason_label}
                     pauseStartedAt={status?.pause_started_at}
-                    size={viewMode === 'compact' ? 'xs' : 'sm'}
+                    size="sm"
                   />
                   {/* MQTT recording chip.
                       ⚠️ The SIZE is the point of it, not decoration. Nothing caps
@@ -3079,36 +3268,6 @@ function PrinterCard({
                       {t('printers.mqttRecording.badge', { size: formatFileSize(status.mqtt_recording_bytes ?? 0) })}
                     </button>
                   )}
-                  {/* Connection indicator dot for compact mode */}
-                  {viewMode === 'compact' && (() => {
-                    const hmsErrors = status?.connected && status.hms_errors ? filterKnownHMSErrors(status.hms_errors) : [];
-                    const hasSevere = hmsErrors.some(e => e.severity <= 2);
-                    const hasWarning = hmsErrors.length > 0;
-                    // PAUSE state without HMS used to render as a green "ok" pip — easy to
-                    // miss in a 20-printer compact grid. Treat any PAUSE as warning-yellow
-                    // unless severe HMS bumps it to red.
-                    const isPaused = status?.connected && status?.state === 'PAUSE';
-                    const pipColor = !status?.connected
-                      ? 'bg-status-error'
-                      : hasSevere
-                        ? 'bg-status-error'
-                        : (hasWarning || isPaused)
-                          ? 'bg-status-warning'
-                          : 'bg-status-ok';
-                    const pipTitle = !status?.connected
-                      ? t('printers.connection.offline')
-                      : hasWarning
-                        ? `${hmsErrors.length} HMS ${hmsErrors.length === 1 ? 'error' : 'errors'}`
-                        : isPaused
-                          ? (status?.pause_reason_label || t('printers.status.paused'))
-                          : t('printers.connection.connected');
-                    return (
-                      <div
-                        className={`w-[var(--pc-i2,0.5rem)] h-[var(--pc-i2,0.5rem)] rounded-full flex-shrink-0 ${pipColor}`}
-                        title={pipTitle}
-                      />
-                    );
-                  })()}
                 </div>
                 {/* Tags, on a line of their own.
                     ⚠️ Deliberately NOT inside the name row above: that row is
@@ -3156,17 +3315,30 @@ function PrinterCard({
                   )}
                 </p>
               </div>
+              </>
+              )}
             </div>
-            {/* Selection checkbox + menu button + dropdown — single
-                ``relative flex`` container so the dropdown's ``right-0``
-                still anchors to the rightmost edge (which is the menu
-                button's right edge — checkbox sits to its left).
+            {/* Selection checkbox + menu button + dropdown — one
+                ``relative flex`` wrapper so the dropdown's ``right-0``
+                anchors to the menu button's right edge (checkbox and, on
+                compact cards, the maximise button sit to its left). The
+                popup's close X lives in the outer flex, to the RIGHT of
+                the kebab, deliberately outside that wrapper — inside it
+                the menu would unfurl from the X's corner instead.
                 Checkbox is hidden when the parent doesn't pass
                 ``onSelect`` (single-printer farms etc.). Native click on
                 the checkbox preserves Shift/Ctrl/Meta modifiers, so
                 range-select works from the checkbox the same as from the
                 card body. */}
-            <div className="relative flex items-center gap-1 flex-shrink-0">
+            <div
+              className={
+                compact
+                  ? 'card-actions-reveal card-actions-pill absolute top-1.5 right-1.5 flex items-center gap-1 rounded-full px-1 py-0.5'
+                  : 'flex items-center gap-1 flex-shrink-0'
+              }
+              data-locked={compact ? String(isSelected) : undefined}
+            >
+              <div className="relative flex items-center gap-1">
               {onSelect && (
                 <Button
                   variant="ghost"
@@ -3177,6 +3349,7 @@ function PrinterCard({
                   }}
                   title={t('printers.bulk.selectHint')}
                   aria-pressed={isSelected}
+                  className={compact ? '!p-1.5 !rounded-md' : undefined}
                 >
                   {isSelected ? (
                     <SelectionBox checked={true} className="w-[var(--pc-i4,1rem)] h-[var(--pc-i4,1rem)]" />
@@ -3200,6 +3373,7 @@ function PrinterCard({
                   }}
                   title={t('printers.expandCardHint')}
                   aria-label={t('printers.expandCard')}
+                  className="!p-1.5 !rounded-md"
                 >
                   <Maximize2 className="w-[var(--pc-i4,1rem)] h-[var(--pc-i4,1rem)]" />
                 </Button>
@@ -3208,6 +3382,7 @@ function PrinterCard({
                 variant="ghost"
                 size="sm"
                 onClick={() => setShowMenu(!showMenu)}
+                className={compact ? '!p-1.5 !rounded-md' : undefined}
               >
                 <MoreVertical className="w-[var(--pc-i4,1rem)] h-[var(--pc-i4,1rem)]" />
               </Button>
@@ -3435,6 +3610,29 @@ function PrinterCard({
                   </button>
                 </div>
                 </>
+              )}
+              </div>
+              {/* Collapse: closes the expand popup. Rightmost, after the
+                  kebab, and OUTSIDE the ``relative`` wrapper above so the
+                  dropdown keeps anchoring to the kebab's corner rather than
+                  to this button's. The popup's shell draws no header of its
+                  own — a title bar above a card that already carries the
+                  printer's name and its own button cluster was one name and
+                  one X too many — so this is where the popup is closed from
+                  (Esc still works through the modal stack). */}
+              {viewMode === 'expanded' && onCollapse && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onCollapse();
+                  }}
+                  title={t('printers.collapseCardHint')}
+                  aria-label={t('printers.collapseCard')}
+                >
+                  <X className="w-[var(--pc-i4,1rem)] h-[var(--pc-i4,1rem)]" />
+                </Button>
               )}
             </div>
           </div>
@@ -3740,12 +3938,9 @@ function PrinterCard({
           // out-of-service.
           <>
             {viewMode === 'compact' ? (
-              <div className="mt-2 flex items-center gap-2 px-2 py-1.5 rounded-full bg-amber-50 dark:bg-amber-500/15 border border-amber-300 dark:border-amber-500/30">
-                <Wrench className="w-[var(--pc-i3,0.75rem)] h-[var(--pc-i3,0.75rem)] text-amber-600 dark:text-amber-400 shrink-0" />
-                <span className="text-[length:var(--pc-t11,11px)] text-amber-700 dark:text-amber-400 font-medium truncate">
-                  {t('printers.maintenance.pillLabel')}
-                </span>
-              </div>
+              // Size S says it in the header's status row (the amber pill);
+              // nothing replaces the body.
+              null
             ) : (
               <>
                 <div className="flex items-center gap-2 mb-2">
@@ -3779,73 +3974,27 @@ function PrinterCard({
           </>
         ) : status?.connected && (
           <>
-            {/* Compact: Simple status bar */}
+            {/* Compact: one body block per state — the job and its progress
+                while printing, the last print and the plate buttons after it,
+                the queue's head under either. The metrics line keeps the same
+                formatters as the expanded card so the two sizes read alike. */}
             {viewMode === 'compact' ? (
-              <div className="mt-2">
+              <div className={compactDim}>
                 {(status.state === 'RUNNING' || status.state === 'PAUSE') ? (
-                  <div className="flex items-center gap-2">
-                    <div className="flex-1 bg-bambu-dark-tertiary rounded-full h-1.5">
-                      <div
-                        className={`${status.state === 'PAUSE' ? 'bg-status-warning' : 'bg-bambu-green'} h-1.5 rounded-full transition-all`}
-                        style={{ width: `${status.progress || 0}%` }}
-                      />
-                    </div>
-                    <div className="flex flex-shrink-0 items-center gap-1.5">
-                      <span className="text-xs text-white">{Math.round(status.progress || 0)}%</span>
-                      {plateStatusPill}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="min-w-0 flex-1 flex items-center gap-1.5">
-                      <p className="min-w-0 truncate text-xs text-bambu-gray">{getStatusDisplay(status.state, status.stg_cur_name)}</p>
-                      {plateStatusPill}
-                    </div>
-                    {showClearPlateButton && repeatAvailable && (
-                      <button
-                        type="button"
-                        onClick={() => repeatPrintMutation.mutate()}
-                        disabled={repeatPrintMutation.isPending || !hasPermission('printers:clear_plate')}
-                        aria-label={t('queue.repeatPrint')}
-                        className="inline-flex h-[var(--pc-i5,1.25rem)] w-[var(--pc-i5,1.25rem)] flex-shrink-0 items-center justify-center rounded-full bg-yellow-500/20 border border-yellow-400/40 text-yellow-600 dark:text-yellow-400 hover:bg-yellow-500/30 transition-colors disabled:opacity-50"
-                        title={!hasPermission('printers:clear_plate') ? t('printers.permission.noControl') : t('queue.repeatPrint')}
-                      >
-                        {repeatPrintMutation.isPending ? (
-                          <Loader2 className="w-[var(--pc-i3,0.75rem)] h-[var(--pc-i3,0.75rem)] animate-spin" />
-                        ) : (
-                          <RotateCcw className="w-[var(--pc-i3,0.75rem)] h-[var(--pc-i3,0.75rem)]" />
-                        )}
-                      </button>
+                  <>
+                    {compactJobName && (
+                      <p className="mt-2 min-w-0 truncate text-sm text-bambu-gray-light" title={compactJobName}>{compactJobName}</p>
                     )}
-                    {showClearPlateButton && (
-                      <button
-                        type="button"
-                        onClick={() => clearPlateMutation.mutate()}
-                        disabled={clearPlateMutation.isPending || !hasPermission('printers:clear_plate')}
-                        aria-label={t('printers.plateStatus.markCleared')}
-                        className="inline-flex h-[var(--pc-i5,1.25rem)] w-[var(--pc-i5,1.25rem)] flex-shrink-0 items-center justify-center rounded-full bg-yellow-500/20 border border-yellow-400/40 text-yellow-600 dark:text-yellow-400 hover:bg-yellow-500/30 transition-colors disabled:opacity-50"
-                        title={!hasPermission('printers:clear_plate') ? t('printers.permission.noControl') : t('printers.plateStatus.markCleared')}
-                      >
-                        {clearPlateMutation.isPending ? (
-                          <Loader2 className="w-[var(--pc-i3,0.75rem)] h-[var(--pc-i3,0.75rem)] animate-spin" />
-                        ) : (
-                          <PlateClearedIcon className="w-[var(--pc-i3,0.75rem)] h-[var(--pc-i3,0.75rem)]" />
-                        )}
-                      </button>
-                    )}
-                  </div>
-                )}
-                {/* Size S exists to watch a whole fleet on one screen, and it
-                    could not answer the question that view is for — "which
-                    printer finishes first". One line of the metrics the expanded
-                    card already shows, through the same formatters so the two
-                    sizes read alike. Each value is dropped individually when the
-                    printer does not report it, and the row keeps its height when
-                    nothing is printing so cards do not shift as prints start and
-                    finish (upstream #2674). */}
-                <div className="mt-1 flex min-h-[14px] items-center gap-2 overflow-hidden text-[length:var(--pc-t11,11px)] leading-none text-bambu-gray">
-                  {(status.state === 'RUNNING' || status.state === 'PAUSE') && (
-                    <>
+                    <div className="mt-1 flex items-center gap-2">
+                      <div className="flex-1 bg-bambu-dark-tertiary rounded-full h-1.5">
+                        <div
+                          className={`${status.state === 'PAUSE' ? 'bg-status-warning' : 'bg-bambu-green'} h-1.5 rounded-full transition-all`}
+                          style={{ width: `${status.progress || 0}%` }}
+                        />
+                      </div>
+                      <span className="flex-shrink-0 text-xs text-white">{Math.round(status.progress || 0)}%</span>
+                    </div>
+                    <div className="mt-1 flex min-h-[14px] items-center gap-2 overflow-hidden text-[length:var(--pc-t11,11px)] leading-none text-bambu-gray">
                       {status.remaining_time != null && status.remaining_time > 0 && (
                         <>
                           <span className="flex shrink-0 items-center gap-1">
@@ -3863,9 +4012,29 @@ function PrinterCard({
                           {status.layer_num}/{status.total_layers}
                         </span>
                       )}
-                    </>
-                  )}
-                </div>
+                    </div>
+                    {/* Filament so far — the same line the expanded card shows
+                        under the file name; it polls only while printing. */}
+                    <UsageProjection printerId={printer.id} printing />
+                  </>
+                ) : (
+                  <>
+                    {(status.state === 'FINISH' || status.state === 'FAILED') && lastPrint && (() => {
+                      const finishedAt = lastPrint.completed_at ? parseUTCDate(lastPrint.completed_at) : null;
+                      const name = lastPrint.print_name || lastPrint.filename;
+                      return (
+                        <div className="mt-2 flex min-w-0 items-baseline gap-1.5">
+                          <span className="min-w-0 truncate text-sm text-bambu-gray-light" title={name}>{name}</span>
+                          {finishedAt && (
+                            <span className="shrink-0 text-[length:var(--pc-t11,11px)] text-bambu-gray">{formatTimeOnly(finishedAt, timeFormat)}</span>
+                          )}
+                        </div>
+                      );
+                    })()}
+                    {plateClearButtons}
+                  </>
+                )}
+                {queueStrip}
               </div>
             ) : (
               /* Expanded: Full status section */
@@ -3911,7 +4080,7 @@ function PrinterCard({
                       {status.current_print && (status.state === 'RUNNING' || status.state === 'PAUSE') ? (
                         <>
                           <div className="mb-1 flex items-center gap-2">
-                            <p className="text-sm text-bambu-gray">{getStatusDisplay(status.state, status.stg_cur_name)}</p>
+                            <p className="text-sm text-bambu-gray">{getStatusDisplay(status.state, status.stg_cur_name, t)}</p>
                             {plateStatusPill}
                           </div>
                           <p className="text-white text-sm mb-2 truncate">
@@ -3961,7 +4130,7 @@ function PrinterCard({
                           <p className="text-sm text-bambu-gray mb-1">{t('printers.sort.status')}</p>
                           <div className="mb-2 flex items-center gap-2">
                             <p className="text-white text-sm">
-                              {getStatusDisplay(status.state, status.stg_cur_name)}
+                              {getStatusDisplay(status.state, status.stg_cur_name, t)}
                             </p>
                             {plateStatusPill}
                           </div>
@@ -4124,43 +4293,7 @@ function PrinterCard({
               );
             })()}
 
-            {/* Two answers to a full plate, side by side: print it again, or
-                clear and let the queue move on. ⚠️ The `mt-2` lives on the row
-                rather than each button — on both it doubles the gap. */}
-            {viewMode === 'expanded' && showClearPlateButton && (
-              <div className="mt-2 flex gap-2">
-                {repeatAvailable && (
-                  <button
-                    type="button"
-                    onClick={() => repeatPrintMutation.mutate()}
-                    disabled={repeatPrintMutation.isPending || !hasPermission('printers:clear_plate')}
-                    className="flex-1 inline-flex items-center justify-center gap-2 px-3 py-1.5 rounded-lg bg-yellow-100 dark:bg-yellow-500/20 border border-yellow-300 dark:border-yellow-400/40 text-yellow-700 dark:text-yellow-400 hover:bg-yellow-500/30 transition-colors text-xs font-medium disabled:opacity-50"
-                    title={!hasPermission('printers:clear_plate') ? t('printers.permission.noControl') : t('queue.repeatPrint')}
-                  >
-                    {repeatPrintMutation.isPending ? (
-                      <Loader2 className="w-[var(--pc-i3,0.75rem)] h-[var(--pc-i3,0.75rem)] animate-spin" />
-                    ) : (
-                      <RotateCcw className="w-[var(--pc-i4,1rem)] h-[var(--pc-i4,1rem)]" />
-                    )}
-                    {t('queue.repeatPrint')}
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={() => clearPlateMutation.mutate()}
-                  disabled={clearPlateMutation.isPending || !hasPermission('printers:clear_plate')}
-                  className="flex-1 inline-flex items-center justify-center gap-2 px-3 py-1.5 rounded-lg bg-yellow-100 dark:bg-yellow-500/20 border border-yellow-300 dark:border-yellow-400/40 text-yellow-700 dark:text-yellow-400 hover:bg-yellow-500/30 transition-colors text-xs font-medium disabled:opacity-50"
-                  title={!hasPermission('printers:clear_plate') ? t('printers.permission.noControl') : t('printers.plateStatus.markCleared')}
-                >
-                  {clearPlateMutation.isPending ? (
-                    <Loader2 className="w-[var(--pc-i3,0.75rem)] h-[var(--pc-i3,0.75rem)] animate-spin" />
-                  ) : (
-                    <PlateClearedIcon className="w-[var(--pc-i4,1rem)] h-[var(--pc-i4,1rem)]" />
-                  )}
-                  {t('queue.clearPlateShort')}
-                </button>
-              </div>
-            )}
+            {viewMode === 'expanded' && plateClearButtons}
 
             {/* Controls - Fans + Print Buttons */}
             {viewMode === 'expanded' && (() => {
@@ -5911,7 +6044,7 @@ function PrinterCard({
         {printerQueue && (
           <RouterLink
             to={`/archives?printer=${printer.id}`}
-            className="block text-xs text-bambu-gray hover:text-white pt-2 mt-2 border-t border-bambu-dark-tertiary transition-colors"
+            className={`block text-xs text-bambu-gray hover:text-white pt-2 mt-2 border-t border-bambu-dark-tertiary transition-colors ${compactDim}`}
             title={t('queueCard.footer.viewArchivesTitle')}
           >
             {t('queueCard.footer.pending', { count: printerQueue.pending_count })}
@@ -8493,10 +8626,7 @@ export function PrintersPage() {
     return localStorage.getItem('printerSortAsc') !== 'false';
   });
   // Card size: 1=small, 2=medium, 3=large, 4=xl
-  const [cardSize, setCardSize] = useState<number>(() => {
-    const saved = localStorage.getItem('printerCardSize');
-    return saved ? parseInt(saved, 10) : 2; // Default to medium
-  });
+  const [cardSize, setCardSize] = useState<number>(() => readStoredCardSize('printerCardSize'));
   // Page view: 'cards' = printer cards (default), 'camwall' = grid of live camera tiles (#451)
   const [pageView, setPageView] = useState<'cards' | 'camwall'>(() => {
     return localStorage.getItem('printerPageView') === 'camwall' ? 'camwall' : 'cards';
@@ -8856,7 +8986,10 @@ export function PrintersPage() {
   // Grid classes based on card size (1=small, 2=medium, 3=large, 4=xl)
   const getGridClasses = () => {
     switch (cardSize) {
-      case 1: return 'grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5'; // S: many small cards
+      // S: 1 → 2 → 3 → 4 columns at sm / lg / xl — four at 1280+, not five,
+      // so a card keeps ~300 px for its name, chips and the queue strip
+      // (owner's grid from the 2026-09-09 redesign).
+      case 1: return 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4';
       case 2: return 'grid-cols-1 md:grid-cols-2 xl:grid-cols-3'; // M: medium cards
       case 3: return 'grid-cols-1 lg:grid-cols-2'; // L: large cards, 2 columns max
       case 4: return 'grid-cols-1'; // XL: single column, full width
@@ -8864,7 +8997,6 @@ export function PrintersPage() {
     }
   };
 
-  const cardSizeLabels = ['S', 'M', 'L', 'XL'];
 
   // Responsive toolbar state (upstream PR #1203). When the inline expanded
   // controls overflow the available width, collapse them under three
@@ -9064,8 +9196,20 @@ export function PrintersPage() {
   //                            picks; equivalent to Ctrl-click).
   //
 
+  // The server's per-printer «free at» (running print + queue + staged work,
+  // as the queue page's stats bar simulates it) — fetched only while that
+  // order is picked; nothing else on this page reads it.
+  const { data: farmForecast } = useQuery({
+    queryKey: ['queue-forecast'],
+    queryFn: api.getQueueForecast,
+    refetchInterval: 30_000,
+    enabled: sortBy === 'freeAt',
+  });
+  const forecastRows = useMemo(() => forecastById(farmForecast), [farmForecast]);
+
   const sortedPrinters = useMemo(() => {
     const sorted = [...filteredPrinters];
+    const statusOf = (printer: Printer) => queryClient.getQueryData<EtaStatus>(['printerStatus', printer.id]);
 
     switch (sortBy) {
       case 'name':
@@ -9117,31 +9261,23 @@ export function PrintersPage() {
         });
         break;
       case 'eta':
-        // Sort by remaining print time so the printer finishing next sits on
-        // top (stage the next job's filament ahead). Tiers: printing-with-ETA
-        // (asc by remaining minutes) > printing-without-ETA-yet > idle > offline.
-        // Data is the cached remaining_time already read by the per-card ETA
-        // label — no new backend round-trip.
-        sorted.sort((a, b) => {
-          const statusA = queryClient.getQueryData<{ connected: boolean; state: string | null; remaining_time: number | null }>(['printerStatus', a.id]);
-          const statusB = queryClient.getQueryData<{ connected: boolean; state: string | null; remaining_time: number | null }>(['printerStatus', b.id]);
-
-          const tier = (s: typeof statusA) => {
-            if (!s?.connected) return 3; // offline last
-            if (s.state === 'RUNNING' && s.remaining_time != null && s.remaining_time > 0) return 0; // printing with ETA
-            if (s.state === 'RUNNING') return 1; // printing without an ETA yet
-            return 2; // idle / finished
-          };
-
-          const ta = tier(statusA);
-          const tb = tier(statusB);
-          if (ta !== tb) return ta - tb;
-          if (ta === 0) {
-            const diff = (statusA!.remaining_time ?? 0) - (statusB!.remaining_time ?? 0);
-            if (diff !== 0) return diff;
-          }
-          return a.name.localeCompare(b.name);
-        });
+        // The printer finishing its CURRENT job next on top (stage the next
+        // job's filament ahead); the queue behind it does not count. Tiers:
+        // printing-with-ETA (asc by remaining minutes) > printing-without-ETA-
+        // yet > idle > offline, from the cached remaining_time the per-card ETA
+        // label already reads — no new backend round-trip. The comparator is
+        // shared with the queue page so the two orders never drift apart.
+        sorted.sort((a, b) => compareCurrentJobEta(statusOf(a), statusOf(b)) || a.name.localeCompare(b.name));
+        break;
+      case 'freeAt':
+        // The printer free SOONEST on top — its running print plus everything
+        // queued behind it, as the server's forecast simulates it. Same tiers
+        // as the current-job order, so the two read as a pair.
+        sorted.sort(
+          (a, b) =>
+            compareFreeAt(forecastRows.get(a.id), forecastRows.get(b.id), statusOf(a), statusOf(b)) ||
+            a.name.localeCompare(b.name),
+        );
         break;
     }
 
@@ -9151,7 +9287,7 @@ export function PrintersPage() {
     }
 
     return sorted;
-  }, [filteredPrinters, sortBy, sortAsc, queryClient]);
+  }, [filteredPrinters, sortBy, sortAsc, queryClient, forecastRows]);
 
   // Modifier-aware single-printer selection. Behaves like a file-manager:
   //
@@ -9387,42 +9523,15 @@ export function PrintersPage() {
       </div>
 
       {/* Card size selector */}
-      <div className={`flex h-8 items-center bg-bambu-dark rounded-lg border border-bambu-dark-tertiary ${pageView === 'camwall' ? 'opacity-40 pointer-events-none' : ''} ${inMenu ? 'w-full' : ''}`}>
-        {cardSizeLabels.map((label, index) => {
-          const size = index + 1;
-          const isSelected = cardSize === size;
-          return (
-            <button
-              key={label}
-              type="button"
-              onClick={() => {
-                setCardSize(size);
-                localStorage.setItem('printerCardSize', String(size));
-              }}
-              className={`h-full px-2 text-xs font-medium transition-colors ${inMenu ? 'flex-1' : ''} ${
-                index === 0 ? 'rounded-l-lg' : ''
-              } ${
-                index === cardSizeLabels.length - 1 ? 'rounded-r-lg' : ''
-              } ${
-                isSelected
-                  ? 'bg-bambu-green text-white'
-                  : 'text-white hover:bg-bambu-dark-tertiary'
-              }`}
-              title={
-                label === 'S'
-                  ? t('printers.cardSize.small')
-                  : label === 'M'
-                    ? t('printers.cardSize.medium')
-                    : label === 'L'
-                      ? t('printers.cardSize.large')
-                      : t('printers.cardSize.extraLarge')
-              }
-            >
-              {label}
-            </button>
-          );
-        })}
-      </div>
+      <CardSizeSwitch
+        value={cardSize}
+        onChange={(size) => {
+          setCardSize(size);
+          localStorage.setItem('printerCardSize', String(size));
+        }}
+        disabled={pageView === 'camwall'}
+        fullWidth={inMenu}
+      />
     </>
   );
 
@@ -9803,9 +9912,12 @@ export function PrintersPage() {
       )}
 
       {/* Compact-card "expand into popup": re-mount the same PrinterCard
-          with M-size sizing for the picked printer. Closes through the
-          shell's X or Esc — a tap beside the card no longer dismisses it.
-          The popup card itself does NOT receive ``onExpand``
+          with M-size sizing for the picked printer. The shell draws no
+          header (``hideClose`` + no title): the card already shows the
+          printer's name and carries the popup's X in its own button
+          cluster (``onCollapse``), so a title bar above it repeated both.
+          Closes through that X or Esc — a tap beside the card does not
+          dismiss it. The popup card itself does NOT receive ``onExpand``
           (no nested popup) and is forced to ``viewMode='expanded'`` /
           ``cardSize=2`` regardless of the page's current sizing.
 
@@ -9819,7 +9931,8 @@ export function PrintersPage() {
         return (
           <Modal
             onClose={() => setExpandedPrinterId(null)}
-            title={expandedPrinter.name}
+            hideClose
+            ariaLabel={expandedPrinter.name}
             size="xl"
             panelStyle={{ backgroundColor: 'transparent', border: 0, boxShadow: 'none' }}
             bodyClassName="my-4"
@@ -9830,6 +9943,7 @@ export function PrintersPage() {
               maintenanceInfo={maintenanceByPrinter[expandedPrinter.id]}
               viewMode="expanded"
               cardSize={2}
+              onCollapse={() => setExpandedPrinterId(null)}
               spoolmanEnabled={spoolmanEnabled}
               hasUnlinkedSpools={hasUnlinkedSpools}
               linkedSpools={linkedSpools}

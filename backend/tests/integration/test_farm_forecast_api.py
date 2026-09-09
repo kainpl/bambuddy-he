@@ -278,3 +278,10 @@ async def test_the_queue_route_matches_the_batch_farm_header(committing_client, 
     queue = (await committing_client.get("/api/v1/queue/forecast")).json()
     assert queue["free_seconds"] == H and queue["free_at"].endswith("Z")
     assert queue["unknown_prints"] == 1
+    # One row per machine — the «free at» sorts read these. p1 owes the queued
+    # hour and carries the estimate-less running print; the other two are free.
+    rows = {row["printer_id"]: row for row in queue["printers"]}
+    assert set(rows) == {p.id for p in farm["printers"]}
+    assert rows[p1.id]["free_seconds"] == H and rows[p1.id]["unknown_prints"] == 1
+    assert rows[p1.id]["free_at"].endswith("Z")
+    assert all(rows[p.id]["free_seconds"] == 0 and rows[p.id]["unknown_prints"] == 0 for p in farm["printers"][1:])

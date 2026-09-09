@@ -9,7 +9,7 @@ import logging
 import os
 import shutil
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import NamedTuple
 
@@ -468,11 +468,7 @@ async def get_orders_forecast(
     now = _utc_now()
     farm, orders = await farm_forecast.forecast_projects(db, parsed, now)
     return ForecastBatchOut(
-        farm=FarmForecastOut(
-            free_at=now + timedelta(seconds=farm.free_seconds),
-            free_seconds=farm.free_seconds,
-            unknown_prints=farm.unknown_prints,
-        ),
+        farm=FarmForecastOut.of(now, farm),
         orders=[OrderForecastOut(**_order_forecast_fields(orders[pid])) for pid in parsed if pid in orders],
     )
 
