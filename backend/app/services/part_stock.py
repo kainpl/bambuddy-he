@@ -63,7 +63,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.models.archive import PrintArchive
 from backend.app.models.archive_part import PrintArchivePart
 from backend.app.models.part_stock import ProductPartStockMovement
-from backend.app.models.product import ProductPart, ProductPlate
+from backend.app.models.product import Product, ProductPart, ProductPlate
 from backend.app.models.project_line import ProjectLine
 from backend.app.services.order_metrics import IN_CHUNK, index_plates, products_for_print, row_quantity
 from backend.app.services.product_composition import part_index
@@ -383,6 +383,49 @@ async def movements(db: AsyncSession, product_id: int, *, limit: int = 200) -> l
         .limit(limit)
     )
     return list(rows.scalars().all())
+
+
+async def movements_across(
+    db: AsyncSession,
+    *,
+    product_id: int | None = None,
+    part_id: int | None = None,
+    reason: str | None = None,
+    before_id: int | None = None,
+    limit: int = 50,
+) -> list[tuple[ProductPartStockMovement, str, int, str]]:
+    """The farm's ledger, newest first, keyset-paged: ``(movement, part name,
+    product id, product name)`` per row.
+
+    ⚠️ **Paged on ``id``, not on ``created_at``.** ``created_at`` is a
+    second-resolution server default and a banking run writes several rows
+    inside one second, so a cursor on it would skip or repeat rows at every
+    page edge. ``id`` is monotonic on both dialects, and rows are written in
+    time order, so ``ORDER BY id DESC`` is the same order :func:`movements`
+    shows the product page — stated here rather than assumed.
+
+    Like :func:`movements`, deliberately NOT filtered to counted parts: a row
+    written before a part was zeroed still happened. A filter naming a product
+    or part that does not exist yields an empty page — a journal filter is not
+    a lookup, and a 404 would be the wrong answer to "show me nothing".
+    """
+    stmt = (
+        select(ProductPartStockMovement, ProductPart.name, Product.id, Product.name)
+        .join(ProductPart, ProductPart.id == ProductPartStockMovement.product_part_id)
+        .join(Product, Product.id == ProductPart.product_id)
+        .order_by(ProductPartStockMovement.id.desc())
+        .limit(limit)
+    )
+    if product_id is not None:
+        stmt = stmt.where(Product.id == product_id)
+    if part_id is not None:
+        stmt = stmt.where(ProductPart.id == part_id)
+    if reason is not None:
+        stmt = stmt.where(ProductPartStockMovement.reason == reason)
+    if before_id is not None:
+        stmt = stmt.where(ProductPartStockMovement.id < before_id)
+    rows = await db.execute(stmt)
+    return [(movement, part_name, prod_id, prod_name) for movement, part_name, prod_id, prod_name in rows.all()]
 
 
 async def counted_parts_of(db: AsyncSession, product_ids: Sequence[int]) -> list[ProductPart]:

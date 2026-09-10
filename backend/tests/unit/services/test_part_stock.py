@@ -1156,3 +1156,57 @@ async def test_a_part_banked_but_never_reserved_does_not_zero_the_line(db_sessio
 
     assert reads.reserved_units == {line.id: 2}
     assert reads.banked_by_part == {(line.id, late.id): 3}
+
+
+@pytest.mark.asyncio
+async def test_movements_across_pages_by_id_newest_first(db_session):
+    """The farm journal is keyset-paged on ``id``: newest first, ``before_id``
+    excludes the row it names, and a full page hands back the id to continue
+    from. ``created_at`` is a second-resolution default and cannot page."""
+    from backend.app.models.product import Product, ProductPart
+    from backend.app.services.part_stock import move, movements_across
+
+    lamp = Product(name="Lamp")
+    db_session.add(lamp)
+    await db_session.flush()
+    lid = ProductPart(product_id=lamp.id, kind="printed", name="lid", name_key="lid", qty_per_unit=1)
+    db_session.add(lid)
+    await db_session.flush()
+    for delta in (1, 2, 3, 4, 5):
+        await move(db_session, part_id=lid.id, delta=delta, reason="unfiled_print")
+    await db_session.flush()
+
+    page = await movements_across(db_session, limit=2)
+    assert [row.delta for row, *_ in page] == [5, 4]
+    assert page[0][1] == "lid" and page[0][2] == lamp.id and page[0][3] == "Lamp"
+
+    older = await movements_across(db_session, before_id=page[-1][0].id, limit=2)
+    assert [row.delta for row, *_ in older] == [3, 2]
+
+    last = await movements_across(db_session, before_id=older[-1][0].id, limit=2)
+    assert [row.delta for row, *_ in last] == [1]
+
+
+@pytest.mark.asyncio
+async def test_movements_across_filters_by_product_part_and_reason(db_session):
+    from backend.app.models.product import Product, ProductPart
+    from backend.app.services.part_stock import move, movements_across
+
+    lamp, vase = Product(name="Lamp"), Product(name="Vase")
+    db_session.add_all([lamp, vase])
+    await db_session.flush()
+    lid = ProductPart(product_id=lamp.id, kind="printed", name="lid", name_key="lid", qty_per_unit=1)
+    base = ProductPart(product_id=lamp.id, kind="printed", name="base", name_key="base", qty_per_unit=1)
+    body = ProductPart(product_id=vase.id, kind="printed", name="body", name_key="body", qty_per_unit=1)
+    db_session.add_all([lid, base, body])
+    await db_session.flush()
+    await move(db_session, part_id=lid.id, delta=2, reason="unfiled_print")
+    await move(db_session, part_id=base.id, delta=3, reason="unfiled_print")
+    await move(db_session, part_id=body.id, delta=4, reason="unfiled_print")
+    await move(db_session, part_id=lid.id, delta=1, reason="manual", note="found one")
+    await db_session.flush()
+
+    assert {r.product_part_id for r, *_ in await movements_across(db_session, product_id=lamp.id)} == {lid.id, base.id}
+    assert [r.delta for r, *_ in await movements_across(db_session, part_id=body.id)] == [4]
+    assert [r.delta for r, *_ in await movements_across(db_session, reason="manual")] == [1]
+    assert await movements_across(db_session, product_id=999) == []
