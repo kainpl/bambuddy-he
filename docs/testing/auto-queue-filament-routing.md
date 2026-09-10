@@ -108,13 +108,14 @@ Raw logs and the disposable-cluster launcher remain local under `temp/routing-va
 
 ## Merge verification — 2026-09-10
 
-Target: `feature/v0.5.6-fixes`, combining `47c0e9e4` with `a52ff2b8` from `feature/auto-queue-filament-routing`. The operator's printer tags, queue grouping, monitor preview and documentation changes are retained. The shared API client contains both printer tags and routing policy. Branch-exclusive source files were compared with their original Git objects: 26 operator files and 100 routing files matched exactly before the verification record was added.
+Merge commit: `f44c9d3c`. Target: `feature/v0.5.6-fixes`, combining `47c0e9e4` with `a52ff2b8` from `feature/auto-queue-filament-routing`. The operator's printer tags, queue grouping, monitor preview and documentation changes are retained. The shared API client contains both printer tags and routing policy. Branch-exclusive source files were compared with their original Git objects: 26 operator files and 100 routing files matched exactly before the verification record was added.
 
 Conflicts were limited to CHANGELOG and generated assets. CHANGELOG retains both sets of entries; `static/` was rebuilt from the merged frontend source.
 
 | Check on merged source | Result |
 | --- | --- |
-| Full backend, `pytest backend/tests/ -n 8 --dist loadfile -q --tb=short` | 6 failed, 12871 passed, 141 skipped, 1 warning in 489.42s (0:08:09) |
+| Full backend after merge, default SQLite and isolated DATA_DIR | **12877 passed, 141 skipped**, 1 existing warning in 472.55s (0:07:52) |
+| Earlier full backend with an explicit SQLite URL | 6 failed, 12871 passed, 141 skipped, 1 warning in 489.42s (0:08:09) |
 | Environment-dependent database settings and orphan-pruner modules, rerun with default SQLite | 28 passed, 1 skipped; covers all six environment failures above |
 | Full frontend, `npm run test:run -- --maxWorkers=2` | 3242 passed, 1 skipped |
 | Backend lint and format | Passed |
@@ -124,8 +125,16 @@ Conflicts were limited to CHANGELOG and generated assets. CHANGELOG retains both
 
 The initial frontend run at default worker concurrency was stopped after timeouts under simultaneous backend/build/graph load. The complete frontend run above uses two workers with unchanged assertions and timeouts. Backend tests use a temporary DATA_DIR and a separate SQLite harness; the routing migration test creates its own temporary PostgreSQL cluster. The working instance database was not a test target.
 
-The first merged backend run reached 99% and blocked in the existing support-section unit tests: a read-only worker stack showed `psutil.net_connections` waiting inside Windows while the timezone test collected unrelated process diagnostics. Those section tests now stub the process census. The dedicated process-diagnostics tests remain unchanged; the combined support suites pass all 61 tests. The full backend result above is the subsequent run with that test isolation fix. Application code was not changed for this host-dependent test issue.
+The first merged backend run reached 99% and blocked in the existing support-section unit tests: a read-only worker stack showed `psutil.net_connections` waiting inside Windows while the timezone test collected unrelated process diagnostics. Those section tests now stub the process census. The dedicated process-diagnostics tests remain unchanged; the combined support suites pass all 61 tests. Both completed full backend runs above include that test isolation fix. Application code was not changed for this host-dependent test issue.
 
-That completed full run used an explicitly configured temporary SQLite URL. Six tests expect the default database mode: the orphan-pruner intentionally refuses an explicitly configured URL, and a settings test checks the default fallback. Both affected modules passed with an isolated DATA_DIR and empty DATABASE_URL (default SQLite), covering all six failures without application changes. A further full run in that environment is recorded separately once complete.
+That completed full run used an explicitly configured temporary SQLite URL. Six tests expect the default database mode: the orphan-pruner intentionally refuses an explicitly configured URL, and a settings test checks the default fallback. Both affected modules passed with an isolated DATA_DIR and empty DATABASE_URL (default SQLite), covering all six failures without application changes. The final complete run after merge used that corrected environment and passed all 12877 tests; its log is `backend-verified.log`.
 
 Raw logs are local in `temp/merge-auto-routing/`. This merge does not include a push, deployment or physical printer smoke test.
+
+## Public documentation follow-through
+
+The separate `docs.bamdude.top` development branch adds paired English/Ukrainian **Filament Routing** pages and updates Auto-Queue, printer queues, order plans, archives, library files, AMS/nozzle mapping, and queue-mode virtual printers. The existing operator Tag-sort documentation edit is retained and accompanied by Ukrainian text. The shared page covers automatic/AMS-only/external-only feeds, exact and per-channel color rules, used-channel counting, mixed dual-nozzle feeds, source errors versus live-state waits, plate selection, and copy/repeat behavior.
+
+The `bamdude.top` development branch updates both locales' farm highlight and the Auto-Queue, queue-copy, reprint, project-plan, and virtual-printer feature descriptions. It removes the claim that an archive's AMS slots can simply be remapped onto any printer.
+
+Verification: public docs `mkdocs build --strict` passes for both languages; landing lint, typecheck, all 17 existing tests, and production build pass. Existing landing hints about a deprecated icon and test `act()` noise remain. These are local changes and commits; no site deployment or push was performed.
