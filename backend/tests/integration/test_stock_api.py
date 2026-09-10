@@ -93,3 +93,45 @@ async def test_search_and_order(committing_client, db_session):
 
     found = [p["name"] for p in (await committing_client.get("/api/v1/stock?q=ZEB")).json()["products"]]
     assert found == ["Zebra lamp"]
+
+
+@pytest.mark.asyncio
+async def test_journal_is_newest_first_with_product_names_and_pages_by_id(committing_client, db_session):
+    pid, ids = await _lamp_with_stock(committing_client, db_session, lids=0, bases=0)
+    for delta in (1, 2, 3):
+        await move(db_session, part_id=ids["lid"], delta=delta, reason="unfiled_print")
+    await db_session.commit()
+
+    first = (await committing_client.get("/api/v1/stock/movements?limit=2")).json()
+    assert [r["delta"] for r in first["items"]] == [3, 2]
+    assert first["items"][0]["product_id"] == pid and first["items"][0]["product_name"] == "Lamp"
+    assert first["items"][0]["part_name"] == "lid"
+    assert first["next_before_id"] == first["items"][-1]["id"]
+
+    rest = (await committing_client.get(f"/api/v1/stock/movements?limit=2&before_id={first['next_before_id']}")).json()
+    assert [r["delta"] for r in rest["items"]] == [1]
+    assert rest["next_before_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_journal_filters_and_resolves_the_order(committing_client, db_session):
+    lamp, lamp_ids = await _lamp_with_stock(committing_client, db_session, name="Lamp", lids=4, bases=4)
+    vase, _ = await _lamp_with_stock(committing_client, db_session, name="Vase", lids=1, bases=1)
+    line = await _order_with_line(db_session, lamp, name="Order 7")
+    await reserve_for_line(db_session, line, 1)
+    await db_session.commit()
+
+    by_product = (await committing_client.get(f"/api/v1/stock/movements?product_id={lamp}")).json()["items"]
+    assert {r["product_id"] for r in by_product} == {lamp}
+    by_part = (await committing_client.get(f"/api/v1/stock/movements?part_id={lamp_ids['base']}")).json()["items"]
+    assert {r["part_name"] for r in by_part} == {"base"}
+    reserved = (await committing_client.get("/api/v1/stock/movements?reason=reserved_for_order")).json()["items"]
+    assert reserved and all(r["reason"] == "reserved_for_order" for r in reserved)
+    assert reserved[0]["order_id"] == line.project_id and reserved[0]["order_name"] == "Order 7"
+    assert vase not in {r["product_id"] for r in reserved}
+
+
+@pytest.mark.asyncio
+async def test_journal_refuses_an_unknown_reason(committing_client):
+    r = await committing_client.get("/api/v1/stock/movements?reason=teleported")
+    assert r.status_code == 422

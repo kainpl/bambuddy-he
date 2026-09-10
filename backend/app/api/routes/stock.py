@@ -19,18 +19,15 @@ from backend.app.models.project_line import ProjectLine
 from backend.app.models.user import User
 from backend.app.schemas.product import StockBalanceOut
 from backend.app.schemas.stock import (
-    StockMovementRowOut,  # noqa: F401 - used by the /movements route (Task 4)
-    StockMovementsPageOut,  # noqa: F401 - used by the /movements route (Task 4)
+    StockMovementRowOut,
+    StockMovementsPageOut,
     StockProductOut,
-    StockReason,  # noqa: F401 - used by the /movements route (Task 4)
+    StockReason,
     StockReservationOut,
     StockSummaryOut,
 )
 from backend.app.services import part_stock
-from backend.app.services.stock_views import (  # noqa: F401 - used by the /movements route (Task 4)
-    movement_out,
-    orders_of_lines,
-)
+from backend.app.services.stock_views import movement_out, orders_of_lines
 
 router = APIRouter(prefix="/stock", tags=["stock"])
 
@@ -104,3 +101,36 @@ async def stock_summary(
         )
     out.sort(key=lambda row: (-row.kits_available, row.name.lower()))
     return StockSummaryOut(products=out)
+
+
+@router.get("/movements", response_model=StockMovementsPageOut)
+async def stock_movements(
+    product_id: int | None = Query(None),
+    part_id: int | None = Query(None),
+    reason: StockReason | None = Query(None),
+    before_id: int | None = Query(None, ge=1),
+    limit: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+    _: User | None = RequirePermission(Permission.PROJECTS_READ),
+):
+    """The farm's ledger, newest first, one keyset page at a time.
+
+    ``next_before_id`` is set only when the page came back full — a short page
+    IS the end, and the client stops asking. A filter naming nothing yields an
+    empty page, not a 404: a journal filter is not a lookup.
+    """
+    rows = await part_stock.movements_across(
+        db,
+        product_id=product_id,
+        part_id=part_id,
+        reason=reason.value if reason is not None else None,
+        before_id=before_id,
+        limit=limit,
+    )
+    names = {movement.product_part_id: part_name for movement, part_name, _pid, _pname in rows}
+    orders = await orders_of_lines(db, {m.project_line_id for m, *_ in rows if m.project_line_id is not None})
+    items = [
+        StockMovementRowOut(**movement_out(movement, names, orders).model_dump(), product_id=pid, product_name=pname)
+        for movement, _part_name, pid, pname in rows
+    ]
+    return StockMovementsPageOut(items=items, next_before_id=items[-1].id if len(items) == limit else None)
