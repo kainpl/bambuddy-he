@@ -13,7 +13,7 @@ const TABS = [
   { to: '/projects', key: 'projects.tabs.orders', icon: ClipboardList, match: /^\/projects(?!\/\d)/ },
   { to: '/products', key: 'projects.tabs.products', icon: Package, match: /^\/products(?!\/\d)/ },
   { to: '/customers', key: 'projects.tabs.customers', icon: Users, match: /^\/customers(?!\/\d)/ },
-  { to: '/stock', key: 'projects.tabs.stock', icon: Warehouse, match: /^\/stock/ },
+  { to: '/stock', key: 'projects.tabs.stock', icon: Warehouse, match: /^\/stock(?!\/\d)/ },
 ] as const;
 
 /**

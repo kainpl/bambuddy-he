@@ -87,7 +87,7 @@ export function StockPage() {
       )}
 
       <div className="mt-8">
-        <StockJournal products={products} />
+        <StockJournal />
       </div>
 
       {adjusting && (

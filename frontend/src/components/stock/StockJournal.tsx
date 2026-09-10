@@ -3,7 +3,6 @@ import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Loader2 } from 'lucide-react';
 import { api } from '../../api/client';
-import type { StockProduct } from '../../api/client';
 import { useStockMovements } from '../../hooks/useStock';
 import type { StockJournalFilters } from '../../hooks/useStock';
 import { formatDateOnly } from '../../utils/date';
@@ -25,12 +24,17 @@ const FIELD_CLASS =
  * — the operator must never read the oldest row shown as the first movement
  * there ever was.
  */
-export function StockJournal({ products }: { products: StockProduct[] }) {
+export function StockJournal() {
   const { t } = useTranslation();
   const [filters, setFilters] = useState<StockJournalFilters>({});
   const { data, isError, hasNextPage, fetchNextPage, isFetchingNextPage } = useStockMovements(filters);
   const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: api.getSettings, staleTime: 60_000 });
   const dateFormat = (settings?.date_format || 'system') as DateFormat;
+  // The filter's options come from the CATALOG, not from the (possibly
+  // filtered) summary this page shows: a product whose shelf just zeroed out
+  // still has history to filter by, and a product already picked here must
+  // never vanish from the list because the summary's own filters moved.
+  const { data: catalog = [] } = useQuery({ queryKey: ['products', {}], queryFn: () => api.getProducts({}) });
 
   const rows = data?.pages.flatMap((p) => p.items) ?? [];
 
@@ -46,7 +50,7 @@ export function StockJournal({ products }: { products: StockProduct[] }) {
             onChange={(e) => setFilters((f) => ({ ...f, product_id: e.target.value ? Number(e.target.value) : undefined }))}
           >
             <option value="">{t('stock.page.anyProduct')}</option>
-            {products.map((p) => (
+            {catalog.map((p) => (
               <option key={p.id} value={p.id}>{p.name}</option>
             ))}
           </select>
