@@ -11,6 +11,8 @@
  * the value arriving; it only makes TypeScript describe a payload nobody sends.
  */
 import type { ArchivePlatesResponse, LibraryFilePlatesResponse, PlateObjectsResponse } from '../types/plates';
+import type { MonitorSnapshot, MonitorView } from '../features/monitor/types';
+import { isMonitorKioskLocation } from '../features/monitor/location';
 
 export class ApiError extends Error {
   status: number;
@@ -90,6 +92,9 @@ function scheduleProactiveRefresh() {
     window.clearTimeout(proactiveRefreshTimer);
     proactiveRefreshTimer = null;
   }
+  // A TV opened in an already signed-in browser must never refresh or use
+  // that wider session just because a shared module was imported.
+  if (isMonitorKioskLocation()) return;
   const exp = tokenExpiryMs();
   if (exp === null) return;
   // Jitter, because the deadline is derived from the token itself: every tab
@@ -6822,6 +6827,9 @@ export interface UsageProjection {
 }
 
 export const api = {
+  getMonitorSnapshot: (view: MonitorView, signal?: AbortSignal) =>
+    request<MonitorSnapshot>(`/monitor/snapshot?view=${view}`, { signal }),
+  getMonitorForecast: (signal?: AbortSignal) => request<FarmForecast>('/queue/forecast', { signal }),
   // Authentication
   getAuthStatus: () => request<AuthStatus>('/auth/status'),
   getEncryptionStatus: () => request<EncryptionStatus>('/auth/encryption-status'),

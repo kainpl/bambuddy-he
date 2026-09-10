@@ -71,6 +71,7 @@ _GATE_DEPENDENCY = {
     "stream-token": "require_camera_stream_token",
     "overlay-token": "require_overlay_token",
     "camwall-token": "require_camwall_token",
+    "monitor-token": "kiosk_access",
 }
 _DEPENDENCY_GATES = frozenset(_GATE_DEPENDENCY)
 _HANDLER_GATES = frozenset({"slicer-token", "pre-auth", "nonce"})
@@ -118,6 +119,8 @@ PUBLIC_ROUTES: dict[str, tuple[str, str]] = {
     ),
     "/api/v1/printers/{printer_id}/overlay-status": ("overlay-token", "OBS overlay feed"),
     "/api/v1/camwall/printers": ("camwall-token", "kiosk wall feed"),
+    "/api/v1/monitor/kiosk/snapshot": ("monitor-token", "read-only fleet projection via scoped Bearer"),
+    "/api/v1/monitor/kiosk/forecast": ("monitor-token", "aggregate queue forecast via scoped Bearer"),
     # Token-in-the-path downloads for slicer protocol handlers.
     "/api/v1/archives/{archive_id}/dl/{token}/{filename}": ("slicer-token", "bambustudioopen:// download"),
     "/api/v1/library/files/{file_id}/dl/{token}/{filename}": ("slicer-token", "orcaslicer:// download"),

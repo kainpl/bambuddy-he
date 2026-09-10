@@ -36,6 +36,7 @@ from backend.app.services.printer_manager import (
     supports_drying,
     supports_drying_while_printing,
 )
+from backend.app.services.queue_wait_reason import set_wait_reason
 from backend.app.services.smart_plug_manager import smart_plug_manager
 from backend.app.services.stagger_groups import GroupKey, StaggerGroupResolver, StaggerSplit
 from backend.app.utils.filament_types import canonical_filament_type
@@ -477,6 +478,8 @@ class PrintScheduler:
                 # is choosing printers and can act on the answer — pausing for a
                 # missing card would strand work nobody can un-strand from here.
                 if getattr(item, "timelapse", False) and _timelapse_storage_full(printer_id):
+                    wait_changed = set_wait_reason(item, "storage_full", "Timelapse storage full")
+                    pause_changed = not item.queue.is_paused
                     if not item.queue.is_paused:
                         item.queue.is_paused = True
                         logger.warning(
@@ -485,6 +488,8 @@ class PrintScheduler:
                             printer_id,
                             item.id,
                         )
+                    if wait_changed or pause_changed:
+                        await db.commit()
                     skip_reasons["timelapse_storage_full"] = skip_reasons.get("timelapse_storage_full", 0) + 1
                     continue
 
@@ -494,11 +499,15 @@ class PrintScheduler:
                     if sched.tzinfo is None:
                         sched = sched.replace(tzinfo=timezone.utc)
                     if sched > datetime.now(timezone.utc):
+                        if set_wait_reason(item, "scheduled", "Scheduled start"):
+                            await db.commit()
                         skip_reasons["scheduled_future"] = skip_reasons.get("scheduled_future", 0) + 1
                         continue
 
                 # Skip items that require manual start
                 if item.manual_start:
+                    if set_wait_reason(item, "manual_start", "Manual start required"):
+                        await db.commit()
                     skip_reasons["manual_start"] = skip_reasons.get("manual_start", 0) + 1
                     continue
 
@@ -513,18 +522,21 @@ class PrintScheduler:
 
                 # Update waiting_reason based on current state
                 new_reason = None
+                reason_code = None
                 if not printer_connected:
                     new_reason = "Printer offline"
+                    reason_code = "printer_offline"
                 elif not printer_idle:
                     if self._drying_in_progress.get(printer_id):
                         new_reason = "Drying in progress"
+                        reason_code = "drying"
                     elif rpc and printer_manager.is_awaiting_plate_clear(printer_id):
                         status = printer_manager.get_status(printer_id)
                         if status and status.state in ("FINISH", "FAILED"):
                             new_reason = "Plate not cleared"
+                            reason_code = "plate_not_cleared"
 
-                if item.waiting_reason != new_reason:
-                    item.waiting_reason = new_reason
+                if set_wait_reason(item, reason_code, new_reason):
                     await db.commit()
 
                 # If printer not connected, try to power on via smart plug(s)
@@ -579,6 +591,8 @@ class PrintScheduler:
                 # so all it ever decided was whether a cycle was needlessly
                 # killed on the way. Off by default.
                 if self._drying_in_progress.get(printer_id) and await self._get_bool_setting(db, "queue_drying_block"):
+                    if set_wait_reason(item, "drying", "Drying in progress"):
+                        await db.commit()
                     busy_printers.add(printer_id)
                     continue
 
@@ -587,15 +601,13 @@ class PrintScheduler:
                     stagger_reason = self._stagger_reason(
                         stagger_wait_bed, stagger_concurrent, printer_id, stagger_resolver
                     )
-                    if item.waiting_reason != stagger_reason:
-                        item.waiting_reason = stagger_reason
+                    if set_wait_reason(item, "stagger", stagger_reason):
                         await db.commit()
                     skip_reasons["stagger_wait"] = skip_reasons.get("stagger_wait", 0) + 1
                     continue
 
                 # Clear waiting_reason - printer is ready
-                if item.waiting_reason:
-                    item.waiting_reason = None
+                if set_wait_reason(item, None, None):
                     await db.commit()
 
                 # The require_previous_success gate (m116). Checked here, at the
@@ -629,7 +641,7 @@ class PrintScheduler:
                 try:
                     guard = await preflight_item(db, item, printer_id, cache=requirements_cache)
                 except RoutingDeferred as exc:
-                    item.waiting_reason = routing_detail(exc.reason)["message"]
+                    set_wait_reason(item, "filament_unavailable", routing_detail(exc.reason)["message"])
                     await db.commit()
                     continue
                 if guard:
@@ -2554,7 +2566,7 @@ class PrintScheduler:
         try:
             guard = await preflight_item(db, item, printer.id, cache=requirements_cache)
         except RoutingDeferred as exc:
-            item.waiting_reason = routing_detail(exc.reason)["message"]
+            set_wait_reason(item, "filament_unavailable", routing_detail(exc.reason)["message"])
             await db.commit()
             return
         if guard:
@@ -2608,7 +2620,13 @@ class PrintScheduler:
             update(PrintQueueItem)
             .where(PrintQueueItem.id == item.id)
             .where(PrintQueueItem.status == "pending")
-            .values(status="printing", started_at=now)
+            .values(
+                status="printing",
+                started_at=now,
+                waiting_reason=None,
+                waiting_reason_code=None,
+                waiting_reason_checked_at=None,
+            )
         )
         if cas_result.rowcount == 0:
             await db.rollback()

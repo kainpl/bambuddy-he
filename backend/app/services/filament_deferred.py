@@ -48,6 +48,8 @@ async def defer_claim(
         "started_at": None,
         "completed_at": datetime.now(timezone.utc) if direct else None,
         "waiting_reason": routing_detail(reason)["message"],
+        "waiting_reason_code": None if direct else "filament_unavailable",
+        "waiting_reason_checked_at": None if direct else datetime.now(timezone.utc),
         "error_message": None,
     }
     if restore_source:

@@ -163,6 +163,8 @@ import { PrinterInfoModal } from '../components/PrinterInfoModal';
 import { ConnectionDiagnosticModal, DiagnosticChecklist } from '../components/ConnectionDiagnostic';
 import { getGlobalTrayId, getFillBarColor, getSpoolmanFillLevel, getFallbackSpoolTag, isBambuLabSpool, getEmptySlotKind, resolveSlotNozzleDiameter } from '../utils/amsHelpers';
 import { getPrinterImage, getWifiStrength, hasDoorSensor, mapModelCode } from '../utils/printer';
+import { OpenMonitorButton } from '../features/monitor/OpenMonitorButton';
+import { useMonitorTarget } from '../features/monitor/useMonitorTarget';
 import { formatPrintName } from '../utils/printName';
 import { compareFwVersions } from '../utils/firmwareVersion';
 import { computePopoverPosition } from '../utils/popoverPosition';
@@ -8610,6 +8612,7 @@ function PowerDropdownItem({
 
 export function PrintersPage() {
   const { t } = useTranslation();
+  const [monitorTarget, clearMonitorTarget] = useMonitorTarget();
   const [showAddModal, setShowAddModal] = useState(false);
   const [hideDisconnected, setHideDisconnected] = useState(() => {
     return localStorage.getItem('hideDisconnectedPrinters') === 'true';
@@ -9134,6 +9137,7 @@ export function PrintersPage() {
   // Filter printers by search term, status, and location (#852).
   const filteredPrinters = useMemo(() => {
     if (!printers) return [];
+    if (monitorTarget) return printers.filter(p => p.id === monitorTarget);
     let result = printers;
 
     if (search.trim()) {
@@ -9180,7 +9184,7 @@ export function PrintersPage() {
 
     return result;
   // eslint-disable-next-line react-hooks/exhaustive-deps -- statusCacheVersion is intentional: it forces recompute when WebSocket updates printer status cache
-  }, [printers, search, statusFilter, locationFilter, tagFilter, locationIndex, queryClient, statusCacheVersion]);
+  }, [printers, monitorTarget, search, statusFilter, locationFilter, tagFilter, locationIndex, queryClient, statusCacheVersion]);
 
   // Modifier-aware single-printer selection. Behaves like a file-manager:
   //
@@ -9414,6 +9418,7 @@ export function PrintersPage() {
   // full-width inside the menu but stay compact in the inline ribbon.
   const renderFilterControls = (inMenu = false) => (
     <>
+      <OpenMonitorButton view="printers" sort={sortBy} />
       {/* Status filter */}
       {printers && printers.length > 0 && (
         <ToolbarDropdown
@@ -9621,6 +9626,7 @@ export function PrintersPage() {
   return (
     <div className="p-4">
       {/* Header section: title with PrinterIcon + StatusSummaryBar (upstream PR #1203). */}
+      {monitorTarget && <Button size="sm" variant="outline" onClick={clearMonitorTarget}>{t('monitor.clearTarget', { id: monitorTarget })}</Button>}
       <div className="space-y-3 mb-4">
         <div>
           <h1 className="text-2xl font-bold text-white flex items-center gap-3">
@@ -9718,13 +9724,13 @@ export function PrintersPage() {
             </Button>
           </CardContent>
         </Card>
-      ) : sortedPrinters.length === 0 && (search.trim() || statusFilter !== 'all' || locationFilter !== 'all' || tagFilter.length > 0) ? (
+      ) : sortedPrinters.length === 0 && (monitorTarget || search.trim() || statusFilter !== 'all' || locationFilter !== 'all' || tagFilter.length > 0) ? (
         <Card>
           <CardContent className="text-center py-12">
             <p className="text-bambu-gray">{t('printers.noSearchResults')}</p>
           </CardContent>
         </Card>
-      ) : pageView === 'camwall' ? (
+      ) : pageView === 'camwall' && !monitorTarget ? (
         <CameraWall
           printers={sortedPrinters}
           maxLive={camWallMaxLive}
@@ -9779,7 +9785,7 @@ export function PrintersPage() {
                   <PrinterCard
                     key={printer.id}
                     printer={printer}
-                    hideIfDisconnected={hideDisconnected}
+                    hideIfDisconnected={hideDisconnected && !monitorTarget}
                     maintenanceInfo={maintenanceByPrinter[printer.id]}
                     viewMode={viewMode}
                     cardSize={cardSize}
@@ -9824,7 +9830,7 @@ export function PrintersPage() {
             <PrinterCard
               key={printer.id}
               printer={printer}
-              hideIfDisconnected={hideDisconnected}
+              hideIfDisconnected={hideDisconnected && !monitorTarget}
               maintenanceInfo={maintenanceByPrinter[printer.id]}
               viewMode={viewMode}
               cardSize={cardSize}
