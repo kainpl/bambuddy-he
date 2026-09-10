@@ -48,6 +48,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.models.auto_queue import AutoQueueItem
+from backend.app.models.print_queue import PrintQueueItem
 from backend.app.models.printer import Printer
 from backend.app.models.printer_queue import PrinterQueue
 from backend.app.services.auto_queue_ams import _normalize_color_for_compare
@@ -181,6 +182,35 @@ def _count_override_color_matches(printer_id: int, overrides: list[dict]) -> int
         if (o_type, o_color) in loaded:
             matches += 1
     return matches
+
+
+async def busy_printer_ids(db: AsyncSession) -> set[int]:
+    """The printers the router may not place on this tick.
+
+    A printer is off-limits when EITHER its queue is printing OR its queue
+    already holds a pending item, however that item got there — manual queue,
+    scheduled, a prior auto-route. The ``status='printing'`` clause alone is not
+    enough: between auto-queue tick N (which assigns items 1..K to K printers as
+    pending rows) and the per-printer scheduler's next tick (which flips
+    ``PrinterQueue.status`` as its synchronous prep walks the items in queue_id
+    order) there is a window where some printers have flipped and the lagging
+    ones have not. A tick that fires inside it sees the laggards as free and
+    double-stacks the next items onto them — every new auto item landing on the
+    same lagging printer. "Has any pending row" closes the gap: each tick places
+    at most one new item per printer, and the next placement waits until the
+    queue actually drains.
+
+    One function, so the rebalancer (``services/queue_rebalance.py``) reads the
+    same definition the tick does.
+    """
+    printing = await db.execute(select(PrinterQueue.printer_id).where(PrinterQueue.status == "printing"))
+    holding = await db.execute(
+        select(PrinterQueue.printer_id)
+        .join(PrintQueueItem, PrintQueueItem.queue_id == PrinterQueue.id)
+        .where(PrintQueueItem.status == "pending")
+        .distinct()
+    )
+    return {pid for (pid,) in printing.all()} | {pid for (pid,) in holding.all()}
 
 
 async def printers_for_item(db: AsyncSession, item: AutoQueueItem) -> tuple[list[Printer], str, str]:
