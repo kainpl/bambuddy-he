@@ -43,11 +43,14 @@ from backend.app.schemas.auto_queue import (
     AutoQueueItemCreate,
     AutoQueueItemResponse,
     AutoQueueItemUpdate,
+    AutoQueueRebalanceRequest,
     AutoQueueReorder,
     AutoQueueStatsResponse,
 )
 from backend.app.schemas.calibration_mode import derive_mode, mode_to_bool
 from backend.app.schemas.filament_routing import RoutingPreviewRequest
+from backend.app.schemas.project import RebalanceOut
+from backend.app.services import queue_rebalance
 from backend.app.services.auto_queue_add import add_items_to_auto_queue
 from backend.app.services.auto_queue_eligibility import find_eligible_printer
 from backend.app.services.filament_preview import routing_preview
@@ -457,6 +460,24 @@ async def reorder_auto_queue(
             row.position = entry.position
     await db.commit()
     return {"reordered": len(payload.items)}
+
+
+@router.post("/rebalance", response_model=RebalanceOut)
+async def rebalance_auto_queue_items(
+    payload: AutoQueueRebalanceRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User | None = RequirePermission(Permission.QUEUE_UPDATE_ALL),
+):
+    """Rebalance the named pending items across printer models (spec 2026-09-10).
+
+    Each id is either moved or listed under ``skipped`` with why — not filed
+    under a line, pinned, scheduled, staged, already handed to a printer, and
+    the rest of ``queue_rebalance.SKIP_REASONS``. The farm setting and the
+    cooldown do not apply to a button.
+    """
+    result = await queue_rebalance.rebalance(db, item_ids=payload.item_ids, force=True, current_user=current_user)
+    await db.commit()
+    return result.as_response()
 
 
 @router.post("/{item_id}/assign-now", response_model=AutoQueueItemResponse)

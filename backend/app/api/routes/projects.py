@@ -73,10 +73,18 @@ from backend.app.schemas.project import (
     ProjectListResponse,
     ProjectResponse,
     ProjectUpdate,
+    RebalanceOut,
     StockMovedOut,
     TimelineEvent,
 )
-from backend.app.services import farm_forecast, filament_needs, order_from_files, part_stock, product_delete
+from backend.app.services import (
+    farm_forecast,
+    filament_needs,
+    order_from_files,
+    part_stock,
+    product_delete,
+    queue_rebalance,
+)
 from backend.app.services.auto_queue_add import add_items_to_auto_queue
 from backend.app.services.filament_intake import require_source_requirements
 from backend.app.services.filament_requirements import PrintRequirementsCache
@@ -2008,3 +2016,26 @@ async def enqueue_order_plan(
             PlanEnqueueCreated(line_id=plate.line_id, plate_id=plate.plate_id, queue_item_ids=[r.id for r in rows])
         )
     return PlanEnqueueResponse(created=created)
+
+
+@router.post("/{project_id}/lines/{line_id}/rebalance", response_model=RebalanceOut)
+async def rebalance_order_line(
+    project_id: int,
+    line_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User | None = RequirePermission(Permission.PROJECTS_UPDATE, Permission.QUEUE_UPDATE_ALL),
+):
+    """Move this line's still-pending auto-queue prints to idle printers of another
+    model where that finishes sooner (spec 2026-09-10) — the setting and the
+    cooldown do not apply to a button.
+
+    ``queue:update_all`` beside ``projects:update``: this rewrites router rows
+    whoever queued them. The handler does not commit — ``get_db`` does — but the
+    writer that creates the extra prints commits per call, exactly as the plan's
+    enqueue door does.
+    """
+    project = await _get_project(db, project_id)
+    if line_id not in {line.id for line in project.lines}:
+        raise HTTPException(status_code=404, detail="Order line not found in this project")
+    result = await queue_rebalance.rebalance(db, line_ids=[line_id], force=True, current_user=current_user)
+    return result.as_response()

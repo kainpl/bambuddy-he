@@ -204,6 +204,12 @@ class AutoQueueReorder(BaseModel):
     items: list[AutoQueueReorderItem]
 
 
+class AutoQueueRebalanceRequest(BaseModel):
+    """The rows the operator pointed at on the panel — one item, or a collapsed ``×N`` block."""
+
+    item_ids: list[int] = Field(min_length=1, max_length=64)
+
+
 class AutoQueueBatchActionResponse(BaseModel):
     """Result of batch cancel/skip/reorder operations."""
 
