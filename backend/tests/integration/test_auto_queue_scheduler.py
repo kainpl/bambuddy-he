@@ -16,6 +16,7 @@ The full per-printer dispatch (FTP / MQTT) is NOT tested here — these
 tests only verify the auto-queue → print_queue handoff.
 """
 
+import json
 import time
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -24,12 +25,17 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from sqlalchemy import select
 
+from backend.app.models.archive import PrintArchive
 from backend.app.models.auto_queue import AutoQueueItem
 from backend.app.models.library import LibraryFile
 from backend.app.models.print_queue import PrintQueueItem
 from backend.app.models.printer_queue import PrinterQueue
+from backend.app.models.product import Product, ProductPart, ProductPlate
+from backend.app.models.project import Project
+from backend.app.models.project_line import ProjectLine
 from backend.app.models.settings import Settings
 from backend.app.services.auto_queue_scheduler import AutoQueueScheduler
+from backend.app.services.farm_forecast import model_key
 from backend.app.services.printer_feed_snapshot import FeedTelemetry, snapshot_from_state
 from backend.tests.fixtures.filament_routing_cases import write_routing_3mf
 
@@ -713,3 +719,256 @@ class TestAutoQueueDryingPriority:
         pq_items = result.scalars().all()
         assert len(pq_items) == 1
         assert pq_items[0].queue_id == idle_pq.id
+
+
+# ---------- rebalancing across models (spec 2026-09-10) ----------
+
+
+def _plate_file(tmp_path, filename: str, model: str, *, seconds: int, hooks: int) -> LibraryFile:
+    """A sliced single-plate file for ``model`` making ``hooks`` hooks in ``seconds``.
+
+    A real routing 3MF on disk, because the rebalancer reads the target plate
+    through the strict source reader before it converts anything — and the 3MF's
+    own ``prediction`` carries ``seconds`` too, since the plan decides on
+    ``file_metadata`` while the converted row's estimate comes from the read.
+    """
+    path = write_routing_3mf(
+        tmp_path / filename,
+        {1: [{"id": 1, "type": "PLA", "color": "#FFFFFF", "used_g": "1"}]},
+        model=model,
+        prediction=seconds,
+    )
+    return LibraryFile(
+        filename=filename,
+        file_path=str(path),
+        file_size=path.stat().st_size,
+        file_type="gcode",
+        file_metadata={
+            "sliced_for_model": model,
+            "print_time_seconds": seconds,
+            "plates": [
+                {
+                    "index": 1,
+                    "printable_objects": {str(i + 1): ("hook" if i == 0 else f"hook_{i + 1}") for i in range(hooks)},
+                    "print_time_seconds": seconds,
+                    "filaments": [{"slot_id": 1, "type": "PLA"}],
+                }
+            ],
+        },
+    )
+
+
+async def rebalance_farm(db_session, printer_factory, tmp_path, *, mini_seconds: int = 1000):
+    """One P1S two hours into a print, one idle A1 mini; a 6-hook order line with one
+    pending P1S print of a 6-hook plate; the same hooks sliced two per plate for the mini.
+
+    Returns a namespace: p1s, mini, mini_q, big, small, project, line, item.
+    """
+    p1s, p1s_q = await _make_printer_with_queue(db_session, printer_factory, name="P1S-1", model="P1S")
+    mini, mini_q = await _make_printer_with_queue(db_session, printer_factory, name="Mini-1", model="A1MINI")
+    p1s_q.status = "printing"
+    db_session.add(
+        PrintArchive(
+            printer_id=p1s.id, status="printing", print_time_seconds=7200, filename="running", file_path="", file_size=0
+        )
+    )
+    big = _plate_file(tmp_path, "hooks-p1s.gcode.3mf", "P1S", seconds=3600, hooks=6)
+    small = _plate_file(tmp_path, "hooks-mini.gcode.3mf", "A1MINI", seconds=mini_seconds, hooks=2)
+    product = Product(name="Hook")
+    db_session.add_all([big, small, product])
+    await db_session.flush()
+    db_session.add_all(
+        [
+            ProductPart(
+                product_id=product.id, kind="printed", name="hook", name_key="hook", qty_per_unit=1, aliases=["hook"]
+            ),
+            ProductPlate(product_id=product.id, library_file_id=big.id, plate_index=0),
+            ProductPlate(product_id=product.id, library_file_id=small.id, plate_index=0),
+        ]
+    )
+    project = Project(name="Hooks", status="active")
+    db_session.add(project)
+    await db_session.flush()
+    line = ProjectLine(project_id=project.id, product_id=product.id, quantity=6)
+    db_session.add(line)
+    await db_session.flush()
+    item = AutoQueueItem(
+        library_file_id=big.id,
+        plate_id=1,
+        project_id=project.id,
+        project_line_id=line.id,
+        target_model="P1S",
+        required_filament_types=json.dumps(["PLA"]),
+        print_time_seconds=3600,
+        status="pending",
+        position=1,
+    )
+    db_session.add(item)
+    await db_session.commit()
+    return SimpleNamespace(
+        p1s=p1s, mini=mini, mini_q=mini_q, big=big, small=small, project=project, line=line, item=item
+    )
+
+
+async def _pending_rows(db_session) -> list[AutoQueueItem]:
+    return list(
+        (
+            await db_session.execute(
+                select(AutoQueueItem)
+                .where(AutoQueueItem.status == "pending")
+                .order_by(AutoQueueItem.position, AutoQueueItem.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+class TestRebalanceAcrossModels:
+    """The tick moves a busy model's pending line work to an idle model when that
+    finishes sooner — parts-based (6 hooks → three 2-hook mini prints), behind a
+    setting that is off by default, and never touching what the operator pinned."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_setting_off_moves_nothing(self, db_session, scheduler, printer_factory, tmp_path) -> None:
+        farm = await rebalance_farm(db_session, printer_factory, tmp_path)
+        p_elig, p_sched, p_ams = _patch_printer_manager({farm.p1s.id, farm.mini.id})
+        with p_elig, p_sched, p_ams:
+            await scheduler.tick()
+        await db_session.refresh(farm.item)
+        assert (farm.item.status, farm.item.target_model, farm.item.rebalanced_at) == ("pending", "P1S", None)
+        assert len(await _pending_rows(db_session)) == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_setting_on_moves_six_hooks_as_three_mini_prints_and_the_next_tick_places_one(
+        self, db_session, scheduler, printer_factory, tmp_path
+    ) -> None:
+        farm = await rebalance_farm(db_session, printer_factory, tmp_path)
+        db_session.add(Settings(key="auto_queue_rebalance_models", value="true"))
+        await db_session.commit()
+
+        p_elig, p_sched, p_ams = _patch_printer_manager({farm.p1s.id, farm.mini.id})
+        with p_elig, p_sched, p_ams:
+            await scheduler.tick()
+
+        rows = await _pending_rows(db_session)
+        assert len(rows) == 3, "one converted in place, two created"
+        converted = next(r for r in rows if r.id == farm.item.id)
+        assert (converted.library_file_id, model_key(converted.target_model), converted.plate_id) == (
+            farm.small.id,
+            model_key("A1MINI"),
+            1,
+        )
+        assert converted.rebalanced_from_model == "P1S" and converted.rebalanced_at is not None
+        assert converted.print_time_seconds == 1000 and converted.position == 1
+        assert json.loads(converted.required_filament_types) == ["PLA"]
+        for r in rows:
+            assert (r.project_line_id, r.project_id, model_key(r.target_model)) == (
+                farm.line.id,
+                farm.project.id,
+                model_key("A1MINI"),
+            )
+            assert r.rebalanced_from_model == "P1S" and r.batch_id == converted.batch_id and r.batch_id is not None
+
+        with p_elig, p_sched, p_ams:
+            await scheduler.tick()
+        placed = (await db_session.execute(select(PrintQueueItem))).scalars().all()
+        assert len(placed) == 1 and placed[0].queue_id == farm.mini_q.id
+        assert placed[0].source_auto_item_id == converted.id, "the converted row is first in queue order"
+        assert len(await _pending_rows(db_session)) == 2
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_a_slower_model_does_not_take_the_work(
+        self, db_session, scheduler, printer_factory, tmp_path
+    ) -> None:
+        """Three mini prints of 5000 s = 15000 s; home is free in 7200 s and prints in 3600 s = 10800 s."""
+        farm = await rebalance_farm(db_session, printer_factory, tmp_path, mini_seconds=5000)
+        db_session.add(Settings(key="auto_queue_rebalance_models", value="true"))
+        await db_session.commit()
+        p_elig, p_sched, p_ams = _patch_printer_manager({farm.p1s.id, farm.mini.id})
+        with p_elig, p_sched, p_ams:
+            await scheduler.tick()
+        await db_session.refresh(farm.item)
+        assert (farm.item.target_model, farm.item.rebalanced_at) == ("P1S", None)
+        assert len(await _pending_rows(db_session)) == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_a_gated_receiver_only_looks_free(self, db_session, scheduler, printer_factory, tmp_path) -> None:
+        """An empty queue is not readiness: a mini still waiting for its plate clear receives nothing."""
+        farm = await rebalance_farm(db_session, printer_factory, tmp_path)
+        db_session.add(Settings(key="auto_queue_rebalance_models", value="true"))
+        await db_session.commit()
+        p_elig, p_sched, p_ams = _patch_printer_manager(
+            {farm.p1s.id, farm.mini.id},
+            status_map={farm.mini.id: _finished_status(["PLA"])},
+            awaiting_ids={farm.mini.id},
+        )
+        with p_elig, p_sched, p_ams:
+            await scheduler.tick()
+        await db_session.refresh(farm.item)
+        assert farm.item.target_model == "P1S"
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_a_pinned_item_stays(self, db_session, scheduler, printer_factory, tmp_path) -> None:
+        farm = await rebalance_farm(db_session, printer_factory, tmp_path)
+        farm.item.filament_overrides = json.dumps(
+            [{"slot_id": 1, "type": "PLA", "color": "#FFFFFF", "force_color_match": True}]
+        )
+        db_session.add(Settings(key="auto_queue_rebalance_models", value="true"))
+        await db_session.commit()
+        p_elig, p_sched, p_ams = _patch_printer_manager({farm.p1s.id, farm.mini.id})
+        with p_elig, p_sched, p_ams:
+            await scheduler.tick()
+        await db_session.refresh(farm.item)
+        assert (farm.item.target_model, farm.item.rebalanced_at) == ("P1S", None)
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_a_line_is_left_alone_for_five_minutes_after_a_move(
+        self, db_session, scheduler, printer_factory, tmp_path
+    ) -> None:
+        farm = await rebalance_farm(db_session, printer_factory, tmp_path)
+        db_session.add(Settings(key="auto_queue_rebalance_models", value="true"))
+        await db_session.commit()
+        p_elig, p_sched, p_ams = _patch_printer_manager({farm.p1s.id, farm.mini.id})
+        with p_elig, p_sched, p_ams:
+            await scheduler.tick()
+        moved = await _pending_rows(db_session)
+        assert len(moved) == 3
+
+        # Park the moved prints (staged rows are neither placed nor moved) so the
+        # mini stays idle — then the ONLY thing between a second P1S print of the
+        # same line and that idle mini is the cooldown.
+        for row in moved:
+            row.manual_start = True
+        second = AutoQueueItem(
+            library_file_id=farm.big.id,
+            plate_id=1,
+            project_id=farm.project.id,
+            project_line_id=farm.line.id,
+            target_model="P1S",
+            required_filament_types=json.dumps(["PLA"]),
+            print_time_seconds=3600,
+            status="pending",
+            position=9,
+        )
+        db_session.add(second)
+        await db_session.commit()
+        with p_elig, p_sched, p_ams:
+            await scheduler.tick()
+        await db_session.refresh(second)
+        assert (second.target_model, second.rebalanced_at) == ("P1S", None), "cooldown: the line was moved seconds ago"
+
+        # Ten minutes later the line is fair game again.
+        for row in moved:
+            row.rebalanced_at = row.rebalanced_at - timedelta(minutes=10)
+        await db_session.commit()
+        with p_elig, p_sched, p_ams:
+            await scheduler.tick()
+        await db_session.refresh(second)
+        assert second.rebalanced_from_model == "P1S" and model_key(second.target_model) == model_key("A1MINI")

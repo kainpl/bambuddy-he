@@ -14,16 +14,24 @@ def write_routing_3mf(
     settings: dict | None = None,
     gcode_plates: list[int] | None = None,
     nozzle_groups: dict[int, int] | None = None,
+    prediction: int = 3600,
 ) -> Path:
     """Preserve supplied usage strings and sparse IDs, including invalid data.
 
     ``nozzle_groups`` maps slicer group IDs to one-based extruder IDs (H2C).
     Geometry is unnecessary: these tests never send a file to a printer.
+
+    ``prediction`` is the per-plate print-time estimate the strict source reader
+    hands back as ``PrintRequirements.print_time_seconds``. It is a parameter
+    because a caller that also writes ``LibraryFile.file_metadata`` has to make
+    the two agree: the plan reads the metadata, the writers read the file, and a
+    row whose stored estimate came from a 3MF that says something else is a
+    fixture that proves nothing.
     """
     root = Element("config")
     for plate_id, filaments in plates.items():
         plate = SubElement(root, "plate")
-        for key, value in (("index", plate_id), ("printer_model_id", model), ("prediction", 3600)):
+        for key, value in (("index", plate_id), ("printer_model_id", model), ("prediction", prediction)):
             SubElement(plate, "metadata", key=key, value=str(value))
         for filament in filaments:
             SubElement(plate, "filament", {k: str(v) for k, v in filament.items() if v is not None})

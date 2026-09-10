@@ -47,12 +47,14 @@ from backend.app.models.print_queue import PrintQueueItem
 from backend.app.models.printer import Printer
 from backend.app.models.printer_queue import PrinterQueue
 from backend.app.models.settings import Settings
+from backend.app.services import queue_rebalance
 from backend.app.services.auto_queue_eligibility import busy_printer_ids, find_eligible_printer, offline_candidates_for
 from backend.app.services.filament_intake import read_item_requirements
 from backend.app.services.filament_policy import auto_policy, serialize_policy
 from backend.app.services.filament_requirements import PrintRequirementsCache, SourceIdentity
 from backend.app.services.filament_routing import resolve_filament_routing
 from backend.app.services.printer_manager import printer_manager
+from backend.app.services.queue_rebalance import REBALANCE_SETTING_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -174,6 +176,24 @@ class AutoQueueScheduler:
                     await self._mark_jumped_peers(db, item)
 
             announce = self._log_stall(items, placed, blocked, busy_printers)
+
+            # Cross-model rebalancing (spec 2026-09-10), behind its setting and only
+            # when this pass left something pending. It converts and creates ROUTER
+            # rows — the next tick places them like any other; nothing starts here.
+            if placed < len(items) and await _get_bool_setting(db, REBALANCE_SETTING_KEY):
+                try:
+                    moved = await queue_rebalance.rebalance(db, busy_printers=busy_printers)
+                except Exception:
+                    logger.exception("AutoQueueScheduler: rebalancing failed")
+                else:
+                    if moved.converted:
+                        logger.info(
+                            "AutoQueueScheduler: rebalanced %d item(s), created %d, %d part(s) moved",
+                            moved.converted,
+                            moved.created,
+                            moved.moved_parts,
+                        )
+
             await db.commit()
 
             # After the commit: the notification is a side effect on the outside
