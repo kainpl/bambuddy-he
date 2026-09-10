@@ -208,6 +208,7 @@ export function PlanBlock({
   // either never sees the button rather than being handed a 403 on click.
   const canQueue = canEdit && hasPermission('queue:create');
   const canPrint = hasPermission('printers:control');
+  const canRebalance = canEdit && hasPermission('projects:update') && hasPermission('queue:update_all');
 
   const invalidate = useCallback(() => {
     invalidateOrderViews(queryClient, { orderId: order.id });
@@ -227,6 +228,29 @@ export function PlanBlock({
       showToast(t('orders.plan.toast.enqueued', { count: created }), 'success');
       invalidate();
       onEnqueued?.();
+    },
+    onError: (e: Error) => showToast(e.message, 'error'),
+  });
+
+  // The line's Rebalance button (spec 2026-09-10): the same procedure the tick
+  // runs behind its setting, forced for this one line. Router rows move, so the
+  // queue views and the order views are both re-read.
+  const rebalance = useMutation({
+    mutationFn: (lineId: number) => api.rebalanceOrderLine(order.id, lineId),
+    onSuccess: (result) => {
+      if (result.converted > 0) {
+        showToast(
+          t('orders.plan.rebalance.moved', {
+            parts: result.moved_parts,
+            converted: result.converted,
+            created: result.created,
+          }),
+          'success',
+        );
+      } else {
+        showToast(t('orders.plan.rebalance.nothing'), 'info');
+      }
+      invalidate();
     },
     onError: (e: Error) => showToast(e.message, 'error'),
   });
@@ -430,7 +454,9 @@ export function PlanBlock({
                 showCost={showCost}
                 canQueue={canQueue}
                 canPrint={canPrint}
-                busy={enqueue.isPending}
+                busy={enqueue.isPending || rebalance.isPending}
+                canRebalance={canRebalance}
+                onRebalance={() => rebalance.mutate(line.line_id)}
                 ratePerGram={ratePerGram}
                 onCount={(plateId, next) => setCount(line.line_id, plateId, next)}
                 onChoose={(rowPlateId, plateId) => setChoice(line.line_id, rowPlateId, plateId)}

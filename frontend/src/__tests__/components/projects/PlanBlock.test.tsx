@@ -401,6 +401,49 @@ describe('PlanBlock', () => {
     await waitFor(() => expect(onProbeFetch).toHaveBeenCalledTimes(2));
   });
 
+  it('offers Rebalance on a line with pending router rows, calls the API and re-reads the order', async () => {
+    auth.granted = new Set(['projects:update', 'queue:create', 'queue:update_all']);
+    vi.spyOn(api, 'getOrderPlan').mockResolvedValue({
+      ...plan,
+      lines: [{ ...plan.lines[0], pending_auto_prints: 2 }],
+    });
+    const rebalance = vi
+      .spyOn(api, 'rebalanceOrderLine')
+      .mockResolvedValue({ converted: 1, created: 2, cancelled: 0, moved_parts: 6, skipped: [] });
+    const onProbeFetch = vi.fn();
+
+    render(
+      <>
+        <PlanBlock order={order} canEdit />
+        <OrderProbe id={1} onFetch={onProbeFetch} />
+      </>,
+    );
+
+    fireEvent.click(await screen.findByTestId('plan-line-10-rebalance'));
+
+    await waitFor(() => expect(rebalance).toHaveBeenCalledWith(1, 10));
+    await waitFor(() => expect(api.getOrderPlan).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(onProbeFetch).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText('Moved 6 parts: 1 prints re-targeted, 2 added')).toBeInTheDocument();
+  });
+
+  it('hides Rebalance when the line has nothing pending in the router, or the operator may not rewrite the queue', async () => {
+    auth.granted = new Set(['projects:update', 'queue:create', 'queue:update_all']);
+    render(<PlanBlock order={order} canEdit />);
+    await screen.findByTestId('plan-line-10');
+    expect(screen.queryByTestId('plan-line-10-rebalance')).toBeNull();
+
+    cleanup();
+    auth.granted = new Set(['projects:update', 'queue:create']);
+    vi.spyOn(api, 'getOrderPlan').mockResolvedValue({
+      ...plan,
+      lines: [{ ...plan.lines[0], pending_auto_prints: 2 }],
+    });
+    render(<PlanBlock order={order} canEdit />);
+    await screen.findByTestId('plan-line-10');
+    expect(screen.queryByTestId('plan-line-10-rebalance')).toBeNull();
+  });
+
   it('names a part no plate can make, and points at the product’s files', async () => {
     render(<PlanBlock order={order} canEdit />);
 

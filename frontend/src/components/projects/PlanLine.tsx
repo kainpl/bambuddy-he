@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
+import { Shuffle } from 'lucide-react';
 import { api } from '../../api/client';
 import type { LineForecast, LinePlan, Order, PlanRow as PlanRowData, PlateRecipe } from '../../api/client';
 import { etaShort } from '../../utils/forecast';
@@ -28,6 +29,9 @@ interface PlanLineProps {
   canQueue: boolean;
   canPrint: boolean;
   busy: boolean;
+  /** The operator may rewrite router rows (`projects:update` + `queue:update_all`). */
+  canRebalance: boolean;
+  onRebalance: () => void;
   /** Filament price per gram, recovered from a costed row of the plan, so a
    *  manually added plate is priced the same way the planned ones were. */
   ratePerGram: number | null;
@@ -98,6 +102,8 @@ export function PlanLine({
   canQueue,
   canPrint,
   busy,
+  canRebalance,
+  onRebalance,
   ratePerGram,
   onCount,
   onChoose,
@@ -173,6 +179,19 @@ export function PlanLine({
             </span>
           )}
         </div>
+        {canRebalance && (line.pending_auto_prints ?? 0) > 0 && (
+          <button
+            type="button"
+            onClick={onRebalance}
+            disabled={busy}
+            data-testid={`plan-line-${line.line_id}-rebalance`}
+            title={t('orders.plan.rebalance.title')}
+            className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded border border-bambu-dark-tertiary text-bambu-gray-light hover:text-white hover:border-bambu-green/50 disabled:opacity-40"
+          >
+            <Shuffle className="w-3.5 h-3.5" />
+            {t('orders.plan.rebalance.button')}
+          </button>
+        )}
         {line.material && (
           <span className="text-xs px-2 py-0.5 rounded-full border border-bambu-dark-tertiary text-bambu-gray-light">
             {line.material}
