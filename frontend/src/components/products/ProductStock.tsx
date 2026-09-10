@@ -8,7 +8,8 @@ import { formatDateOnly } from '../../utils/date';
 import type { DateFormat } from '../../utils/date';
 import { Button } from '../Button';
 import { AdjustStockDialog } from './AdjustStockDialog';
-import { isNoteToken, MovementSource, signed } from './stockMovementHelpers';
+import { MovementSource } from './MovementSource';
+import { isNoteToken, signed } from './stockMovementHelpers';
 
 interface ProductStockProps {
   productId: number;
