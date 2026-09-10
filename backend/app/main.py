@@ -75,6 +75,7 @@ from backend.app.api.routes import (
     smart_plugs,
     spoolman,
     spoolman_inventory,
+    stock,
     support,
     system,
     telegram,
@@ -9906,6 +9907,7 @@ app.include_router(external_links.router, prefix=app_settings.api_prefix)
 app.include_router(projects.router, prefix=app_settings.api_prefix)
 app.include_router(customers.router, prefix=app_settings.api_prefix)
 app.include_router(products.router, prefix=app_settings.api_prefix)
+app.include_router(stock.router, prefix=app_settings.api_prefix)
 app.include_router(library.router, prefix=app_settings.api_prefix)
 app.include_router(library_notes.router, prefix=app_settings.api_prefix)
 app.include_router(library_tags.router, prefix=app_settings.api_prefix)
