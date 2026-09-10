@@ -427,6 +427,50 @@ describe('PlanBlock', () => {
     expect(await screen.findByText('Moved 6 parts: 1 prints re-targeted, 2 added')).toBeInTheDocument();
   });
 
+  it('says why the line did not move instead of claiming nothing would finish sooner', async () => {
+    // `pending_auto_prints` counts rows the procedure itself refuses — pinned,
+    // staged, scheduled — so the button shows for a line of pinned rows, and
+    // "nothing would finish sooner" would then be a lie about the farm.
+    auth.granted = new Set(['projects:update', 'queue:create', 'queue:update_all']);
+    vi.spyOn(api, 'getOrderPlan').mockResolvedValue({
+      ...plan,
+      lines: [{ ...plan.lines[0], pending_auto_prints: 2 }],
+    });
+    vi.spyOn(api, 'rebalanceOrderLine').mockResolvedValue({
+      converted: 0,
+      created: 0,
+      cancelled: 0,
+      moved_parts: 0,
+      skipped: [{ item_id: 1, reason: 'pinned' }],
+    });
+
+    render(<PlanBlock order={order} canEdit />);
+    fireEvent.click(await screen.findByTestId('plan-line-10-rebalance'));
+
+    expect(await screen.findByText('Pinned to specific filament slots — not moved')).toBeInTheDocument();
+    expect(screen.queryByText('Nothing would finish sooner on another model')).toBeNull();
+  });
+
+  it('keeps the farm answer when nothing was refused and nothing moved', async () => {
+    auth.granted = new Set(['projects:update', 'queue:create', 'queue:update_all']);
+    vi.spyOn(api, 'getOrderPlan').mockResolvedValue({
+      ...plan,
+      lines: [{ ...plan.lines[0], pending_auto_prints: 2 }],
+    });
+    vi.spyOn(api, 'rebalanceOrderLine').mockResolvedValue({
+      converted: 0,
+      created: 0,
+      cancelled: 0,
+      moved_parts: 0,
+      skipped: [],
+    });
+
+    render(<PlanBlock order={order} canEdit />);
+    fireEvent.click(await screen.findByTestId('plan-line-10-rebalance'));
+
+    expect(await screen.findByText('Nothing would finish sooner on another model')).toBeInTheDocument();
+  });
+
   it('hides Rebalance when the line has nothing pending in the router, or the operator may not rewrite the queue', async () => {
     auth.granted = new Set(['projects:update', 'queue:create', 'queue:update_all']);
     render(<PlanBlock order={order} canEdit />);

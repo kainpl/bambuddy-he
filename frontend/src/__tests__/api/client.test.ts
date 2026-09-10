@@ -558,3 +558,57 @@ describe('getLibraryFilesPaged (task 2, 2026-08-29 server-driven-lists)', () => 
     expect(result).toEqual(page);
   });
 });
+
+describe('rebalanceAutoQueueItems (spec 2026-09-10)', () => {
+  /**
+   * The `×N` action sends every copy of a collapsed run, and the origin
+   * scenario of the feature is «150 штук кидаємо в чергу» — well past the
+   * endpoint's 64-id cap. One request would 422 and the operator would see a
+   * raw validation error instead of a move.
+   */
+  it('chunks the ids by the server cap and merges the answers into one result', async () => {
+    const sizes: number[] = [];
+    server.use(
+      http.post('/api/v1/auto-queue/rebalance', async ({ request }) => {
+        const body = (await request.json()) as { item_ids: number[] };
+        sizes.push(body.item_ids.length);
+        return HttpResponse.json({
+          converted: 1,
+          created: 2,
+          cancelled: 0,
+          moved_parts: 6,
+          skipped: [{ item_id: body.item_ids[0], reason: 'pinned' }],
+        });
+      }),
+    );
+
+    const result = await api.rebalanceAutoQueueItems(Array.from({ length: 130 }, (_, i) => i + 1));
+
+    expect(sizes).toEqual([64, 64, 2]);
+    expect(result.converted).toBe(3);
+    expect(result.created).toBe(6);
+    expect(result.cancelled).toBe(0);
+    expect(result.moved_parts).toBe(18);
+    // Every chunk's refusals are kept, in the order they were asked.
+    expect(result.skipped).toEqual([
+      { item_id: 1, reason: 'pinned' },
+      { item_id: 65, reason: 'pinned' },
+      { item_id: 129, reason: 'pinned' },
+    ]);
+  });
+
+  it('sends one request for a list that fits', async () => {
+    let calls = 0;
+    server.use(
+      http.post('/api/v1/auto-queue/rebalance', () => {
+        calls += 1;
+        return HttpResponse.json({ converted: 1, created: 0, cancelled: 0, moved_parts: 2, skipped: [] });
+      }),
+    );
+
+    const result = await api.rebalanceAutoQueueItems([1, 2, 3]);
+
+    expect(calls).toBe(1);
+    expect(result).toEqual({ converted: 1, created: 0, cancelled: 0, moved_parts: 2, skipped: [] });
+  });
+});

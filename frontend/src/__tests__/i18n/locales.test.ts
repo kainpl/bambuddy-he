@@ -135,3 +135,36 @@ describe('i18n locale parity', () => {
     ).toEqual([]);
   });
 });
+
+/**
+ * The rebalancer's refusal codes are a CLOSED list, defined once in
+ * `backend/app/services/queue_rebalance.py::SKIP_REASONS` and translated here
+ * key-for-key. A 14th code added on the server with no copy on this side would
+ * ship as a raw `autoQueue.rebalance.skipped.<code>` in a toast — the panel and
+ * the plan block both translate the reason blind, with no fallback.
+ */
+describe('the rebalance refusal codes are the backend’s closed list', () => {
+  const SKIP_REASONS = [
+    'not_found',
+    'already_assigned',
+    'not_filed',
+    'pinned',
+    'scheduled',
+    'staged',
+    'located',
+    'no_yield',
+    'source_unreadable',
+    'creation_failed',
+    'home_model_idle',
+    'no_faster_model',
+    'cooldown',
+  ];
+
+  it('en has exactly those keys', () => {
+    expect(Object.keys(en.autoQueue.rebalance.skipped).sort()).toEqual([...SKIP_REASONS].sort());
+  });
+
+  it('uk has exactly those keys', () => {
+    expect(Object.keys(uk.autoQueue.rebalance.skipped).sort()).toEqual([...SKIP_REASONS].sort());
+  });
+});

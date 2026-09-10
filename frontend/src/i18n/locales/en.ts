@@ -1723,7 +1723,7 @@ export default {
         scheduled: 'Scheduled for a time — not moved',
         staged: 'Staged for a manual start — not moved',
         located: 'Aimed at a location — not moved',
-        no_yield: 'No product plate to read this file’s yield from',
+        no_yield: 'No product plate to read this file’s yield from, or the row names no printer model',
         source_unreadable: 'The target file could not be read',
         creation_failed: 'The extra prints could not be queued — nothing was changed',
         home_model_idle: 'Its own model has a printer ready — it will start there',

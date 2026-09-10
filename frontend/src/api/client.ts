@@ -1854,6 +1854,10 @@ export interface RebalanceResult {
   skipped: RebalanceSkipped[];
 }
 
+/** The server's own bound on `POST /auto-queue/rebalance`: `item_ids` is
+ * validated as 1..64, so a longer selection is sent as several requests. */
+const REBALANCE_CHUNK = 64;
+
 // ---- customers ----
 
 /** What the list endpoint computes — one grouped query, nothing archive-derived. */
@@ -8929,11 +8933,35 @@ export const api = {
     }),
   assignAutoQueueNow: (id: number) =>
     request<AutoQueueItem>(`/auto-queue/${id}/assign-now`, { method: 'POST' }),
-  rebalanceAutoQueueItems: (itemIds: number[]) =>
-    request<RebalanceResult>('/auto-queue/rebalance', {
-      method: 'POST',
-      body: JSON.stringify({ item_ids: itemIds }),
-    }),
+  /**
+   * Rebalance the named rows across printer models (spec 2026-09-10).
+   *
+   * ⚠️ **Chunked by 64, because the endpoint refuses more** (`item_ids` is
+   * `1..64` on `AutoQueueRebalanceRequest`). The `×N` action sends every copy of
+   * a collapsed run, and a run of 150 — the scenario the feature was built for —
+   * would come back as a raw 422 toast. The chunks go one at a time: each one
+   * moves rows and consumes idle capacity the next one must see.
+   */
+  rebalanceAutoQueueItems: async (itemIds: number[]): Promise<RebalanceResult> => {
+    const chunks: number[][] = [];
+    for (let i = 0; i < itemIds.length; i += REBALANCE_CHUNK) chunks.push(itemIds.slice(i, i + REBALANCE_CHUNK));
+    // An empty selection still asks, and the server still refuses it — the
+    // chunking must not turn a caller's mistake into a silent success.
+    if (chunks.length === 0) chunks.push([]);
+    const merged: RebalanceResult = { converted: 0, created: 0, cancelled: 0, moved_parts: 0, skipped: [] };
+    for (const chunk of chunks) {
+      const page = await request<RebalanceResult>('/auto-queue/rebalance', {
+        method: 'POST',
+        body: JSON.stringify({ item_ids: chunk }),
+      });
+      merged.converted += page.converted;
+      merged.created += page.created;
+      merged.cancelled += page.cancelled;
+      merged.moved_parts += page.moved_parts;
+      merged.skipped.push(...page.skipped);
+    }
+    return merged;
+  },
   // One edit for every still-pending copy of a batch (position excluded
   // server-side so a group edit cannot undo a manual reorder).
   updateAutoQueueBatch: (batchId: string, data: AutoQueueItemUpdate) =>

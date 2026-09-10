@@ -247,6 +247,12 @@ export function PlanBlock({
           }),
           'success',
         );
+      } else if (result.skipped.length > 0) {
+        // `pending_auto_prints` counts rows the procedure itself refuses —
+        // pinned, staged, scheduled — so the button shows for a line of them,
+        // and "nothing would finish sooner" would be a claim about the farm
+        // that was never asked. The reason the server gave says the truth.
+        showToast(t(`autoQueue.rebalance.skipped.${result.skipped[0].reason}`), 'info');
       } else {
         showToast(t('orders.plan.rebalance.nothing'), 'info');
       }
