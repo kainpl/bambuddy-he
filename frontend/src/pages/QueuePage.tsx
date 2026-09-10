@@ -10,6 +10,7 @@ import { readStoredQueueSort, sortQueues, type QueueSortOption } from '../utils/
 import { forecastById, type EtaStatus } from '../utils/etaSort';
 import { buildLocationIndex, readStoredLocationFilter } from '../utils/locationTree';
 import { groupByLocation } from '../utils/locationGroups';
+import { groupByTag } from '../utils/tagGroups';
 import type { PrinterQueue, PrintQueueItem } from '../api/client';
 import { QueueCard } from '../components/QueueCard';
 import { LoadingBlock } from '../components/LoadingBlock';
@@ -215,13 +216,35 @@ export function QueuePage() {
 
   const hasActiveFilters = search.trim() !== '' || statusFilter !== 'all' || locationFilter !== 'all';
 
-  // Group queues by location (when sorted by location). An array, not an object
-  // keyed by id: integer-like object keys iterate in ascending numeric order and
-  // would throw away the name sort applied above.
+  // Group queues by location or by tag, the printers page's two grouped orders.
+  // An array, not an object keyed by id: integer-like object keys iterate in
+  // ascending numeric order and would throw away the name sort applied above.
+  // Both shapes are normalised to one so the renderer below stays a single
+  // block; a tag group carries the tag's colour for its dot.
   const groupedQueues = useMemo(() => {
-    if (sortBy !== 'location') return null;
-    return groupByLocation(sortedQueues, q => q.printer_location, t('queueCard.ungrouped'));
-  }, [sortBy, sortedQueues, t]);
+    if (sortBy === 'location') {
+      return groupByLocation(sortedQueues, q => q.printer_location, t('queueCard.ungrouped')).map((g) => ({
+        key: `location:${g.locationId ?? 'none'}`,
+        label: g.label,
+        color: null as string | null,
+        items: g.items,
+      }));
+    }
+    if (sortBy === 'tag') {
+      const groups = groupByTag(sortedQueues, (q) => q.printer_tags, t('printers.noTag')).map((g) => ({
+        key: `tag:${g.tagId ?? 'none'}`,
+        label: g.label,
+        color: g.color,
+        items: g.items,
+      }));
+      // `groupByTag` always orders its groups by name with «No tag» last, so
+      // the direction toggle is applied here — the location branch gets it for
+      // free from the item order `sortedQueues` has already reversed.
+      if (!sortAsc) groups.reverse();
+      return groups;
+    }
+    return null;
+  }, [sortBy, sortAsc, sortedQueues, t]);
 
   const renderGrid = (items: PrinterQueue[]) => (
     <div className={`grid gap-4 items-start ${gridClasses}`}>
@@ -299,12 +322,15 @@ export function QueuePage() {
       {/* Card grid (S and M modes) */}
       {!isLoading && queues && queues.length > 0 && viewMode !== 'all' && viewMode !== 'timeline' && sortedQueues.length > 0 && (
         groupedQueues ? (
-          // Grouped by location
+          // Grouped by location or by tag
           <div className="space-y-4">
             {groupedQueues.map((group) => (
-              <div key={group.locationId ?? 'ungrouped'}>
-                <h2 className="text-lg font-semibold text-white mb-3 flex items-center gap-2 flex-wrap">
-                  <span className="w-2 h-2 rounded-full bg-bambu-green" />
+              <div key={group.key}>
+                <h2
+                  className="text-lg font-semibold text-white mb-3 flex items-center gap-2 flex-wrap"
+                  title={sortBy === 'tag' ? t('printers.tagGroupHint') : undefined}
+                >
+                  <span className="w-2 h-2 rounded-full bg-bambu-green" style={group.color ? { backgroundColor: group.color } : undefined} />
                   {group.label}
                   <span className="text-sm font-normal text-bambu-gray">({group.items.length})</span>
                 </h2>

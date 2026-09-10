@@ -76,6 +76,17 @@ async def test_a_printer_carries_its_tags_and_is_written_by_ids(async_client, db
     assert listed[0]["tags"] == [{"id": tag["id"], "name": "Фаза 1", "color": None}]
     assert listed[0]["tag_ids"] == [tag["id"]]
 
+    # The printer's queue row carries the same objects — the queue page sorts
+    # and groups by tag with them, so the two pages cannot disagree on a tag.
+    from backend.app.models.printer_queue import PrinterQueue
+
+    db_session.add(PrinterQueue(printer_id=printer.id))
+    await db_session.commit()
+    queues = (await async_client.get("/api/v1/queues/")).json()
+    assert [q["printer_tags"] for q in queues if q["printer_id"] == printer.id] == [
+        [{"id": tag["id"], "name": "Фаза 1", "color": None}]
+    ]
+
     other = await _tag(async_client, "Фаза 2")
     rsp = await async_client.patch(f"/api/v1/printers/{printer.id}", json={"tag_ids": [other["id"]]})
     assert rsp.status_code == 200, rsp.text

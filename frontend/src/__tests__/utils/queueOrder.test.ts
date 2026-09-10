@@ -62,6 +62,18 @@ describe('sortQueues', () => {
     expect(sorted.map((q) => q.printer_name)).toEqual(['Bravo', 'Alpha', 'Charlie']);
   });
 
+  it('orders by the first tag the printer wears, untagged last — the printers page rule', () => {
+    const tagged = [
+      queue(1, 'Alpha', { printer_tags: [{ id: 2, name: 'Phase 2', color: null }] }),
+      queue(2, 'Bravo'),
+      queue(3, 'Charlie', { printer_tags: [{ id: 3, name: 'Phase 3', color: null }, { id: 1, name: 'Phase 1', color: '#ff0000' }] }),
+      queue(4, 'Delta', { printer_tags: [{ id: 2, name: 'Phase 2', color: null }] }),
+    ];
+    // Charlie's first tag by name is Phase 1, whatever order the server sent them in.
+    expect(sortQueues(tagged, 'tag', true).map((q) => q.printer_name)).toEqual(['Charlie', 'Alpha', 'Delta', 'Bravo']);
+    expect(sortQueues(tagged, 'tag', false).map((q) => q.printer_name)).toEqual(['Bravo', 'Delta', 'Alpha', 'Charlie']);
+  });
+
   it('falls through to the name order when a caller has no context for an ETA key', () => {
     expect(sortQueues(queues, 'eta', true).map((q) => q.printer_name)).toEqual(['Alpha', 'Bravo', 'Charlie']);
     expect(sortQueues(queues, 'freeAt', true).map((q) => q.printer_name)).toEqual(['Alpha', 'Bravo', 'Charlie']);
@@ -83,6 +95,8 @@ describe('readStoredQueueSort', () => {
     expect(readStoredQueueSort().sortBy).toBe('freeAt');
     localStorage.setItem('queueSortBy', 'eta');
     expect(readStoredQueueSort().sortBy).toBe('eta');
+    localStorage.setItem('queueSortBy', 'tag');
+    expect(readStoredQueueSort().sortBy).toBe('tag');
     localStorage.setItem('queueSortBy', 'remaining');
     expect(readStoredQueueSort().sortBy).toBe('name');
   });

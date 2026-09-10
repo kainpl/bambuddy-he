@@ -4215,6 +4215,8 @@ export interface PrinterQueue {
   printer_name?: string | null;
   printer_model?: string | null;
   printer_location?: PrinterLocation | null;
+  /** The printer's tags, the same objects the printer itself lists. */
+  printer_tags?: PrinterTag[];
   status: 'idle' | 'printing' | 'paused' | 'error';
   is_paused: boolean;
   auto_distribute_eligible: boolean;

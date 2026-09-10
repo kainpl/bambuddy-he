@@ -208,6 +208,7 @@ export function QueueToolbar({
             <option value="status">{t('printers.sort.status')}</option>
             <option value="model">{t('printers.sort.model')}</option>
             <option value="location">{t('printers.sort.location')}</option>
+            <option value="tag">{t('printers.sort.tag')}</option>
             <option value="eta">{t('printers.sort.eta')}</option>
             <option value="freeAt">{t('printers.sort.freeAt')}</option>
           </select>

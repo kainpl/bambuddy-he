@@ -2,9 +2,9 @@ import type { PrinterQueue } from '../api/client';
 import { byLocationName } from './locationOrder';
 import { compareCurrentJobEta, compareFreeAt, type EtaStatus, type FreeAtRow } from './etaSort';
 
-export type QueueSortOption = 'name' | 'status' | 'model' | 'location' | 'eta' | 'freeAt';
+export type QueueSortOption = 'name' | 'status' | 'model' | 'location' | 'tag' | 'eta' | 'freeAt';
 
-const SORT_OPTIONS: readonly QueueSortOption[] = ['name', 'status', 'model', 'location', 'eta', 'freeAt'];
+const SORT_OPTIONS: readonly QueueSortOption[] = ['name', 'status', 'model', 'location', 'tag', 'eta', 'freeAt'];
 
 /**
  * What the two ETA orders read beyond the queue row itself. Both lookups are
@@ -97,6 +97,22 @@ export function sortQueues<T extends PrinterQueue>(
     case 'location':
       sorted.sort(byLocationName((queue) => queue.printer_location?.path));
       break;
+    case 'tag': {
+      // By the alphabetically-first tag the printer wears, untagged last —
+      // the printers page's rule. The grouped view lists a multi-tagged
+      // printer under each of its tags; this flat order is what the timeline,
+      // the copy-queue dialog and the ungrouped fallback read.
+      const firstTag = (queue: T) =>
+        [...(queue.printer_tags ?? [])].map((tag) => tag.name).sort((a, b) => a.localeCompare(b))[0] ?? '';
+      sorted.sort((a, b) => {
+        const ta = firstTag(a);
+        const tb = firstTag(b);
+        if (!ta && tb) return 1;
+        if (ta && !tb) return -1;
+        return ta.localeCompare(tb) || byName(a, b);
+      });
+      break;
+    }
   }
 
   if (!sortAsc) sorted.reverse();

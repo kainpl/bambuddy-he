@@ -22,6 +22,7 @@ const mockQueues = [
     printer_name: 'X1 Carbon',
     printer_model: 'X1C',
     printer_location: { id: 1, name: 'Lab', parent_id: null, path: 'Lab' },
+    printer_tags: [{ id: 7, name: 'Phase 1', color: '#ff0000' }],
     status: 'idle',
     last_activity_at: null,
     current_item_id: null,
@@ -40,6 +41,7 @@ const mockQueues = [
     printer_name: 'P1S',
     printer_model: 'P1S',
     printer_location: { id: 2, name: 'Office', parent_id: null, path: 'Office' },
+    printer_tags: [],
     status: 'printing',
     last_activity_at: '2026-04-14T10:00:00Z',
     current_item_id: 42,
@@ -198,6 +200,23 @@ describe('QueuePage', () => {
       await user.selectOptions(sortSelect, 'freeAt');
       expect(localStorage.getItem('queueSortBy')).toBe('freeAt');
       expect((sortSelect as HTMLSelectElement).value).toBe('freeAt');
+    });
+
+    it('groups the cards under their tags, «No tag» last, with the tag colour on the dot', async () => {
+      // The printers page's tag view, on the queue page: the tagged X1 Carbon
+      // under «Phase 1», the untagged P1S under «No tag», in that order. The
+      // filters persist across tests in this file, so start from a clean slate.
+      localStorage.clear();
+      localStorage.setItem('queueSortBy', 'tag');
+      const { container } = render(<QueuePage />);
+      await waitFor(() => {
+        expect(screen.getByText('Phase 1')).toBeInTheDocument();
+        expect(screen.getByText('No tag')).toBeInTheDocument();
+      });
+      const headings = [...container.querySelectorAll('h2')].map((h) => h.textContent);
+      expect(headings.indexOf('Phase 1(1)')).toBeLessThan(headings.indexOf('No tag(1)'));
+      const dot = screen.getByText('Phase 1').closest('h2')!.querySelector('span');
+      expect(dot).toHaveStyle({ backgroundColor: '#ff0000' });
     });
   });
 
