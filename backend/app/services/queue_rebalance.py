@@ -52,11 +52,16 @@ from backend.app.services.filament_intake import require_source_requirements
 from backend.app.services.filament_policy import auto_policy
 from backend.app.services.filament_requirements import PrintRequirementsCache
 from backend.app.services.order_metrics import attribute, batch_contexts, line_accepts_materials
-from backend.app.services.plan_engine import _pick_key, line_yield
+from backend.app.services.plan_engine import (
+    _pick_key,
+    counted_parts_by_line,
+    line_yield,
+    plate_recipe_index,
+    recipes_for_row,
+)
 from backend.app.services.print_option_defaults import preference_options
 from backend.app.services.print_scheduler import scheduler
 from backend.app.services.product_composition import PlateRecipe, estimate_seconds, recipes_for_products
-from backend.app.utils.printer_models import normalize_model_name
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +81,7 @@ SKIP_REASONS = (
     "located",
     "no_yield",
     "source_unreadable",
+    "creation_failed",
     "home_model_idle",
     "no_faster_model",
     "cooldown",
@@ -323,9 +329,10 @@ class LineCatalog:
 
     ``options_by_line`` are the candidate plates the plan would consider —
     sliced, material accepted, a known model, a positive yield for the line —
-    and :meth:`yield_of` reads a queued row's yield the way
-    ``plan_engine.queued_yield_by_line`` does: the exact ``(file, plate)`` plate
-    of the line's product first, then the product's whole-file plate.
+    and :meth:`yield_of` reads a queued row's yield through the plan engine's
+    own ``recipes_for_row``, so a rebalanced row and the plan on screen resolve
+    the same plate to the same recipe. ⚠️ ``plate_id`` on a queue row is the
+    plate INDEX, not a ``ProductPlate.id``.
     """
 
     options_by_line: dict[int, list[PlateOption]]
@@ -338,8 +345,7 @@ class LineCatalog:
         product_id = self.product_by_line.get(line_id)
         if product_id is None:
             return 0
-        recipes = {**self.by_file.get(library_file_id, {}), **self.by_plate.get((library_file_id, plate_id or 0), {})}
-        recipe = recipes.get(product_id)
+        recipe = recipes_for_row(self.by_plate, self.by_file, library_file_id, plate_id or 0).get(product_id)
         if recipe is None:
             return 0
         return sum(line_yield(recipe, self.counted_by_line.get(line_id) or set()).values())
@@ -351,18 +357,8 @@ async def load_line_catalog(db: AsyncSession, project_ids: list[int]) -> LineCat
     figures_by_project = {ctx.project.id: attribute(ctx)[0] for ctx in contexts}
     products_by_id = {pid: product for ctx in contexts for pid, product in ctx.products_by_id.items()}
     recipes_by_product = await recipes_for_products(db, products_by_id.values()) if products_by_id else {}
-    counted_by_line = {
-        line_id: {pf.part_id for pf in figs.parts}
-        for figures in figures_by_project.values()
-        for line_id, figs in figures.items()
-    }
-    by_plate: dict[tuple[int, int], dict[int, PlateRecipe]] = {}
-    by_file: dict[int, dict[int, PlateRecipe]] = {}
-    for product_id, rows in recipes_by_product.items():
-        for plate, _file, recipe in rows:
-            by_plate.setdefault((plate.library_file_id, plate.plate_index), {})[product_id] = recipe
-            if plate.plate_index == 0:
-                by_file.setdefault(plate.library_file_id, {})[product_id] = recipe
+    counted_by_line = counted_parts_by_line(figures_by_project)
+    by_plate, by_file = plate_recipe_index(recipes_by_product)
     options_by_line: dict[int, list[PlateOption]] = {}
     product_by_line: dict[int, int] = {}
     for ctx in contexts:
@@ -495,7 +491,9 @@ async def rebalance(
     rows = await _candidate_rows(db, line_ids=line_ids, item_ids=item_ids)
     if item_ids is not None:
         found = {row.id for row in rows}
-        result.skipped.extend((item_id, "not_found") for item_id in item_ids if item_id not in found)
+        # ``dict.fromkeys``: a body that names the same unknown id twice is
+        # refused once, not twice — ``skipped`` is one verdict per item.
+        result.skipped.extend((item_id, "not_found") for item_id in dict.fromkeys(item_ids) if item_id not in found)
     movable_rows: list[AutoQueueItem] = []
     for row in rows:
         why = refusal(row)
@@ -572,21 +570,36 @@ async def _apply(
     current_user: User | None,
     result: RebalanceResult,
 ) -> None:
-    """One move: read the new plate FIRST, then convert the row in place, then create ``k − 1`` more.
+    """One move, all-or-nothing: read and prepare EVERYTHING first, then write.
 
-    The strict source read happens before anything is written, so an unreadable
-    target leaves the row exactly as it was. The conversion keeps every print
-    option, the line, ``force_color_match`` and the position; the created rows
-    take the saved print-option profile for the receiving model — the
-    operator's when a person pressed the button, the system row when the tick
-    ran — the way the plan's own enqueue door does, with swap macros muted when
-    the file bakes them. All ``k`` rows share one batch id.
+    Order matters twice over. The strict source read and the receiving model's
+    print-option profile are both fetched before the first assignment to
+    ``item``, so a refusal or a DB error there leaves the row exactly as it was.
+    And the creation of the ``k − 1`` companions is undone by hand when it
+    fails: ``add_items_to_auto_queue`` raises BEFORE its own commit, its first
+    SELECT autoflushes the already-converted row, and the tick's ``commit``
+    would then make a HALF move durable — the row covering 2 of the 6 parts it
+    used to claim, the companions never created, the line quietly four parts
+    short. Restoring the eight fields and reporting ``creation_failed`` is what
+    keeps "a move" one thing.
+
+    The conversion keeps every print option, the line, ``force_color_match`` and
+    the position; the created rows take the saved profile for the receiving
+    model — the operator's when a person pressed the button, the system row when
+    the tick ran — the way the plan's own enqueue door does, with swap macros
+    muted when the file bakes them. All ``k`` rows share one batch id.
+
+    ⚠️ The writer is handed the LINE and no ``project_id``: it derives the order
+    from the line, so a row whose ``project_id`` points at an order that is gone
+    (SQLite honours no FK action) cannot make the creation refuse.
     """
     file = (
         await db.execute(LibraryFile.active().where(LibraryFile.id == move.plate.library_file_id))
     ).scalar_one_or_none()
     if file is None:
-        result.skipped.append((item.id, "no_yield"))
+        # Trashed or deleted between the plan and here. There is no source to
+        # read, which is the same thing as a source nobody can read.
+        result.skipped.append((item.id, "source_unreadable"))
         return
     try:
         req = await require_source_requirements(
@@ -602,13 +615,20 @@ async def _apply(
         )
         result.skipped.append((item.id, "source_unreadable"))
         return
-    if req is None:
-        result.skipped.append((item.id, "source_unreadable"))
-        return
 
     from_model = item.target_model or move.from_model
-    to_model = normalize_model_name(req.model) or move.plate.model_label
+    to_model = req.model or move.plate.model_label
     batch_id = item.batch_id or (str(uuid.uuid4()) if move.k > 1 else None)
+    # Everything the creation needs, read while the row is still untouched.
+    payload: dict | None = None
+    if move.k > 1:
+        profile = await preference_options(db, current_user, to_model)
+        options = profile.for_auto_queue() if profile else {}
+        if file.swap_compatible:
+            options["execute_swap_macros"] = False
+            options["swap_macro_events"] = None
+        payload = {**options, "force_color_match": item.force_color_match}
+
     logger.info(
         "Rebalance: line %s item %s %s → %s: %d print(s) of plate %s (yield %d, %d parts, surplus %d), "
         "finish %.0fs vs home %s",
@@ -624,6 +644,22 @@ async def _apply(
         move.finish,
         "none" if move.home_finish is None else f"{move.home_finish:.0f}s",
     )
+    # The row as it is, so the creation step below can put it back.
+    before = {
+        field_name: getattr(item, field_name)
+        for field_name in (
+            "archive_id",
+            "library_file_id",
+            "plate_id",
+            "target_model",
+            "required_filament_types",
+            "print_time_seconds",
+            "waiting_reason",
+            "batch_id",
+            "rebalanced_at",
+            "rebalanced_from_model",
+        )
+    }
     item.archive_id = None
     item.library_file_id = file.id
     item.plate_id = req.resolved_plate_id
@@ -637,20 +673,15 @@ async def _apply(
     result.converted += 1
     result.moved_parts += move.moved_parts
 
-    if move.k > 1:
-        profile = await preference_options(db, current_user, req.model or move.plate.model_label)
-        options = profile.for_auto_queue() if profile else {}
-        if file.swap_compatible:
-            options["execute_swap_macros"] = False
-            options["swap_macro_events"] = None
-        payload = {**options, "force_color_match": item.force_color_match}
+    if payload is None:
+        return
+    try:
         created = await add_items_to_auto_queue(
             db,
             AutoQueueItemCreate(
                 library_file_id=file.id,
                 plate_id=req.resolved_plate_id,
                 quantity=move.k - 1,
-                project_id=item.project_id,
                 project_line_id=item.project_line_id,
                 **payload,
             ),
@@ -662,4 +693,19 @@ async def _apply(
             row.rebalanced_at = now
             row.rebalanced_from_model = from_model
         await db.flush()
-        result.created += len(created)
+    except Exception as exc:
+        for field_name, value in before.items():
+            setattr(item, field_name, value)
+        result.converted -= 1
+        result.moved_parts -= move.moved_parts
+        logger.warning(
+            "Rebalance: line %s item %s stays on %s — creating its %d companion print(s) failed: %s",
+            item.project_line_id,
+            item.id,
+            before["target_model"],
+            move.k - 1,
+            exc,
+        )
+        result.skipped.append((item.id, "creation_failed"))
+        return
+    result.created += len(created)

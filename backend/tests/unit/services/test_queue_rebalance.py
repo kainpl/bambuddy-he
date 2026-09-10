@@ -180,6 +180,7 @@ def test_the_reason_list_is_closed():
         "located",
         "no_yield",
         "source_unreadable",
+        "creation_failed",
         "home_model_idle",
         "no_faster_model",
         "cooldown",

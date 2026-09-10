@@ -23,6 +23,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import select
 
 from backend.app.models.archive import PrintArchive
@@ -911,6 +912,7 @@ class TestRebalanceAcrossModels:
             await scheduler.tick()
         await db_session.refresh(farm.item)
         assert farm.item.target_model == "P1S"
+        assert len(await _pending_rows(db_session)) == 1
 
     @pytest.mark.asyncio
     @pytest.mark.integration
@@ -926,6 +928,7 @@ class TestRebalanceAcrossModels:
             await scheduler.tick()
         await db_session.refresh(farm.item)
         assert (farm.item.target_model, farm.item.rebalanced_at) == ("P1S", None)
+        assert len(await _pending_rows(db_session)) == 1
 
     @pytest.mark.asyncio
     @pytest.mark.integration
@@ -972,3 +975,51 @@ class TestRebalanceAcrossModels:
             await scheduler.tick()
         await db_session.refresh(second)
         assert second.rebalanced_from_model == "P1S" and model_key(second.target_model) == model_key("A1MINI")
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_a_creation_that_refuses_leaves_the_row_exactly_as_it_was(
+        self, monkeypatch, db_session, scheduler, printer_factory, tmp_path
+    ) -> None:
+        """A move is all-or-nothing, and the writer refusing is where that is decided.
+
+        ``add_items_to_auto_queue`` raises before its own commit (a dangling
+        ``project_id``, a line that is not the order's), its first SELECT
+        autoflushes the already-converted row, the tick's blanket ``except``
+        swallows it and its ``commit`` makes the half-move durable: the line
+        would keep ONE print of a 2-hook plate where six hooks were owed and
+        never learn that four went missing.
+        """
+        from backend.app.services import queue_rebalance
+
+        farm = await rebalance_farm(db_session, printer_factory, tmp_path)
+        db_session.add(Settings(key="auto_queue_rebalance_models", value="true"))
+        await db_session.commit()
+
+        async def _refuse(*_args, **_kwargs):
+            raise HTTPException(404, "Project not found")
+
+        monkeypatch.setattr(queue_rebalance, "add_items_to_auto_queue", _refuse)
+
+        p_elig, p_sched, p_ams = _patch_printer_manager({farm.p1s.id, farm.mini.id})
+        with p_elig, p_sched, p_ams:
+            await scheduler.tick()
+
+        await db_session.refresh(farm.item)
+        assert (farm.item.library_file_id, farm.item.plate_id, farm.item.target_model) == (
+            farm.big.id,
+            1,
+            "P1S",
+        )
+        assert (farm.item.print_time_seconds, farm.item.batch_id) == (3600, None)
+        assert (farm.item.rebalanced_at, farm.item.rebalanced_from_model) == (None, None)
+        assert json.loads(farm.item.required_filament_types) == ["PLA"]
+        assert len(await _pending_rows(db_session)) == 1, "no companion row was created either"
+
+        # The same run, called directly, names the reason — and counts nothing.
+        # ⚠️ Inside the patch: outside it no printer is connected, so the run
+        # would refuse for want of a receiver and never reach the writer.
+        with p_elig, p_sched, p_ams:
+            result = await queue_rebalance.rebalance(db_session, line_ids=[farm.line.id], force=True)
+        assert (result.converted, result.created, result.moved_parts) == (0, 0, 0)
+        assert (farm.item.id, "creation_failed") in result.skipped
