@@ -64,6 +64,12 @@ export const ORDER_VIEW_KEYS = [
   'product-stock',
   'product',
   'products',
+  // stock tab (2026-09-10): the farm-wide shelf and its journal move with the
+  // same mutations that move a product's shelf — a reservation, a release, a
+  // bank, an order deleted — and with the print completions the socket
+  // reports. Prefixes: the page keys its queries by its filters.
+  'stock-summary',
+  'stock-movements',
 ] as const;
 
 /**

@@ -2157,6 +2157,62 @@ export interface StockMoved {
   delta: number;
 }
 
+/** `GET /stock` — one product's row on the Stock tab. */
+export interface StockReservation {
+  line_id: number;
+  order_id: number;
+  order_name: string;
+  /** Always > 0 — a line holding nothing is not listed. */
+  kits: number;
+}
+
+export interface StockProduct {
+  id: number;
+  name: string;
+  /** The catalog flag — the tab MARKS a hidden product, never hides it. */
+  is_active: boolean;
+  origin: string;
+  kits_available: number;
+  /** Counted parts only, in the product's own part order. */
+  parts: StockBalance[];
+  /** Lines of ACTIVE orders holding kits; kits desc, then order name. */
+  reservations: StockReservation[];
+}
+
+export interface StockSummary {
+  products: StockProduct[];
+}
+
+export interface StockSummaryParams {
+  q?: string;
+  /** Server default is true; send `false` to include empty shelves. */
+  with_stock?: boolean;
+}
+
+/** A ledger row as the farm journal shows it — the product page's row plus
+ *  the product it belongs to. */
+export interface StockMovementRow extends StockMovement {
+  product_id: number;
+  product_name: string;
+}
+
+export interface StockMovementsPage {
+  items: StockMovementRow[];
+  /** The id to continue from; null when the ledger is exhausted. */
+  next_before_id: number | null;
+}
+
+export interface StockMovementsParams {
+  product_id?: number;
+  part_id?: number;
+  reason?: string;
+  before_id?: number | null;
+  limit?: number;
+}
+
+/** Rows per journal page — the request's `limit` and the hook's page size. */
+export const STOCK_JOURNAL_PAGE = 50;
+
 /** `POST /projects/{id}/bank-surplus`. `nothing_to_bank` is not "`moved` is
  *  empty" restated — it is the answer to a second press, which is a success. */
 export interface BankSurplusResponse {
@@ -10103,6 +10159,25 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+  /** The Stock tab's summary: every product with a shelf, its kits, balances
+   *  and the active orders holding its kits. */
+  getStockSummary: (params: StockSummaryParams = {}) => {
+    const search = new URLSearchParams();
+    if (params.q) search.set('q', params.q);
+    if (params.with_stock === false) search.set('with_stock', 'false');
+    const qs = search.toString();
+    return request<StockSummary>(`/stock${qs ? `?${qs}` : ''}`);
+  },
+  /** One keyset page of the farm journal, newest first. */
+  getStockMovements: (params: StockMovementsParams = {}) => {
+    const search = new URLSearchParams();
+    if (params.product_id != null) search.set('product_id', String(params.product_id));
+    if (params.part_id != null) search.set('part_id', String(params.part_id));
+    if (params.reason) search.set('reason', params.reason);
+    if (params.before_id != null) search.set('before_id', String(params.before_id));
+    search.set('limit', String(params.limit ?? STOCK_JOURNAL_PAGE));
+    return request<StockMovementsPage>(`/stock/movements?${search.toString()}`);
+  },
 
   getProductPlates: (id: number) => request<PlateRecipe[]>(`/products/${id}/plates`),
   createProductPart: (productId: number, data: ProductPartCreate) =>
