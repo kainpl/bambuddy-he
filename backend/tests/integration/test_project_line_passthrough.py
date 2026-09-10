@@ -51,7 +51,9 @@ async def linked_file(db_session, tmp_path):
     from backend.app.models.library import LibraryFile
 
     on_disk = tmp_path / "shade.gcode.3mf"
-    on_disk.write_bytes(b"sliced")
+    from backend.tests.fixtures.filament_routing_cases import write_routing_3mf
+
+    write_routing_3mf(on_disk, {1: [{"id": 1, "type": "PLA", "color": "#FFFFFF", "used_g": "1"}]}, model="P1S")
 
     lib_file = LibraryFile(
         filename="shade.gcode.3mf",
@@ -230,7 +232,7 @@ async def test_auto_queue_item_carries_the_line(async_client, db_session, order_
 
 @pytest.mark.asyncio
 async def test_the_scheduler_copies_the_line_onto_the_printer_row(
-    db_session, order_line, linked_file, printer_with_queue
+    db_session, order_line, linked_file, printer_with_queue, monkeypatch
 ):
     """``AutoQueueScheduler._assign`` builds the per-printer row by hand, field
     by field — the one place a new column is silently left behind.
@@ -256,6 +258,18 @@ async def test_the_scheduler_copies_the_line_onto_the_printer_row(
     await db_session.refresh(item)
 
     printer = await db_session.get(Printer, printer_with_queue.id)
+    from backend.app.services.bambu_mqtt import BambuMQTTClient
+    from backend.app.services.printer_manager import printer_manager
+
+    printer.model = "P1S"
+    await db_session.commit()
+    mqtt = BambuMQTTClient("127.0.0.1", "SYNTHETIC", "00000000", model="P1S")
+    mqtt.state.connected = True
+    mqtt._process_message(
+        {"print": {"ams": {"ams": []}, "vt_tray": {"id": 254, "tray_type": "PLA", "tray_color": "FFFFFF"}}}
+    )
+    monkeypatch.setitem(printer_manager._clients, printer.id, mqtt)
+    monkeypatch.setitem(printer_manager._models, printer.id, "P1S")
     queue_item = await AutoQueueScheduler()._assign(db_session, item, printer)
 
     assert queue_item.project_line_id == line.id

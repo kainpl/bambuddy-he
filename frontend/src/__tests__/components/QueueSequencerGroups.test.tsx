@@ -28,7 +28,7 @@ import type { LibraryGroupingMetadata } from '../../api/client';
 // Library file ids whose SILENT member refuses to submit and shows itself
 // instead — the real modal does this when the filament is unavailable, when the
 // printer status query fails, on a low-spool warning or on a failed dispatch.
-const control = vi.hoisted(() => ({ refuse: new Set<number>(), mounts: [] as number[] }));
+const control = vi.hoisted(() => ({ refuse: new Set<number>(), mounts: [] as number[], fileReview: false }));
 
 vi.mock('../../components/PrintModal', async () => {
   // `createElement` rather than JSX: a `vi.mock` factory is hoisted above the
@@ -47,6 +47,7 @@ vi.mock('../../components/PrintModal', async () => {
     autoSubmitWhenUnambiguous?: boolean;
     onAutoSubmitRefused?: () => void;
     onSuccess?: () => void;
+    onAnswered?: (answer: { requiresFileReview: boolean }) => void;
     onClose: () => void;
   }
 
@@ -91,6 +92,7 @@ vi.mock('../../components/PrintModal', async () => {
         {
           type: 'button',
           onClick: () => {
+            if (control.fileReview) props.onAnswered?.({ requiresFileReview: true });
             props.onSuccess?.();
             props.onClose();
           },
@@ -153,6 +155,7 @@ const abandonIt = () => userEvent.click(screen.getByRole('button', { name: 'aban
 beforeEach(() => {
   control.refuse.clear();
   control.mounts.length = 0;
+  control.fileReview = false;
 });
 
 describe('QueueSequencer over groups', () => {
@@ -401,4 +404,19 @@ describe('QueueSequencer over groups', () => {
     await queueIt();
     await waitFor(() => expect(dialog().getAttribute('data-file')).toBe('2'));
   });
+});
+
+
+it('asks about every file after a file-local color or physical mapping answer', async () => {
+  control.fileReview = true;
+  serveGrouping([meta(1, 'PETG'), meta(2, 'PETG')]);
+  const onDone = vi.fn();
+  render(<Run files={[file(1), file(2)]} onDone={onDone} />);
+  await waitFor(() => expect(dialog()).toHaveAttribute('data-file', '1'));
+  await queueIt();
+  await waitFor(() => expect(dialog()).toHaveAttribute('data-file', '2'));
+  expect(dialog()).toHaveAttribute('data-auto', 'false');
+  expect(onDone).not.toHaveBeenCalled();
+  await queueIt();
+  await waitFor(() => expect(onDone).toHaveBeenCalledWith([]));
 });

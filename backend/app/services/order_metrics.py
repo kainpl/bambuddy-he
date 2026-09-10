@@ -322,6 +322,7 @@ async def load_order_context(db: AsyncSession, project_id: int) -> OrderContext 
         (
             await db.execute(
                 select(PrintArchive)
+                .where(func.coalesce(PrintArchive.extra_data["dispatch_aborted"].as_boolean(), False).is_(False))
                 .where(PrintArchive.project_id == project_id, PrintArchive.deleted_at.is_(None))
                 .order_by(PrintArchive.created_at, PrintArchive.id)
             )
@@ -838,6 +839,7 @@ async def batch_contexts(db: AsyncSession, project_ids: Sequence[int]) -> list[O
         (
             await db.execute(
                 select(PrintArchive)
+                .where(func.coalesce(PrintArchive.extra_data["dispatch_aborted"].as_boolean(), False).is_(False))
                 .where(PrintArchive.project_id.in_(project_ids), PrintArchive.deleted_at.is_(None))
                 .order_by(PrintArchive.project_id, PrintArchive.created_at, PrintArchive.id)
             )

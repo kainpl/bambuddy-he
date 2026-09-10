@@ -61,6 +61,7 @@ class AutoQueueItem(Base):
     # JSON array of filament overrides, same format as upstream:
     # [{"slot_id":1,"type":"PLA","color":"#FF0000","force_color_match":true}, ...]
     filament_overrides: Mapped[str | None] = mapped_column(Text, nullable=True)
+    feed_policy: Mapped[str] = mapped_column(String(20), default="auto", server_default="auto", nullable=False)
     force_color_match: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     # Multi-plate: one plate = one row (plate_id is 1-indexed)

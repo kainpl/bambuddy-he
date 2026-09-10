@@ -504,10 +504,18 @@ def _group_extruder_indices(plates: list[XmlElement]) -> dict[int, int] | None:
     return table or None
 
 
+def _known_unused_filament(filament: XmlElement) -> bool:
+    """Only explicit zero usage proves a channel irrelevant to nozzle routing."""
+    try:
+        return float(filament.get("used_g")) == 0
+    except (TypeError, ValueError):
+        return False
+
+
 def extract_nozzle_mapping_from_3mf(zf: zipfile.ZipFile, plate_id: int | None = None) -> dict[int, int] | None:
     """Extract per-slot nozzle/extruder mapping from a 3MF file.
 
-    On dual-nozzle printers (H2D, H2D Pro, H2C), each filament slot is assigned
+    On dual-nozzle printers, each used filament slot is assigned
     to a specific nozzle. The slicer may override user preferences when using
     "Auto For Flush" mode, so the actual assignment comes from slice_info.config
     group_id attributes, not from the user's filament_nozzle_map preference.
@@ -566,7 +574,9 @@ def extract_nozzle_mapping_from_3mf(zf: zipfile.ZipFile, plate_id: int | None = 
             si_root = ET.fromstring(si_content)
             plates = _plates_in_scope(si_root, plate_id)
             group_extruders = _group_extruder_indices(plates)
-            filament_elems = [elem for plate in plates for elem in plate.findall(".//filament")]
+            filament_elems = [
+                elem for plate in plates for elem in plate.findall(".//filament") if not _known_unused_filament(elem)
+            ]
             for filament_elem in filament_elems:
                 group_id_str = filament_elem.get("group_id")
                 if group_id_str is not None:
@@ -655,7 +665,7 @@ def extract_nozzle_mapping_from_3mf(zf: zipfile.ZipFile, plate_id: int | None = 
             slot_id = i + 1
             try:
                 slicer_ext = int(slicer_ext_str)
-                if slicer_ext < len(physical_extruder_map):
+                if 0 <= slicer_ext < len(physical_extruder_map):
                     nozzle_mapping[slot_id] = int(physical_extruder_map[slicer_ext])
             except (ValueError, TypeError, IndexError):
                 pass

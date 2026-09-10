@@ -32,6 +32,8 @@ from backend.app.schemas.print_queue import (
     PrintQueueReorder,
 )
 from backend.app.services import farm_forecast
+from backend.app.services.filament_policy import decode
+from backend.app.services.filament_policy_write import routing_update
 from backend.app.services.notification_service import notification_service
 from backend.app.services.queue_add import add_items_to_printer_queue
 from backend.app.services.queue_times import plate_metadata_cached
@@ -94,6 +96,7 @@ def _enrich_response(item: PrintQueueItem) -> PrintQueueItemResponse:
         "manual_start": item.manual_start,
         "require_previous_success": item.require_previous_success,
         "ams_mapping": ams_mapping_parsed,
+        "filament_routing": (value if isinstance(value := decode(item.filament_routing), dict) else None),
         "origin": item.origin,
         "plate_id": item.plate_id,
         "bed_levelling": derive_mode(item.bed_levelling_mode, item.bed_levelling),
@@ -409,7 +412,10 @@ async def bulk_update_queue_items(
             skipped_count += 1
             continue
 
-        for field, value in update_data.items():
+        item_update = await routing_update(db, item, update_data)
+        if isinstance(item_update.get("ams_mapping"), list):
+            item_update["ams_mapping"] = json.dumps(item_update["ams_mapping"])
+        for field, value in item_update.items():
             if field in _CALI_MODE_FIELDS:
                 _set_calibration_mode(item, field, value)
             else:
@@ -525,6 +531,8 @@ async def update_queue_item(
                     400,
                     f"File was sliced for {sliced_for} and cannot be dispatched to a {printer_model} printer",
                 )
+
+    update_data = await routing_update(db, item, update_data)
 
     # Serialize ams_mapping to JSON for TEXT column storage
     if "ams_mapping" in update_data:
@@ -1072,6 +1080,9 @@ async def unskip_item(
             .where(PrintQueueItem.status == "pending")
         )
     ).scalar() or 0
+    from backend.app.services.filament_policy import restore_routing_source
+
+    restore_routing_source(item)
     item.status = "pending"
     item.position = max_pos + 1
     await update_queue_counters(db, item.queue_id)
@@ -1136,6 +1147,9 @@ async def retry_failed_item(
             .where(PrintQueueItem.status == "pending")
         )
     ).scalar() or 0
+    from backend.app.services.filament_policy import restore_routing_source
+
+    restore_routing_source(item)
     item.status = "pending"
     item.position = max_pos + 1
     item.error_message = None
@@ -1362,7 +1376,10 @@ async def update_batch(
         update_data["selected_macro_ids"] = json.dumps(ids) if ids is not None else None
 
     for item in pending:
-        for field, value in update_data.items():
+        item_update = await routing_update(db, item, update_data)
+        if isinstance(item_update.get("ams_mapping"), list):
+            item_update["ams_mapping"] = json.dumps(item_update["ams_mapping"])
+        for field, value in item_update.items():
             if field in _CALI_MODE_FIELDS:
                 _set_calibration_mode(item, field, value)
             else:

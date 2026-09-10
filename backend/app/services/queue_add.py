@@ -34,7 +34,11 @@ from backend.app.models.project_line import ProjectLine
 from backend.app.models.user import User
 from backend.app.schemas.calibration_mode import mode_to_bool
 from backend.app.schemas.print_queue import PrintQueueItemCreate
+from backend.app.services.filament_intake import require_source_requirements, routing_detail
+from backend.app.services.filament_policy import choices_policy, serialize_policy
+from backend.app.services.filament_requirements import PrintRequirementsCache
 from backend.app.services.order_filing import resolve_line_id
+from backend.app.services.printer_manager import printer_manager
 from backend.app.utils.filename import InvalidFilenameError, is_sliced_file, validate_print_filename
 from backend.app.utils.printer_models import is_gcode_compatible
 
@@ -155,6 +159,15 @@ async def add_items_to_printer_queue(
                 f"File was sliced for {sliced_for} and cannot be dispatched to a {printer_model} printer",
             )
 
+    requirements = await require_source_requirements(
+        PrintRequirementsCache(), archive, library_file, data.plate_id, allow_raw_gcode=True
+    )
+    if requirements is not None:
+        used_slots = {filament["slot_id"] for filament in requirements.used_filaments}
+        if any(override.slot_id not in used_slots for override in data.filament_overrides or []):
+            raise HTTPException(422, routing_detail("override_slot_not_used"))
+        data = data.model_copy(update={"plate_id": requirements.resolved_plate_id})
+
     # Serialize concurrent inserts into the same queue so two appends can't both
     # read the same MAX(position) and land on a duplicate position in an empty
     # scope (upstream #1625-followup TOCTOU fix). A transaction-scoped Postgres
@@ -234,6 +247,18 @@ async def add_items_to_printer_queue(
     # them apart, so the caller's answer is stored verbatim.
     selected_macro_ids_json = json.dumps(data.selected_macro_ids) if data.selected_macro_ids is not None else None
 
+    routing = (
+        serialize_policy(
+            choices_policy(data.model_dump(), printer_manager.get_feed_snapshot(queue.printer_id)),
+            archive_id=data.archive_id,
+            library_file_id=data.library_file_id,
+            requirements=requirements,
+            plate_id=data.plate_id,
+            printer_id=queue.printer_id,
+        )
+        if requirements
+        else None
+    )
     items: list[PrintQueueItem] = []
     for i in range(data.quantity):
         items.append(
@@ -246,6 +271,7 @@ async def add_items_to_printer_queue(
                 manual_start=data.manual_start,
                 require_previous_success=data.require_previous_success,
                 ams_mapping=ams_mapping_json,
+                filament_routing=routing,
                 plate_id=data.plate_id,
                 bed_levelling=mode_to_bool(data.bed_levelling),
                 bed_levelling_mode=data.bed_levelling,

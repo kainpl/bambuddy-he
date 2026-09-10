@@ -31,6 +31,27 @@ from backend.app.models import (  # noqa: F401
 )
 
 
+def _routing_library(library, path):
+    """The mocked save returns a real sliced source to the production reader."""
+    from backend.tests.fixtures.filament_routing_cases import write_routing_3mf
+
+    metadata = library.file_metadata if isinstance(library.file_metadata, dict) else {}
+    plates = [p["index"] for p in metadata.get("plates", [])] or [1]
+    write_routing_3mf(
+        path,
+        {
+            index: [
+                {"id": 1, "type": "PLA", "color": "#FF0000", "used_g": "10"},
+                {"id": 2, "type": "PETG", "color": "#00FF00", "used_g": "2"},
+            ]
+            for index in plates
+        },
+        model=metadata.get("sliced_for_model", "P1S"),
+    )
+    library.file_path = str(path)
+    return library
+
+
 class TestVirtualPrinterInstance:
     """Tests for VirtualPrinterInstance class."""
 
@@ -386,7 +407,9 @@ class TestVirtualPrinterInstance:
         mock_queue = MagicMock(id=1, printer_id=1)
 
         with (
-            patch.object(inst, "_save_to_library", new_callable=AsyncMock, return_value=fake_lib),
+            patch.object(
+                inst, "_save_to_library", new_callable=AsyncMock, return_value=_routing_library(fake_lib, file_path)
+            ),
             patch.object(inst, "_find_best_queue", new_callable=AsyncMock, return_value=mock_queue),
         ):
             await inst._add_to_print_queue(file_path, "192.168.1.100")
@@ -438,7 +461,9 @@ class TestVirtualPrinterInstance:
             )
             mock_queue = MagicMock(id=1, printer_id=1)
             with (
-                patch.object(inst, "_save_to_library", new_callable=AsyncMock, return_value=fake_lib),
+                patch.object(
+                    inst, "_save_to_library", new_callable=AsyncMock, return_value=_routing_library(fake_lib, file_path)
+                ),
                 patch.object(inst, "_find_best_queue", new_callable=AsyncMock, return_value=mock_queue),
             ):
                 await inst._add_to_print_queue(file_path, "192.168.1.100")
@@ -485,7 +510,9 @@ class TestVirtualPrinterInstance:
         mock_queue = MagicMock(id=1, printer_id=1)
 
         with (
-            patch.object(inst, "_save_to_library", new_callable=AsyncMock, return_value=fake_lib),
+            patch.object(
+                inst, "_save_to_library", new_callable=AsyncMock, return_value=_routing_library(fake_lib, file_path)
+            ),
             patch.object(inst, "_find_best_queue", new_callable=AsyncMock, return_value=mock_queue),
         ):
             await inst._add_to_print_queue(file_path, "192.168.1.100")
@@ -528,7 +555,9 @@ class TestVirtualPrinterInstance:
         fake_lib = MagicMock(id=79, filename="test.3mf", file_metadata=None)
 
         with (
-            patch.object(inst, "_save_to_library", new_callable=AsyncMock, return_value=fake_lib),
+            patch.object(
+                inst, "_save_to_library", new_callable=AsyncMock, return_value=_routing_library(fake_lib, file_path)
+            ),
             patch.object(inst, "_find_best_queue", new_callable=AsyncMock, return_value=None),
         ):
             await inst._add_to_print_queue(file_path, "192.168.1.100")
@@ -599,7 +628,9 @@ class TestVirtualPrinterInstance:
         )
 
         with (
-            patch.object(inst, "_save_to_library", new_callable=AsyncMock, return_value=fake_lib),
+            patch.object(
+                inst, "_save_to_library", new_callable=AsyncMock, return_value=_routing_library(fake_lib, file_path)
+            ),
             patch(
                 "backend.app.services.auto_queue_threemf.extract_auto_queue_requirements",
                 return_value=fake_reqs,
@@ -677,7 +708,9 @@ class TestVirtualPrinterInstance:
             filament_slots=[],
         )
         with (
-            patch.object(inst, "_save_to_library", new_callable=AsyncMock, return_value=fake_lib),
+            patch.object(
+                inst, "_save_to_library", new_callable=AsyncMock, return_value=_routing_library(fake_lib, file_path)
+            ),
             patch(
                 "backend.app.services.auto_queue_threemf.extract_auto_queue_requirements",
                 return_value=fake_reqs,
@@ -750,7 +783,9 @@ class TestVirtualPrinterInstance:
         ]
 
         with (
-            patch.object(inst, "_save_to_library", new_callable=AsyncMock, return_value=fake_lib),
+            patch.object(
+                inst, "_save_to_library", new_callable=AsyncMock, return_value=_routing_library(fake_lib, file_path)
+            ),
             patch(
                 "backend.app.services.auto_queue_threemf.extract_auto_queue_requirements",
                 return_value=fake_reqs,
@@ -764,11 +799,8 @@ class TestVirtualPrinterInstance:
 
         assert len(added_items) == 1
         item = added_items[0]
-        overrides = _json.loads(item.filament_overrides)
-        assert overrides == [
-            {"slot_id": 1, "type": "PLA", "color": "#FF0000", "tray_info_idx": "GFA01", "force_color_match": True},
-            {"slot_id": 2, "type": "PLA", "color": "#00FF00", "tray_info_idx": "", "force_color_match": True},
-        ]
+        assert item.force_color_match is True
+        assert item.filament_overrides is None
 
     @pytest.mark.asyncio
     async def test_add_to_auto_queue_force_color_skips_slots_without_color(self, tmp_path):
@@ -818,7 +850,9 @@ class TestVirtualPrinterInstance:
         )
 
         with (
-            patch.object(inst, "_save_to_library", new_callable=AsyncMock, return_value=fake_lib),
+            patch.object(
+                inst, "_save_to_library", new_callable=AsyncMock, return_value=_routing_library(fake_lib, file_path)
+            ),
             patch(
                 "backend.app.services.auto_queue_threemf.extract_auto_queue_requirements",
                 return_value=fake_reqs,
@@ -833,8 +867,9 @@ class TestVirtualPrinterInstance:
             await inst._add_to_auto_queue(file_path, "192.168.1.100")
 
         item = added_items[0]
-        # Empty colour → no override emitted → filament_overrides stays None
-        # so the eligibility scheduler falls back to types-only matching.
+        # The global rule survives even when a slot has no color. The resolver
+        # must wait for evidence rather than silently weakening strict mode.
+        assert item.force_color_match is True
         assert item.filament_overrides is None
 
     @pytest.mark.asyncio
@@ -884,7 +919,9 @@ class TestVirtualPrinterInstance:
         )
 
         with (
-            patch.object(inst, "_save_to_library", new_callable=AsyncMock, return_value=fake_lib),
+            patch.object(
+                inst, "_save_to_library", new_callable=AsyncMock, return_value=_routing_library(fake_lib, file_path)
+            ),
             patch(
                 "backend.app.services.auto_queue_threemf.extract_auto_queue_requirements",
                 return_value=fake_reqs,
@@ -2809,7 +2846,9 @@ class TestVirtualPrinterSlicerIntake:
         file_path = tmp_path / "test.3mf"
         file_path.write_bytes(b"fake3mf")
         with (
-            patch.object(inst, "_save_to_library", new_callable=AsyncMock, return_value=fake_lib),
+            patch.object(
+                inst, "_save_to_library", new_callable=AsyncMock, return_value=_routing_library(fake_lib, file_path)
+            ),
             patch.object(inst, "_find_best_queue", new_callable=AsyncMock, return_value=mock_queue),
             patch.object(inst, "_load_system_print_options", new_callable=AsyncMock, return_value=None),
         ):
@@ -2931,20 +2970,24 @@ class TestVirtualPrinterSlicerIntake:
         mock_db.execute = AsyncMock(side_effect=_exec)
         inst._recent_queue_items["late.3mf"] = ([5, 6], time.monotonic())
 
-        await inst._restamp_recent_queue_item(
-            "late.3mf",
-            {
-                "bed_leveling": False,
-                "flow_cali": False,
-                "vibration_cali": True,  # must be ignored — no such column
-                "timelapse": True,
-                "use_ams": False,
-                "nozzle_mapping": [2, 4],
-            },
-        )
+        with patch(
+            "backend.app.services.filament_policy_write.routing_update",
+            new=AsyncMock(side_effect=lambda db, item, changes: changes),
+        ):
+            await inst._restamp_recent_queue_item(
+                "late.3mf",
+                {
+                    "bed_leveling": False,
+                    "flow_cali": False,
+                    "vibration_cali": True,  # must be ignored — no such column
+                    "timelapse": True,
+                    "use_ams": False,
+                    "nozzle_mapping": [2, 4],
+                },
+            )
 
-        # Two statements: SELECT eligible pending ids, then the UPDATE.
-        assert len(executed) == 2
+        # SELECT eligible IDs, then one guarded UPDATE per pending item.
+        assert len(executed) == 3
         params = executed[1].compile().params
         assert params["bed_levelling"] is False
         assert params["flow_cali"] is False

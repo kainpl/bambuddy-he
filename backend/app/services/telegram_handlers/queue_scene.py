@@ -404,12 +404,10 @@ async def _add_to_auto_queue(
     routing. Refusing there would be worse: the operator picked a target that
     is perfectly valid.
     """
-    import json
 
-    from sqlalchemy import func, select
+    from sqlalchemy import select
 
     from backend.app.core.database import async_session
-    from backend.app.models.auto_queue import AutoQueueItem
     from backend.app.models.library import LibraryFile
 
     if not file_id:
@@ -423,47 +421,21 @@ async def _add_to_auto_queue(
                 await callback.answer(t(lang, NS, "queue_add.failed"), show_alert=True)
                 return
 
-            required_types_json = None
-            try:
-                from pathlib import Path
+            from backend.app.models.user import User
+            from backend.app.schemas.auto_queue import AutoQueueItemCreate
+            from backend.app.services.auto_queue_add import add_items_to_auto_queue
 
-                from backend.app.core.config import settings as app_settings
-                from backend.app.services.auto_queue_threemf import extract_auto_queue_requirements
-
-                if lib_file.file_path:
-                    path = Path(lib_file.file_path)
-                    if not path.is_absolute():
-                        path = app_settings.base_dir / lib_file.file_path
-                    reqs = extract_auto_queue_requirements(path)
-                    if reqs.required_filament_types:
-                        required_types_json = json.dumps(reqs.required_filament_types)
-            except Exception:  # noqa: BLE001 — routing on the model alone is still a valid item
-                pass
-
-            # ⚠️ One global ordering, unlike the per-printer queues: the
-            # auto-queue is a single list the distributor walks.
-            max_pos = int(
-                (
-                    await db.execute(
-                        select(func.coalesce(func.max(AutoQueueItem.position), 0)).where(
-                            AutoQueueItem.status == "pending"
-                        )
-                    )
-                ).scalar()
-                or 0
+            user = await db.get(User, tg_chat.user_id) if tg_chat else None
+            rows = await add_items_to_auto_queue(
+                db,
+                AutoQueueItemCreate(
+                    library_file_id=file_id,
+                    target_model=target_model,
+                    target_location_id=target_location_id,
+                ),
+                user,
             )
-
-            item = AutoQueueItem(
-                library_file_id=file_id,
-                target_model=target_model,
-                target_location_id=target_location_id,
-                required_filament_types=required_types_json,
-                status="pending",
-                position=max_pos + 1,
-                created_by_id=tg_chat.user_id if tg_chat else None,
-            )
-            db.add(item)
-            await db.commit()
+            item = rows[0]
             pos = item.position
 
         await callback.answer(f"✅ {t(lang, NS, 'queue_add.added', pos=pos)}")
@@ -516,9 +488,14 @@ async def cb_qadd_confirm(callback: CallbackQuery, state: FSMContext, tg_chat: T
                 await callback.answer(t(lang, NS, "queue_add.failed"), show_alert=True)
                 return
 
+            from backend.app.services.filament_policy_write import prepare_routing
+
+            routing, plate_id = await prepare_routing(db, printer_id=printer_id, library_file_id=file_id)
             item = PrintQueueItem(
                 queue_id=queue_id,
                 library_file_id=file_id,
+                filament_routing=routing,
+                plate_id=plate_id,
                 status="pending",
                 position=await next_queue_position(db, queue_id),
                 created_by_id=tg_chat.user_id if tg_chat else None,

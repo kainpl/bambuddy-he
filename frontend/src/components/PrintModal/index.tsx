@@ -49,6 +49,7 @@ import type {
   SwapMacroEvent,
   SwapMacrosOptions,
 } from './types';
+import type { AutoQueueFilamentOverride } from '../../api/client';
 import type { AutoModeOptionsState } from './types';
 import {
   DEFAULT_AUTO_MODE_OPTIONS,
@@ -86,6 +87,7 @@ export function PrintModal({
   onQueued,
   autoSubmitWhenUnambiguous,
   seededAnswer,
+  initialRouting,
   onAnswered,
   onAutoSubmitRefused,
   onClose,
@@ -276,7 +278,7 @@ export function PrintModal({
 
   // Manual slot overrides: slot_id (1-indexed) -> globalTrayId (default mapping for single printer or all printers)
   const [manualMappings, setManualMappings] = useState<Record<number, number>>(() => {
-    if (mode === 'edit-queue-item' && queueItem?.ams_mapping && Array.isArray(queueItem.ams_mapping)) {
+    if (mode === 'edit-queue-item' && queueItem?.filament_routing?.mode !== 'auto' && queueItem?.ams_mapping && Array.isArray(queueItem.ams_mapping)) {
       const mappings: Record<number, number> = {};
       queueItem.ams_mapping.forEach((globalTrayId, idx) => {
         if (globalTrayId !== -1) {
@@ -325,13 +327,40 @@ export function PrintModal({
         target_model: autoQueueItem.target_model,
         target_location_id: autoQueueItem.target_location_id,
         force_color_match: autoQueueItem.force_color_match,
+        feed_policy: autoQueueItem.feed_policy ?? (autoQueueItem.use_ams ? 'auto' : 'external_only'),
       };
     }
+    const storedRouting = queueItem?.filament_routing ?? initialRouting;
+    if (storedRouting?.version === 1) return {
+      ...DEFAULT_AUTO_MODE_OPTIONS,
+      feed_policy: storedRouting.feed_policy,
+      force_color_match: storedRouting.force_color_match,
+    };
     if (seededAnswer) return seededAnswer.autoModeOptions;
     return DEFAULT_AUTO_MODE_OPTIONS;
   });
   // edit-auto-item is auto mode by definition: the row belongs to the router.
   const isAutoMode = (mode === 'add-to-queue' && dispatchMode === 'auto') || mode === 'edit-auto-item';
+
+  const [autoOverrides, setAutoOverrides] = useState<AutoQueueFilamentOverride[]>(autoQueueItem?.filament_overrides ?? queueItem?.filament_routing?.filament_overrides ?? initialRouting?.filament_overrides ?? []);
+  const routingPreviewInput = {
+    archive_id: isLibraryFile ? undefined : archiveId,
+    library_file_id: isLibraryFile ? libraryFileId : undefined,
+    plate_ids: selectedPlates.size ? [...selectedPlates].sort((a, b) => a - b) : [0],
+    target_location_id: autoModeOptions.target_location_id,
+    feed_policy: autoModeOptions.feed_policy ?? 'auto',
+    force_color_match: autoModeOptions.force_color_match,
+    filament_overrides: autoOverrides,
+  };
+  const routingPreview = useQuery({
+    queryKey: ['auto-queue-routing-preview', routingPreviewInput],
+    queryFn: () => api.previewAutoQueueRouting(routingPreviewInput),
+    enabled: isAutoMode,
+    retry: false,
+    refetchInterval: 30_000,
+  });
+  const routingSourceReady = !!routingPreview.data?.plates.length &&
+    routingPreview.data.plates.every(plate => plate.status === 'ok');
 
   const [filamentWarningItems, setFilamentWarningItems] = useState<FilamentWarningItem[] | null>(null);
 
@@ -1017,6 +1046,9 @@ export function PrintModal({
       selectedPrinterIds: [...selectedPrinters],
       dispatchMode,
       autoModeOptions,
+      requiresFileReview: autoOverrides.length > 0 || Object.keys(manualMappings).length > 0 ||
+        Object.values(manualMappingsByPlate).some(mapping => Object.keys(mapping).length > 0) ||
+        Object.values(perPrinterConfigs).some(config => !config.useDefault && !config.autoConfigured),
       scheduleOptions,
       quantity,
       printOptions,
@@ -1027,6 +1059,10 @@ export function PrintModal({
     });
   }, [
     onAnswered,
+    autoOverrides,
+    manualMappings,
+    manualMappingsByPlate,
+    perPrinterConfigs,
     selectedPrinters,
     dispatchMode,
     autoModeOptions,
@@ -1230,6 +1266,8 @@ export function PrintModal({
           target_model: autoModeOptions.target_model ?? null,
           target_location_id: autoModeOptions.target_location_id ?? null,
           force_color_match: autoModeOptions.force_color_match,
+          feed_policy: autoModeOptions.feed_policy ?? 'auto',
+          filament_overrides: autoOverrides,
           bed_levelling: printOptions.bed_levelling,
           flow_cali: printOptions.flow_cali,
           layer_inspect: printOptions.layer_inspect,
@@ -1281,6 +1319,8 @@ export function PrintModal({
           target_model: autoModeOptions.target_model ?? undefined,
           target_location_id: autoModeOptions.target_location_id ?? undefined,
           force_color_match: autoModeOptions.force_color_match,
+          feed_policy: autoModeOptions.feed_policy ?? 'auto',
+          filament_overrides: autoOverrides,
           plate_ids: platesToQueue.length > 1 ? platesToQueue : undefined,
           plate_id: platesToQueue.length === 1 ? platesToQueue[0] : null,
           ...printOptions,
@@ -1503,7 +1543,15 @@ export function PrintModal({
       auto_off_after: scheduleOptions.autoOffAfter,
       manual_start: scheduleOptions.scheduleType === 'manual',
       require_previous_success: scheduleOptions.requirePreviousSuccess,
-      ams_mapping: getMappingForPrinter(printerId, plateId),
+      ams_mapping: ((mode === 'edit-queue-item' && queueItem?.filament_routing?.mode === 'auto') || initialRouting?.mode === 'auto') &&
+        Object.keys(manualMappings).length === 0 && Object.keys(manualMappingsByPlate).length === 0 &&
+        !Object.values(perPrinterConfigs).some(config => !config.useDefault && !config.autoConfigured)
+        ? undefined : getMappingForPrinter(printerId, plateId),
+      ...((initialRouting || queueItem?.filament_routing) ? {
+        feed_policy: autoModeOptions.feed_policy,
+        force_color_match: autoModeOptions.force_color_match,
+        filament_overrides: autoOverrides,
+      } : {}),
       plate_id: plateId,
       scheduled_time: scheduleOptions.scheduleType === 'scheduled' && scheduleOptions.scheduledTime
         ? new Date(scheduleOptions.scheduledTime).toISOString()
@@ -1637,7 +1685,7 @@ export function PrintModal({
     // Auto mode: no specific printer required (router picks one). Plate gate still applies.
     if (isAutoMode) {
       if (isMultiPlate && selectedPlates.size === 0) return false;
-      return true;
+      return routingSourceReady && !routingPreview.isPending && !routingPreview.isError;
     }
 
     // Need at least one printer selected
@@ -1655,6 +1703,9 @@ export function PrintModal({
     return true;
   }, [
     isAutoMode,
+    routingSourceReady,
+    routingPreview.isPending,
+    routingPreview.isError,
     selectedPrinters.length,
     isMultiPlate,
     selectedPlates.size,
@@ -1702,7 +1753,7 @@ export function PrintModal({
     if (!canSubmit) {
       // A per-plate requirements query that ERRORED. `retry: false`, so nothing
       // is coming, and multi-plate members are the normal case for a grouped run.
-      const reqsWillNeverAnswer = perPlateReqsFailed;
+      const reqsWillNeverAnswer = perPlateReqsFailed || (isAutoMode && !routingPreview.isPending && !routingSourceReady);
       // No printer, and nothing left that could choose one. The single-printer
       // auto-select is the only filler, and it fires from the effect above in
       // this same commit — so ask whether it EXISTS (`soleActivePrinterId`)
@@ -1807,6 +1858,8 @@ export function PrintModal({
     printersFetched,
     soleActivePrinterId,
     orderAnswerPending,
+    routingPreview.isPending,
+    routingSourceReady,
   ]);
 
   // Tell the run it had to ask after all. Once only, and by ref rather than by
@@ -2085,10 +2138,36 @@ export function PrintModal({
               />
             )}
 
+            {initialRouting && !isAutoMode && <p className="text-sm text-amber-300">
+              {t(initialRouting.mode === 'pinned' ? 'filamentRouting.copyReview' : 'filamentRouting.copyRules')}
+            </p>}
+
+            {!isAutoMode && (initialRouting || queueItem?.filament_routing) && <div className="space-y-2 text-sm">
+              <label className="block text-bambu-gray">{t('filamentRouting.feedPolicy')}
+                <select value={autoModeOptions.feed_policy ?? 'auto'} className="ml-2 bg-bambu-dark-secondary text-white rounded p-1"
+                  onChange={event => setAutoModeOptions(previous => ({ ...previous, feed_policy: event.target.value as AutoModeOptionsState['feed_policy'] }))}>
+                  <option value="auto">{t('filamentRouting.feedAuto')}</option>
+                  <option value="ams_only">{t('filamentRouting.feedAms')}</option>
+                  <option value="external_only">{t('filamentRouting.feedExternal')}</option>
+                </select>
+              </label>
+              <label className="flex gap-2 items-center text-white">
+                <input type="checkbox" checked={autoModeOptions.force_color_match}
+                  onChange={event => setAutoModeOptions(previous => ({ ...previous, force_color_match: event.target.checked }))} />
+                {t('printModal.autoMode.forceColorMatch')}
+              </label>
+            </div>}
+
             {/* Auto-distribute mode controls — replaces PrinterSelector */}
             {isAutoMode && (
               <AutoModeOptions
                 options={autoModeOptions}
+                preview={routingPreview.data}
+                loading={routingPreview.isPending}
+                failed={routingPreview.isError}
+                onRetry={() => { void routingPreview.refetch(); }}
+                overrides={autoOverrides}
+                onOverridesChange={setAutoOverrides}
                 onChange={setAutoModeOptions}
                 printers={printers}
                 slicedForModel={slicedForModel}

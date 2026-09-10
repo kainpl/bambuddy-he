@@ -17,11 +17,29 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from functools import wraps
+from itertools import count
 
 import paho.mqtt.client as mqtt
 
 from backend.app.services.hms_actions import HMSAction, get_actions_for_error_code
+from backend.app.services.printer_feed_snapshot import FeedTelemetry, snapshot_from_state
+from backend.app.utils.printer_models import is_dual_nozzle_model
 from backend.app.utils.timelapse import task_cfg
+
+
+def _routing_locked(method):
+    """Serialize telemetry revisions with the final synchronous print handoff."""
+
+    @wraps(method)
+    def locked(self, *args, **kwargs):
+        with self._routing_lock:
+            return method(self, *args, **kwargs)
+
+    return locked
+
+
+_connection_generations = count(1)
 
 logger = logging.getLogger(__name__)
 
@@ -1074,6 +1092,8 @@ class PrintOptions:
 @dataclass
 class PrinterState:
     connected: bool = False
+    connection_generation: int = 0
+    feed_telemetry: FeedTelemetry = field(default_factory=FeedTelemetry)
     state: str = "unknown"
     current_print: str | None = None
     subtask_name: str | None = None
@@ -1876,6 +1896,7 @@ class BambuMQTTClient:
         self._unnamed_stages_seen: set[int] = set()
 
         self.state = PrinterState()
+        self._routing_lock = threading.RLock()
         self._client: mqtt.Client | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         # Full 16-char ``hms[]`` codes the operator chose to hide on this
@@ -2282,8 +2303,11 @@ class BambuMQTTClient:
             except Exception:
                 pass
 
+    @_routing_locked
     def _on_connect(self, client, userdata, flags, rc, properties=None):
         if rc == 0:
+            self.state.connection_generation = next(_connection_generations)
+            self.state.feed_telemetry = FeedTelemetry()
             self.state.connected = True
 
             # ⚠️ Anything paho is still retrying was published BEFORE this link
@@ -2401,6 +2425,7 @@ class BambuMQTTClient:
             self._request_topic_sub_mid = None
             self._request_topic_sub_time = 0.0
 
+    @_routing_locked
     def _on_disconnect(self, client, userdata, disconnect_flags=None, rc=None, properties=None):
         # Always unblock disconnect() callers, regardless of whether we suppress
         # the state broadcast below.  disconnect() sets _disconnection_event and
@@ -2478,6 +2503,7 @@ class BambuMQTTClient:
         if self.on_state_change:
             self.on_state_change(self.state)
 
+    @_routing_locked
     def _on_message(self, client, userdata, msg):
         for handler in self._raw_message_handlers:
             try:
@@ -2502,8 +2528,11 @@ class BambuMQTTClient:
                     len(msg.payload),
                 )
             payload = json.loads(raw)
-            # Track last message time - receiving a message proves we're connected
+            # A recovered link must not refresh cached spools with an unrelated report.
             self._last_message_time = time.time()
+            if not self.state.connected:
+                self.state.connection_generation = next(_connection_generations)
+                self.state.feed_telemetry = FeedTelemetry()
             self.state.connected = True
 
             # Intercept request-topic messages (print commands from slicer/BamDude)
@@ -2600,8 +2629,10 @@ class BambuMQTTClient:
                     json.dumps(print_data),
                 )
 
+    @_routing_locked
     def _process_message(self, payload: dict):
         """Process incoming MQTT message from printer."""
+        self.state.feed_telemetry.observe(payload, self.model)
         # Handle top-level AMS data (comes outside of "print" key)
         # Wrap in try/except to prevent breaking the MQTT connection
         if "ams" in payload:
@@ -7213,6 +7244,11 @@ class BambuMQTTClient:
             logger.warning("[%s] MQTT connect could not be started: %s", self.serial_number, self._last_connect_error)
             raise
 
+    @_routing_locked
+    def get_feed_snapshot(self, printer_id: int):
+        return snapshot_from_state(printer_id, self.model, self.state)
+
+    @_routing_locked
     def start_print(
         self,
         filename: str,
@@ -7229,6 +7265,7 @@ class BambuMQTTClient:
         storage: str = "external",
         file_md5: str = "",
         timelapse_storage: str | None = None,
+        routing_guard=None,
     ):
         """Start a print job on the printer.
 
@@ -7285,6 +7322,13 @@ class BambuMQTTClient:
         # job. IDLE / FINISH / FAILED are valid start targets; only active-print
         # states are refused. Callers treat False here as a DEFER (leave the queue
         # item pending), not a failure.
+        if routing_guard is not None:
+            routing_guard.validate(
+                self.get_feed_snapshot(routing_guard.plan.printer_id),
+                mapping=ams_mapping,
+                use_ams=use_ams,
+                plate_id=plate_id,
+            )
         if self.state.state in _ACTIVE_PRINT_STATES:
             logger.warning(
                 "[%s] start_print refused: printer busy (gcode_state=%s) — not publishing project_file for %s",
@@ -7327,9 +7371,7 @@ class BambuMQTTClient:
                         # previous classifier that put H2S into the dual-nozzle bucket
                         # silently routed external-spool prints to ams_id=254 and the
                         # firmware rejected the dispatch with ``07FF_8012``.
-                        _is_dual_nozzle = self._is_dual_nozzle or (
-                            self.model and self.model.upper().strip() in ("H2D", "H2D PRO", "H2DPRO", "H2C", "X2D")
-                        )
+                        _is_dual_nozzle = self._is_dual_nozzle or (is_dual_nozzle_model(self.model))
                         ext_ams_id = tray_id if _is_dual_nozzle else 255
                         flat_ams_mapping.append(-1)
                         ams_mapping2.append({"ams_id": ext_ams_id, "slot_id": 0})
@@ -7368,9 +7410,7 @@ class BambuMQTTClient:
             # ``_is_dual_nozzle`` flag set from device.extruder.info (>=2
             # entries); model name is the fallback for the brief window after
             # connect before push data arrives. Upstream Bambuddy #1386.
-            is_dual_nozzle = self._is_dual_nozzle or (
-                self.model and self.model.upper().strip() in ("H2D", "H2D PRO", "H2DPRO", "H2C", "X2D")
-            )
+            is_dual_nozzle = self._is_dual_nozzle or (is_dual_nozzle_model(self.model))
 
             from backend.app.utils.printer_models import is_nozzle_rack_model
 
@@ -7415,7 +7455,12 @@ class BambuMQTTClient:
             # and 254 (virtual tray) in ams_mapping with 0700_8012 "Failed to get
             # AMS mapping table". Fix: remap -1→0 and omit ams_mapping2 entirely.
             # Dual-nozzle excluded — use_ams controls nozzle routing on those.
-            no_ams_printer = not use_ams and not is_dual_nozzle and not self.state.raw_data.get("ams")
+            has_ams = (
+                self.get_feed_snapshot(routing_guard.plan.printer_id).ams_present
+                if routing_guard is not None
+                else bool(self.state.raw_data.get("ams"))
+            )
+            no_ams_printer = not use_ams and not is_dual_nozzle and not has_ams
             if no_ams_printer and flat_ams_mapping:
                 flat_ams_mapping = [0 if v == -1 else v for v in flat_ams_mapping]
                 logger.info(

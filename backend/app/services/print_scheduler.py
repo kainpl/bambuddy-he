@@ -4,12 +4,10 @@ import asyncio
 import json
 import logging
 import time
-import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
-import defusedxml.ElementTree as ET
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -27,6 +25,10 @@ from backend.app.models.spool_assignment import SpoolAssignment
 from backend.app.models.spoolman_slot_assignment import SpoolmanSlotAssignment
 from backend.app.schemas.calibration_mode import derive_mode
 from backend.app.services import chamber_history
+from backend.app.services.filament_intake import routing_detail
+from backend.app.services.filament_preflight import preflight_item
+from backend.app.services.filament_requirements import PrintRequirementsCache
+from backend.app.services.filament_routing import RoutingDeferred
 from backend.app.services.notification_service import notification_service
 from backend.app.services.printer_manager import (
     first_drying_blocking_reason,
@@ -37,7 +39,6 @@ from backend.app.services.printer_manager import (
 from backend.app.services.smart_plug_manager import smart_plug_manager
 from backend.app.services.stagger_groups import GroupKey, StaggerGroupResolver, StaggerSplit
 from backend.app.utils.filament_types import canonical_filament_type
-from backend.app.utils.threemf_tools import extract_nozzle_mapping_from_3mf
 
 logger = logging.getLogger(__name__)
 
@@ -345,6 +346,7 @@ class PrintScheduler:
                 .order_by(PrintQueueItem.queue_id, PrintQueueItem.position)
             )
             items = list(result.scalars().all())
+            requirements_cache = PrintRequirementsCache()
             dispatched = False
 
             if not items:
@@ -624,7 +626,16 @@ class PrintScheduler:
                 # recomputed from live trays rather than trusted (else it's
                 # silently downgraded to external-spool and prints against an
                 # empty feed).
-                await self._ensure_ams_mapping(db, printer_id, item)
+                try:
+                    guard = await preflight_item(db, item, printer_id, cache=requirements_cache)
+                except RoutingDeferred as exc:
+                    item.waiting_reason = routing_detail(exc.reason)["message"]
+                    await db.commit()
+                    continue
+                if guard:
+                    item.ams_mapping = json.dumps(guard.plan.mapping)
+                    item.use_ams = guard.plan.use_ams
+                    item.plate_id = guard.plan.resolved_plate_id
 
                 # Print takes priority — stop a cycle WE armed, now that this
                 # item is definitely going out.
@@ -651,7 +662,7 @@ class PrintScheduler:
                 # to "printing" + the stagger slot is pre-registered. This lets
                 # the next loop iteration dispatch a different printer in
                 # parallel instead of serialising through one global await.
-                await self._start_print(db, item)
+                await self._start_print(db, item, requirements_cache=requirements_cache)
                 dispatched = True
                 busy_printers.add(printer_id)
                 # ⚠️ The one addition the narrow set DOES take: this print is
@@ -807,109 +818,14 @@ class PrintScheduler:
         )
 
     async def _get_filament_requirements(self, db: AsyncSession, item: PrintQueueItem) -> list[dict] | None:
-        """Extract filament requirements from the source 3MF file.
+        """Read the same exact plate evidence as intake and auto assignment."""
+        from backend.app.services.filament_intake import read_item_requirements
 
-        Args:
-            db: Database session
-            item: Queue item with archive_id or library_file_id
-
-        Returns:
-            List of filament requirement dicts with slot_id, type, color, used_grams
-        """
-        file_path: Path | None = None
-
-        if item.archive_id:
-            result = await db.execute(select(PrintArchive).where(PrintArchive.id == item.archive_id))
-            archive = result.scalar_one_or_none()
-            if archive:
-                file_path = settings.base_dir / archive.file_path
-        elif item.library_file_id:
-            result = await db.execute(LibraryFile.active().where(LibraryFile.id == item.library_file_id))
-            library_file = result.scalar_one_or_none()
-            if library_file:
-                lib_path = Path(library_file.file_path)
-                file_path = lib_path if lib_path.is_absolute() else settings.base_dir / library_file.file_path
-
-        if not file_path or not file_path.exists():
+        requirements = await read_item_requirements(db, item)
+        if requirements.status != "ok":
             return None
-
-        filaments = []
-        try:
-            with zipfile.ZipFile(file_path, "r") as zf:
-                if "Metadata/slice_info.config" not in zf.namelist():
-                    return None
-
-                content = zf.read("Metadata/slice_info.config").decode()
-                root = ET.fromstring(content)
-
-                # Check if plate_id is specified - use that plate's filaments
-                plate_id = item.plate_id
-                if plate_id:
-                    for plate_elem in root.findall("./plate"):
-                        plate_index = None
-                        for meta in plate_elem.findall("metadata"):
-                            if meta.get("key") == "index":
-                                plate_index = int(meta.get("value", "0"))
-                                break
-                        if plate_index == plate_id:
-                            for filament_elem in plate_elem.findall("./filament"):
-                                filament_id = filament_elem.get("id")
-                                filament_type = filament_elem.get("type", "")
-                                filament_color = filament_elem.get("color", "")
-                                # tray_info_idx identifies the specific spool selected when slicing
-                                tray_info_idx = filament_elem.get("tray_info_idx", "")
-                                used_g = filament_elem.get("used_g", "0")
-                                try:
-                                    used_grams = float(used_g)
-                                    if used_grams > 0 and filament_id:
-                                        filaments.append(
-                                            {
-                                                "slot_id": int(filament_id),
-                                                "type": filament_type,
-                                                "color": filament_color,
-                                                "tray_info_idx": tray_info_idx,
-                                                "used_grams": round(used_grams, 1),
-                                            }
-                                        )
-                                except (ValueError, TypeError):
-                                    pass  # Skip filament entry with unparseable usage data
-                            break
-                else:
-                    # No plate_id - extract all filaments with used_g > 0
-                    for filament_elem in root.findall("./filament"):
-                        filament_id = filament_elem.get("id")
-                        filament_type = filament_elem.get("type", "")
-                        filament_color = filament_elem.get("color", "")
-                        # tray_info_idx identifies the specific spool selected when slicing
-                        tray_info_idx = filament_elem.get("tray_info_idx", "")
-                        used_g = filament_elem.get("used_g", "0")
-                        try:
-                            used_grams = float(used_g)
-                            if used_grams > 0 and filament_id:
-                                filaments.append(
-                                    {
-                                        "slot_id": int(filament_id),
-                                        "type": filament_type,
-                                        "color": filament_color,
-                                        "tray_info_idx": tray_info_idx,
-                                        "used_grams": round(used_grams, 1),
-                                    }
-                                )
-                        except (ValueError, TypeError):
-                            pass  # Skip filament entry with unparseable usage data
-
-                filaments.sort(key=lambda x: x["slot_id"])
-
-                # Enrich with nozzle mapping for dual-nozzle printers
-                nozzle_mapping = extract_nozzle_mapping_from_3mf(zf)
-                if nozzle_mapping:
-                    for filament in filaments:
-                        filament["nozzle_id"] = nozzle_mapping.get(filament["slot_id"])
-        except Exception as e:
-            logger.warning("Failed to parse filament requirements: %s", e)
-            return None
-
-        return filaments if filaments else None
+        item.plate_id = requirements.resolved_plate_id
+        return [dict(f) for f in requirements.used_filaments]
 
     def _build_loaded_filaments(self, status) -> list[dict]:
         """Build list of loaded filaments from printer status.
@@ -1638,6 +1554,11 @@ class PrintScheduler:
             # match any real printer state.
             pre_state = ""
         self._dispatch_holds[printer_id] = (time.monotonic(), pre_state, pre_subtask_id)
+
+    def release_prepared_dispatch(self, printer_id: int) -> None:
+        """The owner of a refused pre-publish attempt releases its reservations."""
+        self._stagger_slots = [slot for slot in self._stagger_slots if slot.printer_id != printer_id]
+        self._release_dispatch_hold(printer_id)
 
     def _release_dispatch_hold(self, printer_id: int) -> None:
         """Drop the dispatch hold for ``printer_id`` (called by the watchdog)."""
@@ -2556,7 +2477,7 @@ class PrintScheduler:
         await db.commit()
         return True
 
-    async def _start_print(self, db: AsyncSession, item: PrintQueueItem):
+    async def _start_print(self, db: AsyncSession, item: PrintQueueItem, *, requirements_cache=None):
         """Upload file and start print for a queue item.
 
         Supports two sources:
@@ -2630,6 +2551,17 @@ class PrintScheduler:
             await self._power_off_if_needed(db, item)
             return
 
+        try:
+            guard = await preflight_item(db, item, printer.id, cache=requirements_cache)
+        except RoutingDeferred as exc:
+            item.waiting_reason = routing_detail(exc.reason)["message"]
+            await db.commit()
+            return
+        if guard:
+            item.ams_mapping = json.dumps(guard.plan.mapping)
+            item.use_ams = guard.plan.use_ams
+            item.plate_id = guard.plan.resolved_plate_id
+
         # Nozzle-diameter mismatch guard (upstream #1899). A file sliced for one
         # nozzle size dispatched to a printer with a different nozzle installed is
         # rejected by the firmware with a cryptic HMS ("Failed to get AMS mapping
@@ -2644,7 +2576,7 @@ class PrintScheduler:
         # dual-nozzle printers (H2D) a match against EITHER installed nozzle
         # passes, so a 0.6 slice is fine as long as one hotend is a 0.6.
         sliced_nozzle = archive.nozzle_diameter if archive else None
-        if sliced_nozzle:
+        if sliced_nozzle and guard is None:
             installed = _installed_nozzle_diameters(printer_manager.get_status(item.queue_id))
             mismatch_msg = _nozzle_mismatch_message(sliced_nozzle, installed)
             if mismatch_msg:
@@ -2706,7 +2638,7 @@ class PrintScheduler:
         options: dict[str, Any] = {
             "mesh_mode_fast_check": item.mesh_mode_fast_check,
             "ams_mapping": ams_mapping,
-            "plate_id": item.plate_id or 1,
+            "plate_id": item.plate_id,
             # Tri-state calibration → mode string (off/auto/on) so an 'auto'
             # override reaches start_print. NULL *_mode derives from the legacy
             # bool, so existing items emit 'on'/'off' — byte-identical downstream
@@ -2868,6 +2800,24 @@ class PrintScheduler:
                         return
                     await self._fail_item(db, item, f"Dispatch error: {e}")
                     await self._power_off_if_needed(db, item)
+                return
+
+            if outcome.get("deferred"):
+                from backend.app.services.filament_deferred import defer_claim
+
+                restored = await defer_claim(
+                    db,
+                    item_id=queue_item_id,
+                    started_at=outcome.get("claim_started_at"),
+                    reason=outcome["reason"]["code"],
+                    revision=outcome.get("revision"),
+                    source_archive_id=outcome.get("source_archive_id"),
+                    source_library_file_id=outcome.get("source_library_file_id"),
+                    restore_source=True,
+                )
+                await db.commit()
+                if restored:
+                    self.release_prepared_dispatch(printer_id)
                 return
 
             if not outcome.get("success"):

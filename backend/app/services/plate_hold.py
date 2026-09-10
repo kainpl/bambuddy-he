@@ -188,6 +188,9 @@ async def answer_by_repeating(db: AsyncSession, printer_id: int) -> PrintQueueIt
     # dispatch it from whatever it was dispatched from the first time.
     if row.library_file_id is not None:
         row.archive_id = None
+    from backend.app.services.filament_policy import restore_routing_source
+
+    restore_routing_source(row)
     row.completed_at = None
     row.started_at = None
     row.error_message = None

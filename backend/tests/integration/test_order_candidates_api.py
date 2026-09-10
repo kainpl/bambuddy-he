@@ -26,6 +26,7 @@ from backend.app.models.library import LibraryFile
 from backend.app.models.product import Product, ProductPart, ProductPlate
 from backend.app.models.project import Project
 from backend.app.models.project_line import ProjectLine
+from backend.tests.fixtures.filament_routing_cases import write_routing_3mf
 
 pytestmark = pytest.mark.integration
 
@@ -53,7 +54,7 @@ def _sliced(filename: str, *, material: str = "PETG", objects=None) -> LibraryFi
 
 
 @pytest.fixture
-async def lamp(db_session):
+async def lamp(db_session, tmp_path):
     """One product, one whole-file product plate, one sliced file.
 
     ``plate_index=0`` on the product plate and index 1 in the file is the
@@ -62,6 +63,18 @@ async def lamp(db_session):
     exercises the whole-file fall-through.
     """
     file = _sliced("lamp.gcode.3mf")
+    file.file_path = str(
+        write_routing_3mf(
+            tmp_path / file.filename,
+            {
+                1: [
+                    {"id": f["slot_id"], "type": f["type"], "color": f.get("color"), "used_g": f.get("used_g", 1)}
+                    for f in file.file_metadata["plates"][0]["filaments"]
+                ]
+            },
+            model="P1S",
+        )
+    )
     product = Product(name="Lamp")
     db_session.add_all([file, product])
     await db_session.flush()

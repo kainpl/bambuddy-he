@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 
 import { api } from '../api/client';
-import type { LibraryGroupingMetadata } from '../api/client';
+import type { FilamentRoutingSnapshot, LibraryGroupingMetadata } from '../api/client';
 import { useToast } from '../contexts/ToastContext';
 import { groupSelection, groupDecidedUnits } from '../utils/queueGrouping';
 import type { DecidedUnit } from '../utils/queueGrouping';
@@ -12,6 +12,7 @@ import type { PrintModalAnswer, PrintModalMode } from './PrintModal';
 
 /** The least a file must say about itself to be scheduled. */
 export interface SequencedFile {
+  routing?: FilamentRoutingSnapshot;
   id: number;
   /** What the dialog calls it — a print name where there is one, else the filename. */
   name: string;
@@ -101,6 +102,10 @@ function buildDecidedRun(
   files: SequencedFile[],
   metadata: LibraryGroupingMetadata[],
 ): { grouped: boolean; groups: RunGroup[] } {
+  // Whole-file legacy rows need their own source/plate validation before grouping.
+  if (files.some(file => !file.plateId || file.plateId < 1)) {
+    return { grouped: false, groups: perFileRun(files) };
+  }
   // ⚠️ Unit identity, not necessarily a queue item id. `copyableCurrentPrint`
   // has no `itemId` at all — a print started from the printer's screen often
   // has no queue row — so a synthetic negative stands in. Real ids are
@@ -112,9 +117,7 @@ function buildDecidedRun(
     fileId: file.id,
     fileName: file.name,
     source: file.source ?? 'library',
-    // ⚠️ `print_queue.plate_id`'s own comment: "None = plate 1". A copy with no
-    // plate is an ordinary single-plate file, not an undecided one.
-    plateIndex: file.plateId ?? 1,
+    plateIndex: file.plateId!,
   }));
 
   const groups: RunGroup[] = groupDecidedUnits(units, metadata).map((group) => ({
@@ -411,6 +414,7 @@ export function QueueSequencer({
       projectId={member.file.orderFiling?.projectId ?? undefined}
       projectLineId={member.file.orderFiling?.projectLineId ?? undefined}
       orderAnswered={member.file.orderFiling !== undefined}
+      initialRouting={member.file.routing}
       initialSelectedPrinterIds={initialSelectedPrinterIds}
       initialDispatchMode={initialDispatchMode}
       lockDispatchMode={lockDispatchMode}
@@ -432,7 +436,7 @@ export function QueueSequencer({
       // not gated by it: a declined group still opens pre-filled, because the
       // operator did not change their mind about the settings — they want to
       // look at each file.
-      autoSubmitWhenUnambiguous={memberIndex > 0 && applyToRest}
+      autoSubmitWhenUnambiguous={memberIndex > 0 && applyToRest && !answerRef.current?.requiresFileReview && !member.file.routing}
       applyToRest={applyToRest}
       onApplyToRestChange={setApplyToRest}
       // Only the members after the group's first one are answered in advance —

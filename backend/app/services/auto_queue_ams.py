@@ -30,8 +30,6 @@ from __future__ import annotations
 
 import json
 import logging
-import xml.etree.ElementTree as ET
-import zipfile
 from pathlib import Path
 
 from sqlalchemy import select
@@ -43,7 +41,6 @@ from backend.app.models.auto_queue import AutoQueueItem
 from backend.app.models.library import LibraryFile
 from backend.app.services.print_scheduler import _canonical_filament_type
 from backend.app.services.printer_manager import printer_manager
-from backend.app.utils.threemf_tools import extract_nozzle_mapping_from_3mf
 
 logger = logging.getLogger(__name__)
 
@@ -94,78 +91,14 @@ async def _resolve_source_path(db: AsyncSession, item: AutoQueueItem) -> Path | 
 
 
 async def get_filament_requirements(db: AsyncSession, item: AutoQueueItem) -> list[dict] | None:
-    """Extract per-slot filament requirements from the source 3MF.
+    """Read exact plate-scoped requirements; never merge all file channels."""
+    from backend.app.services.filament_intake import read_item_requirements
 
-    Each entry: ``{slot_id, type, color, tray_info_idx, used_grams,
-    nozzle_id?}``. Filters by ``item.plate_id`` if set; otherwise returns
-    all filaments with ``used_g > 0``. Returns ``None`` on missing /
-    unparseable file.
-
-    Mirrors upstream ``PrintScheduler._get_filament_requirements`` but
-    targets AutoQueueItem.
-    """
-    file_path = await _resolve_source_path(db, item)
-    if not file_path or not file_path.exists():
+    requirements = await read_item_requirements(db, item)
+    if requirements.status != "ok":
         return None
-
-    filaments: list[dict] = []
-    try:
-        with zipfile.ZipFile(file_path, "r") as zf:
-            if "Metadata/slice_info.config" not in zf.namelist():
-                return None
-
-            content = zf.read("Metadata/slice_info.config").decode()
-            root = ET.fromstring(content)
-
-            plate_id = item.plate_id
-
-            def _collect(filament_elems):
-                for fel in filament_elems:
-                    fid = fel.get("id")
-                    used_g_str = fel.get("used_g", "0")
-                    try:
-                        used_g = float(used_g_str)
-                    except (ValueError, TypeError):
-                        continue
-                    if used_g > 0 and fid:
-                        filaments.append(
-                            {
-                                "slot_id": int(fid),
-                                "type": fel.get("type", ""),
-                                "color": fel.get("color", ""),
-                                "tray_info_idx": fel.get("tray_info_idx", ""),
-                                "used_grams": round(used_g, 1),
-                            }
-                        )
-
-            if plate_id:
-                for plate_elem in root.findall("./plate"):
-                    idx = None
-                    for meta in plate_elem.findall("metadata"):
-                        if meta.get("key") == "index":
-                            try:
-                                idx = int(meta.get("value", "0"))
-                            except (ValueError, TypeError):
-                                idx = None
-                            break
-                    if idx == plate_id:
-                        _collect(plate_elem.findall("./filament"))
-                        break
-            else:
-                _collect(root.findall("./filament"))
-
-            filaments.sort(key=lambda x: x["slot_id"])
-
-            # Dual-nozzle (H2D, H2D Pro) extruder mapping
-            nozzle_mapping = extract_nozzle_mapping_from_3mf(zf)
-            if nozzle_mapping:
-                for f in filaments:
-                    f["nozzle_id"] = nozzle_mapping.get(f["slot_id"])
-    except Exception as e:
-        logger.warning("Failed to parse filament requirements for auto item %s: %s", item.id, e)
-        return None
-
-    return filaments or None
+    item.plate_id = requirements.resolved_plate_id
+    return [dict(f) for f in requirements.used_filaments]
 
 
 def build_loaded_filaments(status) -> list[dict]:

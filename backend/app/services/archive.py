@@ -19,6 +19,7 @@ from backend.app.models.printer import Printer
 from backend.app.services.archive_parts import seed_archive_parts
 from backend.app.services.library_helpers import skip_objects_supported_from_metadata
 from backend.app.utils.safe_path import PathTraversalError, safe_join_under
+from backend.app.utils.threemf_tools import extract_nozzle_mapping_from_3mf
 
 logger = logging.getLogger(__name__)
 
@@ -292,6 +293,7 @@ class ThreeMFParser:
 
                     # Collect per-slot filament usage for tracking & notifications
                     filament_slots = []
+                    nozzle_mapping = extract_nozzle_mapping_from_3mf(zf, self.metadata.get("_plate_index")) or {}
                     for f in filaments:
                         slot_id = f.get("id")
                         used_g_str = f.get("used_g", "0")
@@ -304,6 +306,9 @@ class ThreeMFParser:
                                 {
                                     "slot_id": int(slot_id),
                                     "used_g": round(used_g, 2),
+                                    # Routing must not turn a small positive
+                                    # consumption into an unused channel.
+                                    "used_g_raw": used_g,
                                     "type": f.get("type", ""),
                                     "color": f.get("color", ""),
                                     # The slicer's spool identity for this slot
@@ -315,6 +320,8 @@ class ThreeMFParser:
                                     "tray_info_idx": f.get("tray_info_idx", ""),
                                 }
                             )
+                            if int(slot_id) in nozzle_mapping:
+                                filament_slots[-1]["nozzle_id"] = nozzle_mapping[int(slot_id)]
                     if filament_slots:
                         self.metadata["filament_slots"] = filament_slots
         except Exception:

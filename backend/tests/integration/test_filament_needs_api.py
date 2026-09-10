@@ -14,6 +14,7 @@ from backend.app.models.spool import Spool
 from backend.app.schemas.auto_queue import AutoQueueItemCreate
 from backend.app.services import filament_needs
 from backend.app.services.auto_queue_add import add_items_to_auto_queue
+from backend.tests.fixtures.filament_routing_cases import write_routing_3mf
 from backend.tests.unit.services.test_product_composition import counting_statements
 
 pytestmark = pytest.mark.integration
@@ -49,7 +50,7 @@ def _sliced(filename: str, filaments: list[dict]) -> LibraryFile:
 
 
 @pytest.fixture
-async def shelf(db_session):
+async def shelf(db_session, tmp_path):
     """A hook of 10 g PETG + 2 g PLA support per print; one product; spools of both."""
     hook = _sliced(
         "hook.gcode.3mf",
@@ -57,6 +58,18 @@ async def shelf(db_session):
             {"slot_id": 1, "type": "PETG", "color": "#000000", "used_g": 10.0},
             {"slot_id": 2, "type": "PLA", "color": "#ffffff", "used_g": 2.0},
         ],
+    )
+    hook.file_path = str(
+        write_routing_3mf(
+            tmp_path / hook.filename,
+            {
+                1: [
+                    {"id": f["slot_id"], "type": f["type"], "color": f.get("color"), "used_g": f.get("used_g", 1)}
+                    for f in hook.file_metadata["plates"][0]["filaments"]
+                ]
+            },
+            model="P1S",
+        )
     )
     product = Product(name="Hook")
     db_session.add_all([hook, product])

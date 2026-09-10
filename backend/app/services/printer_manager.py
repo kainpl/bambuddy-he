@@ -1234,6 +1234,14 @@ class PrinterManager:
                 if self._on_status_change:
                     self._schedule_async(self._on_status_change(printer_id, client.state))
 
+    def get_feed_snapshot(self, printer_id: int):
+        from backend.app.services.printer_feed_snapshot import PrinterFeedSnapshot
+
+        client = self._clients.get(printer_id)
+        if client:
+            return client.get_feed_snapshot(printer_id)
+        return PrinterFeedSnapshot(printer_id, self._models.get(printer_id), False, 0, "", False, False, False, ())
+
     def start_print(
         self,
         printer_id: int,
@@ -1251,6 +1259,7 @@ class PrinterManager:
         storage: str = "external",
         file_md5: str = "",
         timelapse_storage: str | None = None,
+        routing_guard=None,
     ) -> bool:
         """Start a print on a connected printer.
 
@@ -1290,6 +1299,7 @@ class PrinterManager:
                 storage=storage,
                 file_md5=file_md5,
                 timelapse_storage=timelapse_storage,
+                **({"routing_guard": routing_guard} if routing_guard is not None else {}),
             )
         return False
 

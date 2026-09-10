@@ -3,6 +3,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field, model_validator
 
 from backend.app.schemas.calibration_mode import CalibrationMode
+from backend.app.schemas.filament_routing import FilamentRoutingChoices
 from backend.app.schemas.timelapse import TimelapseStorage
 
 
@@ -305,7 +306,7 @@ class ProjectPageResponse(BaseModel):
     thumbnails: list[ProjectPageImage] = []
 
 
-class ReprintRequest(BaseModel):
+class ReprintRequest(FilamentRoutingChoices):
     """Request body for reprinting an archive."""
 
     # Plate selection for multi-plate 3MF files

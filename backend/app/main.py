@@ -935,7 +935,7 @@ def register_expected_print(
     )
 
 
-def withdraw_expected_print(printer_id: int, filename: str) -> None:
+def withdraw_expected_print(printer_id: int, filename: str, expected_archive_id: int | None = None) -> None:
     """Undo a registration whose print command never went out (upstream #2702 follow-up).
 
     ``register_expected_print`` runs *before* the print command — it has to, so
@@ -962,7 +962,11 @@ def withdraw_expected_print(printer_id: int, filename: str) -> None:
         keys.append((printer_id, base))
         keys.append((printer_id, f"{base}.gcode"))
 
+    if expected_archive_id is not None:
+        keys = [key for key in keys if _expected_prints.get(key) == expected_archive_id]
     archive_ids = {aid for key in keys if (aid := _expected_prints.pop(key, None)) is not None}
+    if expected_archive_id is not None:
+        archive_ids.add(expected_archive_id)
     for key in keys:
         _expected_print_creators.pop(key, None)
         _expected_print_registered_at.pop(key, None)

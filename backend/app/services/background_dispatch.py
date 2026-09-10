@@ -9,13 +9,14 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import time
 import zipfile
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, NotRequired, TypedDict
 
 from sqlalchemy import select
 
@@ -37,6 +38,9 @@ from backend.app.services.bambu_ftp import (
     upload_file_async,
     with_ftp_retry,
 )
+from backend.app.services.filament_intake import routing_detail
+from backend.app.services.filament_preflight import final_guard, preflight_item
+from backend.app.services.filament_routing import RoutingDeferred
 from backend.app.services.gcode_patcher import GcodeInjectionSpec
 from backend.app.services.printer_files.factory import transport_for
 from backend.app.services.printer_manager import printer_manager
@@ -536,6 +540,15 @@ class DispatchEnqueueRejected(Exception):
     """Raised when a dispatch job should not be accepted."""
 
 
+class DispatchOutcome(TypedDict):
+    success: bool
+    archive_id: int | None
+    error: str | None
+    cancelled: bool
+    deferred: NotRequired[bool]
+    reason: NotRequired[dict]
+
+
 @dataclass(slots=True)
 class PrintDispatchJob:
     id: int
@@ -568,7 +581,22 @@ class PrintDispatchJob:
     completion_event: asyncio.Event = field(default_factory=asyncio.Event)
     # Populated by the runner before it sets ``completion_event``.  Shape:
     # ``{"success": bool, "archive_id": int | None, "error": str | None, "cancelled": bool}``.
-    outcome: dict[str, Any] = field(default_factory=dict)
+    outcome: DispatchOutcome = field(
+        default_factory=lambda: {
+            "success": False,
+            "archive_id": None,
+            "error": None,
+            "cancelled": False,
+            "deferred": False,
+        }
+    )
+    routing_guard: Any = None
+    claim_started_at: Any = None
+    original_archive_id: int | None = None
+    original_library_file_id: int | None = None
+    execution_archive_id: int | None = None
+    routing_intent: str | None = None
+    foreign_claim: bool = False
 
 
 async def report_failure_if_unwatched(job: PrintDispatchJob) -> None:
@@ -600,7 +628,7 @@ async def report_failure_if_unwatched(job: PrintDispatchJob) -> None:
     if job.awaited_by_scheduler:
         return
     outcome = job.outcome or {}
-    if outcome.get("success") or outcome.get("cancelled"):
+    if outcome.get("success") or outcome.get("cancelled") or outcome.get("deferred"):
         return
 
     try:
@@ -658,7 +686,6 @@ def _rack_slot_extruders(printer, file_path, plate_id, nozzle_mapping) -> str | 
 
     if not is_nozzle_rack_model(getattr(printer, "model", None)):
         return None
-    import json
 
     from backend.app.utils.threemf_tools import extract_slot_extruders_from_3mf
 
@@ -864,6 +891,8 @@ class BackgroundDispatchService:
 
         try:
             await self._process_job(job)
+        except RoutingDeferred as exc:
+            await self._handle_routing_deferred(job, exc)
         except DispatchJobCancelled:
             pass  # outcome.cancelled already set by the runner
         except Exception as e:
@@ -879,7 +908,9 @@ class BackgroundDispatchService:
                 self._active_jobs.pop(job.id, None)
                 done_payload = self._build_state_payload_unlocked(
                     recent_event={
-                        "status": "completed" if job.outcome.get("success") else "failed",
+                        "status": "deferred"
+                        if job.outcome.get("deferred")
+                        else ("completed" if job.outcome.get("success") else "failed"),
                         "job_id": job.id,
                         "source_name": source_name,
                         "printer_id": printer_id,
@@ -889,6 +920,7 @@ class BackgroundDispatchService:
                 )
             await ws_manager.broadcast({"type": "background_dispatch", "data": done_payload})
 
+        job.completion_event.set()
         return dict(job.outcome)
 
     async def dispatch_print_library_file(
@@ -1202,6 +1234,8 @@ class BackgroundDispatchService:
             # so for them this reads exactly as the bare call did.
             if (job.outcome or {}).get("success"):
                 await self._mark_job_finished(job, failed=False, message="Background dispatch complete")
+        except RoutingDeferred as exc:
+            await self._handle_routing_deferred(job, exc)
         except DispatchJobCancelled:
             await self._release_direct_claim(job, status="cancelled")
             await self._mark_job_cancelled(job)
@@ -1216,6 +1250,7 @@ class BackgroundDispatchService:
             await self._release_direct_claim(job, status="failed")
             await self._mark_job_finished(job, failed=True, message=str(e))
         finally:
+            job.completion_event.set()
             self._job_event.set()
 
     async def _build_injection_spec(
@@ -1309,9 +1344,11 @@ class BackgroundDispatchService:
             )
         await ws_manager.broadcast({"type": "background_dispatch", "data": payload})
 
-    async def _mark_job_finished(self, job: PrintDispatchJob, *, failed: bool, message: str):
+    async def _mark_job_finished(self, job: PrintDispatchJob, *, failed: bool, message: str, deferred: bool = False):
         async with self._lock:
-            if failed:
+            if deferred:
+                pass
+            elif failed:
                 self._batch_failed += 1
             else:
                 self._batch_completed += 1
@@ -1322,7 +1359,7 @@ class BackgroundDispatchService:
 
             payload = self._build_state_payload_unlocked(
                 recent_event={
-                    "status": "failed" if failed else "completed",
+                    "status": "deferred" if deferred else ("failed" if failed else "completed"),
                     "job_id": job.id,
                     "source_name": job.source_name,
                     "printer_id": job.printer_id,
@@ -1457,6 +1494,87 @@ class BackgroundDispatchService:
             return
         raise RuntimeError(f"Unknown dispatch job kind: {job.kind}")
 
+    async def _prepare_filament_routing(self, db, job):
+        from backend.app.models.print_queue import PrintQueueItem
+
+        item = await db.get(PrintQueueItem, job.queue_item_id) if job.queue_item_id else None
+        if item is None or item.status != "printing":
+            raise RoutingDeferred("dispatch_claim_changed")
+        job.claim_started_at = item.started_at
+        job.original_archive_id, job.original_library_file_id = item.archive_id, item.library_file_id
+        job.routing_intent = item.filament_routing
+        job.routing_guard = await preflight_item(db, item, job.printer_id)
+        if job.routing_guard:
+            plan = job.routing_guard.plan
+            job.options.update(ams_mapping=plan.mapping, use_ams=plan.use_ams, plate_id=plan.resolved_plate_id)
+
+    async def _verify_routing_claim(self, db, job):
+        from backend.app.models.print_queue import PrintQueueItem
+
+        item = await db.get(PrintQueueItem, job.queue_item_id, populate_existing=True)
+        if (
+            item is None
+            or item.status != "printing"
+            or item.started_at != job.claim_started_at
+            or item.filament_routing != job.routing_intent
+        ):
+            from backend.app.models.printer_queue import PrinterQueue
+
+            queue = (
+                await db.execute(
+                    select(PrinterQueue)
+                    .where(PrinterQueue.printer_id == job.printer_id)
+                    .execution_options(populate_existing=True)
+                )
+            ).scalar_one_or_none()
+            job.foreign_claim = bool(
+                queue
+                and queue.status == "printing"
+                and (
+                    queue.current_item_id != job.queue_item_id
+                    or (item and item.status == "printing" and item.started_at != job.claim_started_at)
+                )
+            )
+            raise RoutingDeferred("dispatch_claim_changed")
+
+    async def _handle_routing_deferred(self, job, exc):
+        from backend.app.services.filament_deferred import abort_execution_archive, defer_claim
+        from backend.app.services.print_scheduler import scheduler
+
+        reason = routing_detail(exc.reason)
+        job.outcome = {
+            "success": False,
+            "archive_id": job.execution_archive_id,
+            "error": reason["message"],
+            "cancelled": False,
+            "deferred": True,
+            "reason": reason,
+            "revision": exc.revision,
+            "claim_started_at": job.claim_started_at,
+            "source_archive_id": job.original_archive_id,
+            "source_library_file_id": job.original_library_file_id,
+        }
+        async with async_session() as db:
+            await abort_execution_archive(db, job.execution_archive_id, reason)
+            if not job.awaited_by_scheduler:
+                released = await defer_claim(
+                    db,
+                    item_id=job.queue_item_id,
+                    started_at=job.claim_started_at,
+                    reason=exc.reason,
+                    revision=exc.revision,
+                    direct=True,
+                    source_archive_id=job.original_archive_id,
+                    source_library_file_id=job.original_library_file_id,
+                    restore_source=True,
+                )
+                if released:
+                    scheduler.release_prepared_dispatch(job.printer_id)
+            await db.commit()
+        logger.info("Dispatch %s deferred before publish: %s", job.id, exc.reason)
+        if not job.awaited_by_scheduler:
+            await self._mark_job_finished(job, failed=False, message=reason["message"], deferred=True)
+
     async def _strict_stagger_refuses(self, printer_id: int) -> bool:
         """Strict mode on AND this printer's group(s) have no free slot right now.
 
@@ -1490,7 +1608,7 @@ class BackgroundDispatchService:
         ``_release_direct_claim``.
         """
         logger.info("Background dispatch job %s refused: %s", job.id, reason)
-        job.outcome = {"success": False, "archive_id": None, "error": reason, "cancelled": False}
+        job.outcome = {"success": False, "archive_id": None, "error": reason, "cancelled": False, "deferred": False}
         await self._release_direct_claim(job, status="failed", queue_error=False)
         await self._mark_job_finished(job, failed=True, message=reason)
         await report_failure_if_unwatched(job)
@@ -1499,7 +1617,7 @@ class BackgroundDispatchService:
     async def _run_reprint_archive(self, job: PrintDispatchJob):
         from backend.app.main import register_expected_print, withdraw_expected_print
 
-        job.outcome = {"success": False, "archive_id": None, "error": None, "cancelled": False}
+        job.outcome = {"success": False, "archive_id": None, "error": None, "cancelled": False, "deferred": False}
 
         async with async_session() as db:
             service = ArchiveService(db)
@@ -1528,6 +1646,8 @@ class BackgroundDispatchService:
             if not file_path.exists():
                 raise RuntimeError("Archive file not found")
 
+            await self._prepare_filament_routing(db, job)
+
             # Unified 3MF post-processing: M970 commenting (mesh-mode-fast-check
             # off) and per-plate G-code injection (#422) share a single
             # open/mutate/write pass instead of unzipping+rezipping the file
@@ -1544,7 +1664,7 @@ class BackgroundDispatchService:
             inject_spec = await self._build_injection_spec(
                 job=job,
                 printer_model=printer_model,
-                plate_id=source_archive.plate_index or 1,
+                plate_id=job.options.get("plate_id") or 1,
             )
             if not job.options.get("mesh_mode_fast_check", True) or inject_spec is not None:
                 from backend.app.services.gcode_patcher import apply_3mf_transforms
@@ -1614,13 +1734,14 @@ class BackgroundDispatchService:
                     applied_patches=applied_patches or None,
                     library_file_id=source_archive.library_file_id,
                     created_by_id=job.requested_by_user_id,
-                    plate_index=source_archive.plate_index,
+                    plate_index=job.options.get("plate_id"),
                     print_data={"status": "printing"},
                     swap_macro_events_pending=swap_pending,
                     selected_macro_ids=selected_macros,
                 )
                 if not archive:
                     raise RuntimeError("Failed to create reprint archive")
+                job.execution_archive_id = archive.id
 
                 # Queue-item dispatches: re-point the queue item at the new
                 # archive (the actual print this run will execute) and copy
@@ -1873,10 +1994,13 @@ class BackgroundDispatchService:
                 effective_timelapse = _timelapse_or_off(
                     job.printer_id, printer, bool(job.options.get("timelapse", False))
                 )
+                await self._verify_routing_claim(db, job)
+                job.routing_guard = final_guard(job.routing_guard, job.printer_id)
                 started = printer_manager.start_print(
                     job.printer_id,
                     remote_filename,
                     plate_id,
+                    routing_guard=job.routing_guard,
                     ams_mapping=job.options.get("ams_mapping"),
                     timelapse=effective_timelapse,
                     bed_levelling=job.options.get("bed_levelling", True),
@@ -1985,7 +2109,22 @@ class BackgroundDispatchService:
                         job.requested_by_username,
                     )
 
-                job.outcome = {"success": True, "archive_id": archive.id, "error": None, "cancelled": False}
+                job.outcome = {
+                    "success": True,
+                    "archive_id": archive.id,
+                    "error": None,
+                    "cancelled": False,
+                    "deferred": False,
+                }
+            except RoutingDeferred as exc:
+                job.outcome = {
+                    "success": False,
+                    "archive_id": None,
+                    "error": exc.reason,
+                    "cancelled": False,
+                    "deferred": True,
+                }
+                raise
             except DispatchJobCancelled:
                 await self._set_active_message(job, f"Cancelled upload on {printer_name}.")
                 # archive_print committed the row before this branch, so the
@@ -1996,10 +2135,22 @@ class BackgroundDispatchService:
                 _archive_id = getattr(archive, "id", None) if archive else None
                 if _archive_id:
                     await self._mark_dispatch_archive_terminal(_archive_id, "cancelled", "Cancelled before start")
-                job.outcome = {"success": False, "archive_id": _archive_id, "error": "Cancelled", "cancelled": True}
+                job.outcome = {
+                    "success": False,
+                    "archive_id": _archive_id,
+                    "error": "Cancelled",
+                    "cancelled": True,
+                    "deferred": False,
+                }
                 raise
             except Exception as e:
-                job.outcome = {"success": False, "archive_id": None, "error": str(e), "cancelled": False}
+                job.outcome = {
+                    "success": False,
+                    "archive_id": None,
+                    "error": str(e),
+                    "cancelled": False,
+                    "deferred": False,
+                }
                 raise
             finally:
                 # An expected print whose command never went out must not linger.
@@ -2007,13 +2158,14 @@ class BackgroundDispatchService:
                 # same single choke point: a raise, an early return, a cancel, or
                 # start_print returning False all land here.
                 if _unconfirmed_expected_print is not None:
-                    withdraw_expected_print(*_unconfirmed_expected_print)
+                    withdraw_expected_print(*_unconfirmed_expected_print, expected_archive_id=job.execution_archive_id)
                     _unconfirmed_expected_print = None
                 # Same "every exit path" argument: a dispatch that dies after
                 # preheat ran left the machine heating for a print that was
                 # never going to happen. Nothing switched it off, because
                 # nothing knew it was on. A no-op once the print has started.
-                preheat_service.rollback(job.printer_id)
+                if not job.foreign_claim:
+                    preheat_service.rollback(job.printer_id)
                 # Patched-3MF temp dir must clean up on every exit path —
                 # cancel mid-upload otherwise leaks the temp into /tmp until
                 # process restart.
@@ -2026,7 +2178,6 @@ class BackgroundDispatchService:
                 # event may act on the outcome immediately, and this is the one
                 # place every exit path of the runner passes through.
                 await report_failure_if_unwatched(job)
-                job.completion_event.set()
 
     async def _run_swap_macro_if_needed(
         self,
@@ -2071,7 +2222,7 @@ class BackgroundDispatchService:
 
         # Seeded in case any early branch raises — keeps the outcome shape
         # consistent for queue-item callers awaiting completion_event.
-        job.outcome = {"success": False, "archive_id": None, "error": None, "cancelled": False}
+        job.outcome = {"success": False, "archive_id": None, "error": None, "cancelled": False, "deferred": False}
 
         async with async_session() as db:
             lib_file = await db.scalar(LibraryFile.active().where(LibraryFile.id == job.source_id))
@@ -2101,6 +2252,8 @@ class BackgroundDispatchService:
             # re-Connect MQTT if stalled
             if not await printer_manager.ensure_fresh_connection_for_printer(printer):
                 raise RuntimeError("Can`t re-connect printer MQTT")
+
+            await self._prepare_filament_routing(db, job)
 
             # Unified 3MF post-processing — same single-pass pipeline as the
             # archive path above. See _maybe_inject_gcode → _build_injection_spec.
@@ -2218,6 +2371,7 @@ class BackgroundDispatchService:
                 )
                 if not archive:
                     raise RuntimeError("Failed to create archive")
+                job.execution_archive_id = archive.id
 
                 # Queue-item dispatches: keep queue_item + archive aligned in the
                 # same txn so the scheduler's follow-up logic sees a consistent
@@ -2464,10 +2618,13 @@ class BackgroundDispatchService:
                 effective_timelapse = _timelapse_or_off(
                     job.printer_id, printer, bool(job.options.get("timelapse", False))
                 )
+                await self._verify_routing_claim(db, job)
+                job.routing_guard = final_guard(job.routing_guard, job.printer_id)
                 started = printer_manager.start_print(
                     job.printer_id,
                     remote_filename,
                     plate_id,
+                    routing_guard=job.routing_guard,
                     ams_mapping=job.options.get("ams_mapping"),
                     timelapse=effective_timelapse,
                     bed_levelling=job.options.get("bed_levelling", True),
@@ -2587,6 +2744,30 @@ class BackgroundDispatchService:
                 # Upstream #730 / #1682b695.
                 cleanup_disk_paths: list[Path] = []
                 if job.cleanup_library_after_dispatch and not lib_file.is_external:
+                    # A transient library source is removed after success. Its
+                    # execution archive becomes the durable source for Repeat;
+                    # keep semantic rules while recording the archive revision.
+                    if job.routing_guard and job.queue_item_id:
+                        from backend.app.models.print_queue import PrintQueueItem
+                        from backend.app.services.filament_policy import serialize_policy
+                        from backend.app.services.filament_requirements import PrintRequirementsCache
+
+                        archive_path = Path(archive.file_path)
+                        if not archive_path.is_absolute():
+                            archive_path = (
+                                settings.base_dir / archive_path
+                            )  # SEC-PATH-OK: archive_print generated this persisted relative path.
+                        retained = await PrintRequirementsCache().read(archive_path, job.options["plate_id"])
+                        queued = await db.get(PrintQueueItem, job.queue_item_id)
+                        if queued is not None and queued.started_at == job.claim_started_at:
+                            queued.filament_routing = serialize_policy(
+                                job.routing_guard.policy,
+                                archive_id=archive.id,
+                                requirements=retained,
+                                plate_id=job.options["plate_id"],
+                                printer_id=job.printer_id,
+                                exact_model=job.routing_guard.exact_model,
+                            )
                     cleanup_disk_paths.append(Path(settings.base_dir) / lib_file.file_path)
                     if lib_file.thumbnail_path:
                         thumb_path = Path(lib_file.thumbnail_path)
@@ -2612,7 +2793,22 @@ class BackgroundDispatchService:
                             cleanup_err,
                         )
 
-                job.outcome = {"success": True, "archive_id": archive.id, "error": None, "cancelled": False}
+                job.outcome = {
+                    "success": True,
+                    "archive_id": archive.id,
+                    "error": None,
+                    "cancelled": False,
+                    "deferred": False,
+                }
+            except RoutingDeferred as exc:
+                job.outcome = {
+                    "success": False,
+                    "archive_id": None,
+                    "error": exc.reason,
+                    "cancelled": False,
+                    "deferred": True,
+                }
+                raise
             except DispatchJobCancelled:
                 await db.rollback()
                 await self._set_active_message(job, f"Cancelled upload on {printer_name}.")
@@ -2621,11 +2817,23 @@ class BackgroundDispatchService:
                 # "printing" → "cancelled" in a fresh session so the UI
                 # doesn't keep it spinning forever.
                 await self._mark_dispatch_archive_terminal(archive.id, "cancelled", "Cancelled before start")
-                job.outcome = {"success": False, "archive_id": archive.id, "error": "Cancelled", "cancelled": True}
+                job.outcome = {
+                    "success": False,
+                    "archive_id": archive.id,
+                    "error": "Cancelled",
+                    "cancelled": True,
+                    "deferred": False,
+                }
                 raise
             except Exception as e:
                 await self._mark_dispatch_archive_terminal(archive.id, "failed", str(e))
-                job.outcome = {"success": False, "archive_id": archive.id, "error": str(e), "cancelled": False}
+                job.outcome = {
+                    "success": False,
+                    "archive_id": archive.id,
+                    "error": str(e),
+                    "cancelled": False,
+                    "deferred": False,
+                }
                 raise
             finally:
                 # An expected print whose command never went out must not linger.
@@ -2633,13 +2841,14 @@ class BackgroundDispatchService:
                 # same single choke point: a raise, an early return, a cancel, or
                 # start_print returning False all land here.
                 if _unconfirmed_expected_print is not None:
-                    withdraw_expected_print(*_unconfirmed_expected_print)
+                    withdraw_expected_print(*_unconfirmed_expected_print, expected_archive_id=job.execution_archive_id)
                     _unconfirmed_expected_print = None
                 # Same "every exit path" argument: a dispatch that dies after
                 # preheat ran left the machine heating for a print that was
                 # never going to happen. Nothing switched it off, because
                 # nothing knew it was on. A no-op once the print has started.
-                preheat_service.rollback(job.printer_id)
+                if not job.foreign_claim:
+                    preheat_service.rollback(job.printer_id)
                 # Patched-3MF temp dir must clean up on every exit path —
                 # cancel mid-upload otherwise leaks the temp into /tmp until
                 # process restart.
@@ -2652,7 +2861,6 @@ class BackgroundDispatchService:
                 # event may act on the outcome immediately, and this is the one
                 # place every exit path of the runner passes through.
                 await report_failure_if_unwatched(job)
-                job.completion_event.set()
 
     @staticmethod
     async def _verify_print_response(

@@ -16,6 +16,7 @@ from backend.app.models.library import LibraryFile
 from backend.app.models.print_queue import PrintQueueItem
 from backend.app.models.printer_queue import PrinterQueue
 from backend.app.schemas.calibration_mode import normalize_mode
+from backend.app.services.filament_policy_write import prepare_routing
 from backend.app.services.order_filing import resolve_line_id
 from backend.app.services.queue_counters import set_queue_printing, update_queue_counters
 
@@ -130,7 +131,18 @@ async def claim_printer_for_direct_print(
             db, project_id=project_id, library_file_id=library_file_id, plate_index=(options or {}).get("plate_id")
         )
 
+    routing, plate = (None, (options or {}).get("plate_id"))
+    if origin == "direct":
+        routing, plate = await prepare_routing(
+            db,
+            printer_id=printer_id,
+            archive_id=archive_id,
+            library_file_id=library_file_id,
+            options=options,
+        )
+    options = {**(options or {}), "plate_id": plate}
     item = PrintQueueItem(
+        filament_routing=routing,
         queue_id=queue.id,
         position=0,
         status="printing",
@@ -182,6 +194,10 @@ async def enqueue_batch_copies(
     project_line_id: int | None = None,
     batch_id: str | None = None,
     library_file: LibraryFile | None = None,
+    feed_policy: str | None = None,
+    force_color_match: bool = False,
+    filament_overrides: list[dict] | None = None,
+    requirements_cache=None,
 ) -> tuple[list[PrintQueueItem], str | None]:
     """Append ``count`` identical pending items to the given printer's queue.
 
@@ -195,6 +211,21 @@ async def enqueue_batch_copies(
     if count <= 0:
         return [], None
 
+    routing, plate_id = await prepare_routing(
+        db,
+        printer_id=printer_id,
+        archive_id=archive_id,
+        library_file_id=library_file_id,
+        cache=requirements_cache,
+        options={
+            "plate_id": plate_id,
+            "ams_mapping": ams_mapping,
+            "use_ams": use_ams,
+            "feed_policy": feed_policy,
+            "force_color_match": force_color_match,
+            "filament_overrides": filament_overrides,
+        },
+    )
     # Resolve printer's queue
     result = await db.execute(select(PrinterQueue).where(PrinterQueue.printer_id == printer_id))
     queue = result.scalar_one_or_none()
@@ -237,6 +268,7 @@ async def enqueue_batch_copies(
                 archive_id=archive_id,
                 library_file_id=library_file_id,
                 ams_mapping=ams_mapping_json,
+                filament_routing=routing,
                 plate_id=plate_id,
                 bed_levelling=bed_mode == "on",
                 bed_levelling_mode=bed_mode,

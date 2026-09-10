@@ -25,10 +25,42 @@ import pytest
 from sqlalchemy import select
 
 from backend.app.models.auto_queue import AutoQueueItem
+from backend.app.models.library import LibraryFile
 from backend.app.models.print_queue import PrintQueueItem
 from backend.app.models.printer_queue import PrinterQueue
 from backend.app.models.settings import Settings
 from backend.app.services.auto_queue_scheduler import AutoQueueScheduler
+from backend.app.services.printer_feed_snapshot import FeedTelemetry, snapshot_from_state
+from backend.tests.fixtures.filament_routing_cases import write_routing_3mf
+
+_test_models = {}
+
+
+@pytest.fixture
+def routing_item(tmp_path):
+    """Scheduler scenarios carry readable source evidence, as real intake now guarantees."""
+    count = 0
+
+    def make(**kwargs):
+        nonlocal count
+        count += 1
+        path = write_routing_3mf(
+            tmp_path / f"item-{count}.3mf",
+            {
+                1: [
+                    {"id": 1, "type": "PLA", "color": "#FFFFFF", "used_g": "1"},
+                ]
+            },
+            model=kwargs.get("target_model", "A1MINI"),
+        )
+        return AutoQueueItem(
+            library_file=LibraryFile(
+                filename=path.name, file_path=str(path), file_type="gcode", file_size=path.stat().st_size
+            ),
+            **kwargs,
+        )
+
+    return make
 
 
 def _idle_status(filament_types: list[str], colors: list[str] | None = None) -> SimpleNamespace:
@@ -54,6 +86,7 @@ def _drying_status(filament_types: list[str], colors: list[str] | None = None) -
 
 async def _make_printer_with_queue(db_session, printer_factory, **kwargs):
     p = await printer_factory(**kwargs)
+    _test_models[p.id] = p.model
     pq = PrinterQueue(id=p.id, printer_id=p.id)
     db_session.add(pq)
     await db_session.commit()
@@ -77,6 +110,16 @@ def _patch_printer_manager(idle_ids: set[int], status_map: dict | None = None, a
     def get_status_side_effect(pid):
         return status_map.get(pid, _idle_status(["PLA"]))
 
+    def get_snapshot(pid):
+        status = get_status_side_effect(pid)
+        telemetry = FeedTelemetry()
+        telemetry.observe({"print": status.raw_data}, _test_models.get(pid, "A1MINI"))
+        return snapshot_from_state(
+            pid,
+            _test_models.get(pid, "A1MINI"),
+            SimpleNamespace(connected=pid in idle_ids, connection_generation=1, feed_telemetry=telemetry),
+        )
+
     def is_connected_side_effect(pid):
         return pid in idle_ids
 
@@ -87,12 +130,14 @@ def _patch_printer_manager(idle_ids: set[int], status_map: dict | None = None, a
         patch.multiple(
             "backend.app.services.auto_queue_eligibility.printer_manager",
             is_connected=is_connected_side_effect,
+            get_feed_snapshot=get_snapshot,
             get_status=get_status_side_effect,
             is_awaiting_plate_clear=is_awaiting_pc_side_effect,
         ),
         patch.multiple(
             "backend.app.services.print_scheduler.printer_manager",
             is_connected=is_connected_side_effect,
+            get_feed_snapshot=get_snapshot,
             get_status=get_status_side_effect,
             is_awaiting_plate_clear=is_awaiting_pc_side_effect,
         ),
@@ -122,10 +167,12 @@ async def scheduler(monkeypatch, db_session):
 class TestAutoQueueSchedulerTick:
     @pytest.mark.asyncio
     @pytest.mark.integration
-    async def test_assigns_to_idle_printer_with_matching_model(self, db_session, scheduler, printer_factory) -> None:
+    async def test_assigns_to_idle_printer_with_matching_model(
+        self, db_session, scheduler, printer_factory, routing_item
+    ) -> None:
         printer, pq = await _make_printer_with_queue(db_session, printer_factory, model="A1MINI")
 
-        item = AutoQueueItem(target_model="A1MINI", status="pending", position=1)
+        item = routing_item(target_model="A1MINI", status="pending", position=1)
         db_session.add(item)
         await db_session.commit()
 
@@ -150,11 +197,13 @@ class TestAutoQueueSchedulerTick:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
-    async def test_sets_waiting_reason_when_no_printer_matches(self, db_session, scheduler, printer_factory) -> None:
+    async def test_sets_waiting_reason_when_no_printer_matches(
+        self, db_session, scheduler, printer_factory, routing_item
+    ) -> None:
         # P1S printer, but auto item wants A1MINI → no match
         await _make_printer_with_queue(db_session, printer_factory, model="P1S")
 
-        item = AutoQueueItem(target_model="A1MINI", status="pending", position=1)
+        item = routing_item(target_model="A1MINI", status="pending", position=1)
         db_session.add(item)
         await db_session.commit()
 
@@ -165,11 +214,13 @@ class TestAutoQueueSchedulerTick:
         await db_session.refresh(item)
         assert item.status == "pending"
         assert item.waiting_reason is not None
-        assert "A1MINI" in item.waiting_reason
+        assert "A1 Mini" in item.waiting_reason
 
     @pytest.mark.asyncio
     @pytest.mark.integration
-    async def test_a_stalled_tick_says_so_at_info(self, db_session, scheduler, printer_factory, caplog) -> None:
+    async def test_a_stalled_tick_says_so_at_info(
+        self, db_session, scheduler, printer_factory, caplog, routing_item
+    ) -> None:
         """The visibility gap behind an unexplainable support bundle.
 
         A farm reported "the queue stopped moving". Three support bundles came
@@ -179,7 +230,7 @@ class TestAutoQueueSchedulerTick:
         it simply never reached the log.
         """
         await _make_printer_with_queue(db_session, printer_factory, model="P1S")
-        db_session.add(AutoQueueItem(target_model="A1MINI", status="pending", position=1))
+        db_session.add(routing_item(target_model="A1MINI", status="pending", position=1))
         await db_session.commit()
 
         p_elig, p_sched, p_ams = _patch_printer_manager(set())
@@ -187,17 +238,17 @@ class TestAutoQueueSchedulerTick:
             await scheduler.tick()
 
         assert "placed nothing this tick" in caplog.text
-        assert "A1MINI" in caplog.text, "the reason itself has to be in the log, not just the fact of a stall"
+        assert "A1 Mini" in caplog.text, "the reason itself has to be in the log, not just the fact of a stall"
 
     @pytest.mark.asyncio
     @pytest.mark.integration
     async def test_a_persistent_stall_does_not_repeat_every_tick(
-        self, db_session, scheduler, printer_factory, caplog
+        self, db_session, scheduler, printer_factory, caplog, routing_item
     ) -> None:
         """At 30s a permanently stuck queue would write 120 identical lines an
         hour and bury everything else in the support log."""
         await _make_printer_with_queue(db_session, printer_factory, model="P1S")
-        db_session.add(AutoQueueItem(target_model="A1MINI", status="pending", position=1))
+        db_session.add(routing_item(target_model="A1MINI", status="pending", position=1))
         await db_session.commit()
 
         p_elig, p_sched, p_ams = _patch_printer_manager(set())
@@ -223,9 +274,11 @@ class TestRoutingIsNotDispatching:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
-    async def test_a_gated_printer_still_receives_the_work(self, db_session, scheduler, printer_factory) -> None:
+    async def test_a_gated_printer_still_receives_the_work(
+        self, db_session, scheduler, printer_factory, routing_item
+    ) -> None:
         printer, pq = await _make_printer_with_queue(db_session, printer_factory, model="A1MINI")
-        db_session.add(AutoQueueItem(target_model="A1MINI", status="pending", position=1))
+        db_session.add(routing_item(target_model="A1MINI", status="pending", position=1))
         await db_session.commit()
 
         p_elig, p_sched, p_ams = _patch_printer_manager(
@@ -244,12 +297,14 @@ class TestRoutingIsNotDispatching:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
-    async def test_a_ready_printer_is_preferred_over_a_gated_one(self, db_session, scheduler, printer_factory) -> None:
+    async def test_a_ready_printer_is_preferred_over_a_gated_one(
+        self, db_session, scheduler, printer_factory, routing_item
+    ) -> None:
         """Not a filter, but still a preference — work should land where it can
         start now, when there is a choice."""
         gated, gated_q = await _make_printer_with_queue(db_session, printer_factory, name="gated", model="A1MINI")
         ready, ready_q = await _make_printer_with_queue(db_session, printer_factory, name="ready", model="A1MINI")
-        db_session.add(AutoQueueItem(target_model="A1MINI", status="pending", position=1))
+        db_session.add(routing_item(target_model="A1MINI", status="pending", position=1))
         await db_session.commit()
 
         p_elig, p_sched, p_ams = _patch_printer_manager(
@@ -287,14 +342,14 @@ class TestRequirePreviousSuccessRoutesAround:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
-    async def test_a_gated_item_goes_to_the_healthy_printer(self, db_session, scheduler, printer_factory) -> None:
+    async def test_a_gated_item_goes_to_the_healthy_printer(
+        self, db_session, scheduler, printer_factory, routing_item
+    ) -> None:
         broken, broken_q = await _make_printer_with_queue(db_session, printer_factory, name="broken", model="A1MINI")
         healthy, healthy_q = await _make_printer_with_queue(db_session, printer_factory, name="healthy", model="A1MINI")
         await self._finish(db_session, broken_q.id, "failed", minutes_ago=5)
 
-        db_session.add(
-            AutoQueueItem(target_model="A1MINI", status="pending", position=1, require_previous_success=True)
-        )
+        db_session.add(routing_item(target_model="A1MINI", status="pending", position=1, require_previous_success=True))
         await db_session.commit()
 
         p_elig, p_sched, p_ams = _patch_printer_manager({broken.id, healthy.id})
@@ -309,12 +364,14 @@ class TestRequirePreviousSuccessRoutesAround:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
-    async def test_an_ungated_item_still_uses_the_printer(self, db_session, scheduler, printer_factory) -> None:
+    async def test_an_ungated_item_still_uses_the_printer(
+        self, db_session, scheduler, printer_factory, routing_item
+    ) -> None:
         broken, broken_q = await _make_printer_with_queue(db_session, printer_factory, name="broken", model="A1MINI")
         await self._finish(db_session, broken_q.id, "failed", minutes_ago=5)
 
         db_session.add(
-            AutoQueueItem(target_model="A1MINI", status="pending", position=1, require_previous_success=False)
+            routing_item(target_model="A1MINI", status="pending", position=1, require_previous_success=False)
         )
         await db_session.commit()
 
@@ -328,14 +385,12 @@ class TestRequirePreviousSuccessRoutesAround:
     @pytest.mark.asyncio
     @pytest.mark.integration
     async def test_when_every_candidate_just_failed_the_reason_says_so(
-        self, db_session, scheduler, printer_factory
+        self, db_session, scheduler, printer_factory, routing_item
     ) -> None:
         broken, broken_q = await _make_printer_with_queue(db_session, printer_factory, name="broken", model="A1MINI")
         await self._finish(db_session, broken_q.id, "failed", minutes_ago=5)
 
-        db_session.add(
-            AutoQueueItem(target_model="A1MINI", status="pending", position=1, require_previous_success=True)
-        )
+        db_session.add(routing_item(target_model="A1MINI", status="pending", position=1, require_previous_success=True))
         await db_session.commit()
 
         p_elig, p_sched, p_ams = _patch_printer_manager({broken.id})
@@ -344,17 +399,17 @@ class TestRequirePreviousSuccessRoutesAround:
 
         item = (await db_session.execute(select(AutoQueueItem))).scalars().one()
         assert item.status == "pending"
-        assert "Previous print failed" in (item.waiting_reason or "")
+        assert "previous print failed" in (item.waiting_reason or "").lower()
 
     @pytest.mark.asyncio
     @pytest.mark.integration
-    async def test_the_flag_is_carried_onto_the_per_printer_row(self, db_session, scheduler, printer_factory) -> None:
+    async def test_the_flag_is_carried_onto_the_per_printer_row(
+        self, db_session, scheduler, printer_factory, routing_item
+    ) -> None:
         """Eligibility only proves the printer was clean at routing time; the
         per-printer scheduler re-checks at dispatch, which needs the flag."""
         printer, _ = await _make_printer_with_queue(db_session, printer_factory, model="A1MINI")
-        db_session.add(
-            AutoQueueItem(target_model="A1MINI", status="pending", position=1, require_previous_success=True)
-        )
+        db_session.add(routing_item(target_model="A1MINI", status="pending", position=1, require_previous_success=True))
         await db_session.commit()
 
         p_elig, p_sched, p_ams = _patch_printer_manager({printer.id})
@@ -375,9 +430,11 @@ class TestAStalledQueueTellsTheOperator:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
-    async def test_the_operator_is_told_once_per_cause(self, db_session, scheduler, printer_factory) -> None:
+    async def test_the_operator_is_told_once_per_cause(
+        self, db_session, scheduler, printer_factory, routing_item
+    ) -> None:
         await _make_printer_with_queue(db_session, printer_factory, model="P1S")
-        db_session.add(AutoQueueItem(target_model="A1MINI", status="pending", position=1))
+        db_session.add(routing_item(target_model="A1MINI", status="pending", position=1))
         await db_session.commit()
 
         sent = AsyncMock()
@@ -393,13 +450,15 @@ class TestAStalledQueueTellsTheOperator:
             await scheduler.tick()
 
         assert sent.await_count == 1, "a stuck queue must not message the operator every 30 seconds"
-        assert "A1MINI" in sent.await_args.kwargs["waiting_reason"]
+        assert "A1 Mini" in sent.await_args.kwargs["waiting_reason"]
 
     @pytest.mark.asyncio
     @pytest.mark.integration
-    async def test_a_tick_that_places_work_tells_nobody(self, db_session, scheduler, printer_factory) -> None:
+    async def test_a_tick_that_places_work_tells_nobody(
+        self, db_session, scheduler, printer_factory, routing_item
+    ) -> None:
         printer, _ = await _make_printer_with_queue(db_session, printer_factory, model="A1MINI")
-        db_session.add(AutoQueueItem(target_model="A1MINI", status="pending", position=1))
+        db_session.add(routing_item(target_model="A1MINI", status="pending", position=1))
         await db_session.commit()
 
         sent = AsyncMock()
@@ -416,11 +475,13 @@ class TestAStalledQueueTellsTheOperator:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
-    async def test_a_failing_notification_does_not_break_the_tick(self, db_session, scheduler, printer_factory) -> None:
+    async def test_a_failing_notification_does_not_break_the_tick(
+        self, db_session, scheduler, printer_factory, routing_item
+    ) -> None:
         """Routing is the job; telling someone about it is not allowed to stop
         the scheduler from running the next tick."""
         await _make_printer_with_queue(db_session, printer_factory, model="P1S")
-        db_session.add(AutoQueueItem(target_model="A1MINI", status="pending", position=1))
+        db_session.add(routing_item(target_model="A1MINI", status="pending", position=1))
         await db_session.commit()
 
         boom = AsyncMock(side_effect=RuntimeError("telegram is down"))
@@ -438,13 +499,13 @@ class TestAStalledQueueTellsTheOperator:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
-    async def test_busy_printer_excluded(self, db_session, scheduler, printer_factory) -> None:
+    async def test_busy_printer_excluded(self, db_session, scheduler, printer_factory, routing_item) -> None:
         printer, pq = await _make_printer_with_queue(db_session, printer_factory, model="A1MINI")
         # Mark queue as printing — should be in busy_printers
         pq.status = "printing"
         await db_session.commit()
 
-        item = AutoQueueItem(target_model="A1MINI", status="pending", position=1)
+        item = routing_item(target_model="A1MINI", status="pending", position=1)
         db_session.add(item)
         await db_session.commit()
 
@@ -458,12 +519,12 @@ class TestAStalledQueueTellsTheOperator:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
-    async def test_batch_fan_out_2_printers_4_items(self, db_session, scheduler, printer_factory) -> None:
+    async def test_batch_fan_out_2_printers_4_items(self, db_session, scheduler, printer_factory, routing_item) -> None:
         p1, _ = await _make_printer_with_queue(db_session, printer_factory, name="A1m-01", model="A1MINI")
         p2, _ = await _make_printer_with_queue(db_session, printer_factory, name="A1m-02", model="A1MINI")
 
         items = [
-            AutoQueueItem(
+            routing_item(
                 target_model="A1MINI",
                 status="pending",
                 position=i + 1,
@@ -494,10 +555,10 @@ class TestAStalledQueueTellsTheOperator:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
-    async def test_skips_manual_start(self, db_session, scheduler, printer_factory) -> None:
+    async def test_skips_manual_start(self, db_session, scheduler, printer_factory, routing_item) -> None:
         printer, _ = await _make_printer_with_queue(db_session, printer_factory, model="A1MINI")
 
-        item = AutoQueueItem(target_model="A1MINI", status="pending", position=1, manual_start=True)
+        item = routing_item(target_model="A1MINI", status="pending", position=1, manual_start=True)
         db_session.add(item)
         await db_session.commit()
 
@@ -510,11 +571,11 @@ class TestAStalledQueueTellsTheOperator:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
-    async def test_skips_future_scheduled(self, db_session, scheduler, printer_factory) -> None:
+    async def test_skips_future_scheduled(self, db_session, scheduler, printer_factory, routing_item) -> None:
         printer, _ = await _make_printer_with_queue(db_session, printer_factory, model="A1MINI")
 
         future = datetime.now(timezone.utc) + timedelta(hours=1)
-        item = AutoQueueItem(target_model="A1MINI", status="pending", position=1, scheduled_time=future)
+        item = routing_item(target_model="A1MINI", status="pending", position=1, scheduled_time=future)
         db_session.add(item)
         await db_session.commit()
 
@@ -527,7 +588,9 @@ class TestAStalledQueueTellsTheOperator:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
-    async def test_sjf_been_jumped_marks_longer_peers(self, db_session, scheduler, printer_factory) -> None:
+    async def test_sjf_been_jumped_marks_longer_peers(
+        self, db_session, scheduler, printer_factory, routing_item
+    ) -> None:
         # Enable SJF
         sjf = Settings(key="queue_shortest_first", value="true")
         db_session.add(sjf)
@@ -537,9 +600,9 @@ class TestAStalledQueueTellsTheOperator:
         # 3 items: long-unknown, short, long-known.
         # ORDER BY (sjf): target_model, been_jumped DESC, print_time ASC NULLS LAST, position
         # Without been_jumped marks: short (300) comes first, then long_known (3600), then long_unknown (NULL last)
-        long_unknown = AutoQueueItem(target_model="A1MINI", status="pending", position=1, print_time_seconds=None)
-        short = AutoQueueItem(target_model="A1MINI", status="pending", position=2, print_time_seconds=300)
-        long_known = AutoQueueItem(target_model="A1MINI", status="pending", position=3, print_time_seconds=3600)
+        long_unknown = routing_item(target_model="A1MINI", status="pending", position=1, print_time_seconds=None)
+        short = routing_item(target_model="A1MINI", status="pending", position=2, print_time_seconds=300)
+        long_known = routing_item(target_model="A1MINI", status="pending", position=3, print_time_seconds=3600)
         for it in (long_unknown, short, long_known):
             db_session.add(it)
         await db_session.commit()
@@ -579,12 +642,12 @@ class TestAutoQueueDryingPriority:
     @pytest.mark.asyncio
     @pytest.mark.integration
     async def test_drying_printer_eligible_when_block_disabled(
-        self, monkeypatch, db_session, scheduler, printer_factory
+        self, monkeypatch, db_session, scheduler, printer_factory, routing_item
     ) -> None:
         printer, pq = await _make_printer_with_queue(db_session, printer_factory, model="A1MINI")
         self._mark_drying(monkeypatch, printer.id)
 
-        item = AutoQueueItem(target_model="A1MINI", status="pending", position=1)
+        item = routing_item(target_model="A1MINI", status="pending", position=1)
         db_session.add(item)
         await db_session.commit()
 
@@ -600,13 +663,13 @@ class TestAutoQueueDryingPriority:
     @pytest.mark.asyncio
     @pytest.mark.integration
     async def test_a_drying_printer_is_still_routed_to_when_the_block_is_on(
-        self, monkeypatch, db_session, scheduler, printer_factory
+        self, monkeypatch, db_session, scheduler, printer_factory, routing_item
     ) -> None:
         db_session.add(Settings(key="queue_drying_block", value="true"))
         printer, _ = await _make_printer_with_queue(db_session, printer_factory, model="A1MINI")
         self._mark_drying(monkeypatch, printer.id)
 
-        item = AutoQueueItem(target_model="A1MINI", status="pending", position=1)
+        item = routing_item(target_model="A1MINI", status="pending", position=1)
         db_session.add(item)
         await db_session.commit()
 
@@ -623,7 +686,7 @@ class TestAutoQueueDryingPriority:
     @pytest.mark.asyncio
     @pytest.mark.integration
     async def test_idle_printer_preferred_over_drying(
-        self, monkeypatch, db_session, scheduler, printer_factory
+        self, monkeypatch, db_session, scheduler, printer_factory, routing_item
     ) -> None:
         drying_p, drying_pq = await _make_printer_with_queue(
             db_session, printer_factory, name="A1m-dry", model="A1MINI"
@@ -631,7 +694,7 @@ class TestAutoQueueDryingPriority:
         idle_p, idle_pq = await _make_printer_with_queue(db_session, printer_factory, name="A1m-idle", model="A1MINI")
         self._mark_drying(monkeypatch, drying_p.id)
 
-        item = AutoQueueItem(target_model="A1MINI", status="pending", position=1)
+        item = routing_item(target_model="A1MINI", status="pending", position=1)
         db_session.add(item)
         await db_session.commit()
 
