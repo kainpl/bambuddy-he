@@ -112,6 +112,8 @@
 
 ### Fixed
 
+- **Filament requirements retain small used channels and their nozzle assignments.** A positive slicer estimate below the displayed precision could disappear from auto-extracted requirements, and dual-nozzle files lost the plate's physical nozzle binding. Both now survive extraction, including mixed AMS/external files and H2C group tables. Explicitly unused channels no longer erase the nozzle bindings of the channels that actually print.
+
 - **Upgrading on PostgreSQL no longer stops at the notifications migration.** Four migrations wrote a JSON column with a cast SQLite tolerates and PostgreSQL refuses (`VARCHAR → JSON`); on PostgreSQL the server restarted every few seconds at migration 157 without ever coming up. The writes are now spelled per database. Installing the new build over is enough — the migration resumes where it stopped.
 
 - **The compact printer card's popup lost its redundant title bar.** Expanding a size-S card opened the full card under a modal header that repeated the printer's name and put a second X above the card's own button cluster. The popup now shows just the card; its close button sits in that cluster, rightmost after the menu button, and Esc still closes it.
