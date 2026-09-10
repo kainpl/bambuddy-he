@@ -161,12 +161,15 @@ def test_home_wait_is_the_earliest_free_accepting_machine_per_model():
                 queued=[QueuedRow(order_id=None, seconds=1800), QueuedRow(order_id=7, seconds=3600)],
             ),
             MachineState(printer_id=2, model="P1S", queued=[], accepts_new_work=False),  # parked: never the earliest
+            # A second accepting P1S, busy for a quarter of an hour: the figure is
+            # the EARLIEST such machine, not the first one the snapshot listed.
+            MachineState(printer_id=5, model="P1S", queued=[QueuedRow(order_id=None, seconds=900)]),
             MachineState(printer_id=3, model="X1C", queued=[QueuedRow(order_id=None, seconds=None)]),  # unknown = 0
             MachineState(printer_id=4, model=None),
         ],
         staged=[],
     )
-    assert home_wait_by_model(snapshot) == {"p1s": 5400.0, "x1c": 0.0}
+    assert home_wait_by_model(snapshot) == {"p1s": 900.0, "x1c": 0.0}
 
 
 def test_the_reason_list_is_closed():

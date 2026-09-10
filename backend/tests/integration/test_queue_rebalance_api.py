@@ -66,6 +66,43 @@ async def test_line_button_moves_with_the_setting_off_and_reports_the_counts(
 
 
 @pytest.mark.asyncio
+async def test_the_companions_inherit_the_source_rows_job_flags(
+    committing_client, db_session, printer_factory, tmp_path
+):
+    """The profile decides the TOGGLES, the source row decides the JOB.
+
+    One external-only print that switches the printer off after it must not
+    become one external-only print plus two AMS prints that leave it on: the
+    saved profile carries none of those four fields, so without the row they
+    would be the writer's defaults.
+    """
+    farm = await rebalance_farm(db_session, printer_factory, tmp_path)
+    await _the_dialogs_saved_preference(db_session, printer_model="A1MINI")
+    farm.item.use_ams = False
+    farm.item.feed_policy = "external_only"
+    farm.item.auto_off_after = True
+    farm.item.require_previous_success = True
+    await db_session.commit()
+
+    p_elig, p_sched, p_ams = _patch_printer_manager({farm.p1s.id, farm.mini.id})
+    with p_elig, p_sched, p_ams:
+        r = await committing_client.post(f"/api/v1/projects/{farm.project.id}/lines/{farm.line.id}/rebalance")
+    assert r.status_code == 200, r.text
+    assert (r.json()["converted"], r.json()["created"]) == (1, 2)
+
+    db_session.expire_all()
+    rows = await _pending(db_session)
+    assert len(rows) == 3
+    for row in rows:
+        assert (row.use_ams, row.feed_policy, row.auto_off_after, row.require_previous_success) == (
+            False,
+            "external_only",
+            True,
+            True,
+        ), f"row {row.id} did not inherit the job flags"
+
+
+@pytest.mark.asyncio
 async def test_line_button_ignores_the_cooldown(committing_client, db_session, printer_factory, tmp_path):
     farm = await rebalance_farm(db_session, printer_factory, tmp_path)
     p_elig, p_sched, p_ams = _patch_printer_manager({farm.p1s.id, farm.mini.id})

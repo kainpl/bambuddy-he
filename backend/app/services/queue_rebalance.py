@@ -18,6 +18,13 @@ free, and moving work to it would move it nowhere — so the receiver test is
 the busy set AND ``PrintScheduler._is_printer_idle``, both readiness signals
 the router's ranking already uses.
 
+The cheap verdicts are reached before the expensive load: a cooling line, and a
+row whose own model has an idle machine, are both answered without reading
+anything. What is left genuinely needs the plan engine's catalog — "an idle
+model with no candidate plate for THESE lines" cannot be answered from the
+queue rows alone, and there is no cheaper source for it than the plates
+themselves.
+
 ⚠️ **Never moved:** assigned, scheduled for a time, staged (``manual_start``),
 pinned (slot-bound ``filament_overrides``), aimed at a location, sourced from
 an archive, or not filed under an order line — see :func:`refusal`. Those
@@ -301,6 +308,11 @@ async def idle_printers_by_model(db: AsyncSession, busy: set[int]) -> dict[str, 
     machines that are connected and idle by ``_is_printer_idle`` with the
     plate-clear gate honoured. ⚠️ Both halves, deliberately: an empty queue on a
     printer still waiting for its plate clear only looks free.
+
+    ⚠️ ``status in ("paused", "error")`` is what ``print_scheduler.check_queue``
+    refuses to dispatch from, mirrored here so a receiver is a machine that will
+    actually PRINT what it is given: work moved onto such a queue would sit
+    there while every later tick answered ``home_model_idle``.
     """
     rows = (
         await db.execute(
@@ -311,16 +323,19 @@ async def idle_printers_by_model(db: AsyncSession, busy: set[int]) -> dict[str, 
                 Printer.archived.is_(False),
                 PrinterQueue.auto_distribute_eligible.is_(True),
                 PrinterQueue.is_paused.is_(False),
+                PrinterQueue.status.not_in(("paused", "error")),
             )
         )
     ).all()
-    idle: dict[str, int] = {}
+    # By printer id, so a printer that somehow answered the query twice (a
+    # second queue row of its own) is still one machine of capacity.
+    by_model: dict[str, set[int]] = {}
     for printer_id, model in rows:
         key = model_key(model)
-        if key is None or printer_id in busy or not scheduler._is_printer_idle(printer_id, True):
+        if key is None or printer_id in busy or not scheduler._is_printer_idle(printer_id, require_plate_clear=True):
             continue
-        idle[key] = idle.get(key, 0) + 1
-    return idle
+        by_model.setdefault(key, set()).add(printer_id)
+    return {key: len(ids) for key, ids in by_model.items()}
 
 
 @dataclass
@@ -507,14 +522,41 @@ async def rebalance(
     busy = busy_printers if busy_printers is not None else await busy_printer_ids(db)
     idle = await idle_printers_by_model(db, busy)
     if not idle:
+        # ``no_faster_model`` here means no printer of any model is free — the
+        # closed list has no separate code, and to the operator the answer is
+        # the same.
         result.skipped.extend((row.id, "no_faster_model") for row in movable_rows)
+        return result
+
+    # The cheap verdicts BEFORE the catalog: everything below this loads every
+    # archive of every affected order, and a tick where every movable row is
+    # cooling or has a machine of its own model standing free must not pay for
+    # it. ``plan_moves`` keeps the same two checks — pure, cheap and the
+    # decision's own — so it stays correct whoever calls it.
+    cooling = set() if force else await cooling_lines(db, {row.project_line_id for row in movable_rows}, now)
+    homes: dict[int, str] = {}
+    candidates: list[AutoQueueItem] = []
+    for row in movable_rows:
+        if row.project_line_id in cooling:
+            result.skipped.append((row.id, "cooldown"))
+            continue
+        home = model_key(row.target_model)
+        if home is None:
+            result.skipped.append((row.id, "no_yield"))
+            continue
+        if idle.get(home, 0) > 0:
+            result.skipped.append((row.id, "home_model_idle"))
+            continue
+        homes[row.id] = home
+        candidates.append(row)
+    if not candidates:
         return result
 
     line_projects: dict[int, int] = dict(
         (
             await db.execute(
                 select(ProjectLine.id, ProjectLine.project_id).where(
-                    ProjectLine.id.in_({row.project_line_id for row in movable_rows})
+                    ProjectLine.id.in_({row.project_line_id for row in candidates})
                 )
             )
         ).all()
@@ -522,13 +564,11 @@ async def rebalance(
     catalog = await load_line_catalog(db, sorted(set(line_projects.values())))
     rank = {project_id: i for i, project_id in enumerate(await rank_active_orders(db))}
     free_at = home_wait_by_model(await load_snapshot(db, now))
-    cooling = set() if force else await cooling_lines(db, {row.project_line_id for row in movable_rows}, now)
 
     keyed: list[tuple[tuple[int, int, int], MovableItem]] = []
-    for row in movable_rows:
+    for row in candidates:
         parts = catalog.yield_of(row.project_line_id, row.library_file_id, row.plate_id)
-        home = model_key(row.target_model)
-        if parts <= 0 or home is None:
+        if parts <= 0:
             result.skipped.append((row.id, "no_yield"))
             continue
         order_rank = rank.get(line_projects.get(row.project_line_id), len(rank))
@@ -538,13 +578,15 @@ async def rebalance(
                 MovableItem(
                     item_id=row.id,
                     line_id=row.project_line_id,
-                    home_model=home,
+                    home_model=homes[row.id],
                     yield_parts=parts,
                     seconds=row.print_time_seconds,
                 ),
             )
         )
     keyed.sort(key=lambda pair: pair[0])
+    # ``cooling`` is handed in although no cooling row reached here: the pure
+    # function's own guarantee should not depend on a caller's pre-filter.
     plan = plan_moves(
         [item for _key, item in keyed],
         catalog.options_by_line,
@@ -553,7 +595,7 @@ async def rebalance(
     )
     result.skipped.extend(plan.skipped)
 
-    by_id = {row.id: row for row in movable_rows}
+    by_id = {row.id: row for row in candidates}
     cache = PrintRequirementsCache()
     for move in plan.moves:
         await _apply(db, by_id[move.item_id], move, now=now, cache=cache, current_user=current_user, result=result)
@@ -580,14 +622,18 @@ async def _apply(
     SELECT autoflushes the already-converted row, and the tick's ``commit``
     would then make a HALF move durable — the row covering 2 of the 6 parts it
     used to claim, the companions never created, the line quietly four parts
-    short. Restoring the eight fields and reporting ``creation_failed`` is what
-    keeps "a move" one thing.
+    short. Restoring the ten fields and reporting ``creation_failed`` is what
+    keeps "a move" one thing — and when the writer got as far as its own
+    ``commit``, undoing means DELETING the rows it made, not forgetting them.
 
     The conversion keeps every print option, the line, ``force_color_match`` and
     the position; the created rows take the saved profile for the receiving
     model — the operator's when a person pressed the button, the system row when
     the tick ran — the way the plan's own enqueue door does, with swap macros
-    muted when the file bakes them. All ``k`` rows share one batch id.
+    muted when the file bakes them. All ``k`` rows share one batch id. The
+    profile decides the **toggles**; the source ROW decides the **job** — feed
+    policy, AMS, power-off-after, previous-success — so an external-only print
+    of six parts cannot become one external-only print and two AMS ones.
 
     ⚠️ The writer is handed the LINE and no ``project_id``: it derives the order
     from the line, so a row whose ``project_id`` points at an order that is gone
@@ -627,7 +673,19 @@ async def _apply(
         if file.swap_compatible:
             options["execute_swap_macros"] = False
             options["swap_macro_events"] = None
-        payload = {**options, "force_color_match": item.force_color_match}
+        # After the profile, so the row wins: these four are not toggles the
+        # profile has an opinion about (``SharedQueueOptions`` carries none of
+        # them) — they say how THIS job feeds and what happens when it ends.
+        # ``feed_policy`` may be the row's own ``"auto"``; the writer normalises
+        # it exactly as it does for every other door.
+        payload = {
+            **options,
+            "use_ams": item.use_ams,
+            "feed_policy": item.feed_policy,
+            "auto_off_after": item.auto_off_after,
+            "require_previous_success": item.require_previous_success,
+            "force_color_match": item.force_color_match,
+        }
 
     logger.info(
         "Rebalance: line %s item %s %s → %s: %d print(s) of plate %s (yield %d, %d parts, surplus %d), "
@@ -675,6 +733,7 @@ async def _apply(
 
     if payload is None:
         return
+    created: list[AutoQueueItem] = []
     try:
         created = await add_items_to_auto_queue(
             db,
@@ -694,16 +753,29 @@ async def _apply(
             row.rebalanced_from_model = from_model
         await db.flush()
     except Exception as exc:
+        # Restore FIRST, delete SECOND, commit ONCE. The writer commits its own
+        # rows, so anything that fails after it (the stamping loop, its flush)
+        # leaves them durable — unstamped, filed under the line, holding parts
+        # nobody owes and with no ``rebalanced_at`` to make the cooldown notice.
+        # Restoring before the delete means the autoflush ``db.delete`` may run
+        # can only ever write the row's ORIGINAL values, and the one commit that
+        # follows makes both halves of the undo durable together.
         for field_name, value in before.items():
             setattr(item, field_name, value)
+        if created:
+            for row in created:
+                await db.delete(row)
+            await db.commit()
         result.converted -= 1
         result.moved_parts -= move.moved_parts
         logger.warning(
-            "Rebalance: line %s item %s stays on %s — creating its %d companion print(s) failed: %s",
+            "Rebalance: line %s item %s stays on %s — creating its %d companion print(s) failed "
+            "(%d already-created row(s) deleted): %s",
             item.project_line_id,
             item.id,
             before["target_model"],
             move.k - 1,
+            len(created),
             exc,
         )
         result.skipped.append((item.id, "creation_failed"))

@@ -916,6 +916,26 @@ class TestRebalanceAcrossModels:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
+    @pytest.mark.parametrize("queue_status", ["paused", "error"])
+    async def test_a_queue_that_would_never_dispatch_is_no_home(
+        self, db_session, scheduler, printer_factory, tmp_path, queue_status
+    ) -> None:
+        """A paused or errored queue may not RECEIVE work: ``check_queue`` never
+        dispatches from one, so the move would land there, the next tick would answer
+        ``home_model_idle`` for ever, and nothing would print."""
+        farm = await rebalance_farm(db_session, printer_factory, tmp_path)
+        farm.mini_q.status = queue_status
+        db_session.add(Settings(key="auto_queue_rebalance_models", value="true"))
+        await db_session.commit()
+        p_elig, p_sched, p_ams = _patch_printer_manager({farm.p1s.id, farm.mini.id})
+        with p_elig, p_sched, p_ams:
+            await scheduler.tick()
+        await db_session.refresh(farm.item)
+        assert (farm.item.target_model, farm.item.rebalanced_at) == ("P1S", None)
+        assert len(await _pending_rows(db_session)) == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
     async def test_a_pinned_item_stays(self, db_session, scheduler, printer_factory, tmp_path) -> None:
         farm = await rebalance_farm(db_session, printer_factory, tmp_path)
         farm.item.filament_overrides = json.dumps(
@@ -1023,3 +1043,54 @@ class TestRebalanceAcrossModels:
             result = await queue_rebalance.rebalance(db_session, line_ids=[farm.line.id], force=True)
         assert (result.converted, result.created, result.moved_parts) == (0, 0, 0)
         assert (farm.item.id, "creation_failed") in result.skipped
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_companions_the_writer_already_committed_are_deleted_when_the_stamping_fails(
+        self, monkeypatch, db_session, scheduler, printer_factory, tmp_path
+    ) -> None:
+        """The writer COMMITS, so forgetting its rows is not undoing them.
+
+        ``add_items_to_auto_queue`` succeeds and commits — the converted row and
+        its two companions are durable — and the ``flush`` of the stamping loop
+        right after it fails. Restoring the row's fields is then only half the
+        undo: the companions would stay, filed under the line, unstamped (so no
+        cooldown holds the line) and covering parts nobody owes — six hooks
+        queued as ten.
+        """
+        from backend.app.services import queue_rebalance
+
+        farm = await rebalance_farm(db_session, printer_factory, tmp_path)
+        db_session.add(Settings(key="auto_queue_rebalance_models", value="true"))
+        await db_session.commit()
+
+        real_writer = queue_rebalance.add_items_to_auto_queue
+        real_flush = db_session.flush
+
+        async def _fail_once(*args, **kwargs):
+            db_session.flush = real_flush  # only the stamping flush fails; the undo needs the real one
+            raise RuntimeError("flush failed")
+
+        async def _commit_then_arm_the_flush(*args, **kwargs):
+            rows = await real_writer(*args, **kwargs)
+            db_session.flush = _fail_once
+            return rows
+
+        monkeypatch.setattr(queue_rebalance, "add_items_to_auto_queue", _commit_then_arm_the_flush)
+
+        p_elig, p_sched, p_ams = _patch_printer_manager({farm.p1s.id, farm.mini.id})
+        with p_elig, p_sched, p_ams:
+            await scheduler.tick()
+
+        rows = await _pending_rows(db_session)
+        assert len(rows) == 1, "the two committed companions were deleted"
+        await db_session.refresh(farm.item)
+        assert (farm.item.library_file_id, farm.item.plate_id, farm.item.target_model) == (farm.big.id, 1, "P1S")
+        assert (farm.item.print_time_seconds, farm.item.batch_id) == (3600, None)
+        assert (farm.item.rebalanced_at, farm.item.rebalanced_from_model) == (None, None)
+
+        with p_elig, p_sched, p_ams:
+            result = await queue_rebalance.rebalance(db_session, line_ids=[farm.line.id], force=True)
+        assert (result.converted, result.created, result.moved_parts) == (0, 0, 0)
+        assert (farm.item.id, "creation_failed") in result.skipped
+        assert len(await _pending_rows(db_session)) == 1

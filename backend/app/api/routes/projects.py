@@ -1615,7 +1615,7 @@ def _counts(mapping: dict[int, int], names: dict[int, str]) -> list[PlanPartCoun
     return [PlanPartCount(part_id=pid, name=names.get(pid, "?"), count=n) for pid, n in sorted(mapping.items())]
 
 
-def _plan_response(plan: OrderPlan, pending_auto: dict[int, int] | None = None) -> OrderPlanResponse:
+def _plan_response(plan: OrderPlan, pending_auto: dict[int, int]) -> OrderPlanResponse:
     """Name every id the engine returned — no SELECT, no walk.
 
     The engine builds the plan from an ``OrderContext`` that already holds every
@@ -1677,7 +1677,7 @@ def _plan_response(plan: OrderPlan, pending_auto: dict[int, int] | None = None) 
                 ),
                 candidates=line.candidates,
                 not_sliced=line.not_sliced,
-                pending_auto_prints=(pending_auto or {}).get(line.line_id, 0),
+                pending_auto_prints=pending_auto.get(line.line_id, 0),
             )
             for line in plan.lines
         ],
