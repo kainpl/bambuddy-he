@@ -46,6 +46,7 @@ afterEach(() => {
 describe('StockPage', () => {
   let getSummary: ReturnType<typeof vi.spyOn>;
   let getMovements: ReturnType<typeof vi.spyOn>;
+  let getProducts: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -55,10 +56,10 @@ describe('StockPage', () => {
       params?.before_id ? page2 : page1,
     );
     vi.spyOn(api, 'getSettings').mockResolvedValue({ date_format: 'system' } as never);
-    vi.spyOn(api, 'getProducts').mockResolvedValue([
-      { id: 1, name: 'Lamp', is_active: true, has_cover: false, parts_count: 2, plates_count: 1, lines_count: 0, kits_available: 3, origin: 'catalog' },
-      { id: 2, name: 'Old vase', is_active: false, has_cover: false, parts_count: 1, plates_count: 1, lines_count: 0, kits_available: 0, origin: 'catalog' },
-    ] as never);
+    getProducts = vi.spyOn(api, 'getProducts').mockResolvedValue([
+      { id: 1, name: 'Lamp', is_active: true, origin: 'catalog', origin_file_id: null, origin_plate_index: null, cover_image_filename: null, has_cover: false, parts_count: 2, plates_count: 1, lines_count: 0, kits_available: 3 },
+      { id: 2, name: 'Old vase', is_active: false, origin: 'catalog', origin_file_id: null, origin_plate_index: null, cover_image_filename: null, has_cover: false, parts_count: 1, plates_count: 1, lines_count: 0, kits_available: 0 },
+    ]);
   });
 
   it('lists products with their kits and marks one that is out of the catalog', async () => {
@@ -120,6 +121,10 @@ describe('StockPage', () => {
   it('re-queries the journal when a product is picked, from the catalog rather than the (filtered) summary', async () => {
     render(<StockPage />);
     await screen.findByTestId('stock-movement-9');
+    // The catalog list backing the filter is asked for WITHOUT an origin
+    // filter — a one-off product can hold stock and history too, and neither
+    // the summary nor the journal filters by origin.
+    expect(getProducts).toHaveBeenCalledWith({ include_adhoc: true });
     fireEvent.change(screen.getByLabelText(/^product$/i), { target: { value: '2' } });
     await waitFor(() =>
       expect(getMovements).toHaveBeenLastCalledWith({ product_id: 2, before_id: null, limit: 50 }),

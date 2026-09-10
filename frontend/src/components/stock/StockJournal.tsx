@@ -34,7 +34,13 @@ export function StockJournal() {
   // filtered) summary this page shows: a product whose shelf just zeroed out
   // still has history to filter by, and a product already picked here must
   // never vanish from the list because the summary's own filters moved.
-  const { data: catalog = [] } = useQuery({ queryKey: ['products', {}], queryFn: () => api.getProducts({}) });
+  // `include_adhoc` is explicit — a one-off product can hold stock and
+  // history too, and neither the summary nor the journal applies an origin
+  // filter, so the options must not either.
+  const { data: catalog = [] } = useQuery({
+    queryKey: ['products', { include_adhoc: true }],
+    queryFn: () => api.getProducts({ include_adhoc: true }),
+  });
 
   const rows = data?.pages.flatMap((p) => p.items) ?? [];
 
