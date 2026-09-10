@@ -54,7 +54,10 @@ async def get_queue_terminal_counts(db: AsyncSession, queue_id: int) -> dict[str
     legacy display split, with a dedicated ``failed`` breakdown as well.
     """
     result = await db.execute(
-        select(PrintArchive.status, func.count()).where(PrintArchive.queue_id == queue_id).group_by(PrintArchive.status)
+        select(PrintArchive.status, func.count())
+        .where(func.coalesce(PrintArchive.extra_data["dispatch_aborted"].as_boolean(), False).is_(False))
+        .where(PrintArchive.queue_id == queue_id)
+        .group_by(PrintArchive.status)
     )
     by_status = {row[0]: int(row[1] or 0) for row in result.all()}
 

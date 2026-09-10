@@ -1,4 +1,4 @@
-import type { AutoQueueItem, CalibrationMode, PrintQueueItem, Printer } from '../../api/client';
+import type { AutoQueueItem, FilamentRoutingSnapshot, FeedPolicy, CalibrationMode, PrintQueueItem, Printer } from '../../api/client';
 import type { AutoCalibrationCaps } from '../../utils/printerCapabilities';
 
 /**
@@ -30,6 +30,8 @@ export type PrintModalMode = 'reprint' | 'add-to-queue' | 'edit-queue-item' | 'e
  * thing about a different file.
  */
 export interface PrintModalAnswer {
+  /** File-local slot decisions require a visible dialog for the next file. */
+  requiresFileReview?: boolean;
   /** Which printers the operator ticked. Empty in auto mode. */
   selectedPrinterIds: number[];
   dispatchMode: 'specific' | 'auto';
@@ -58,6 +60,8 @@ export interface PrintModalAnswer {
  * - libraryFileId: For printing library files directly
  */
 export interface PrintModalProps {
+  /** File-local intent from a copied queue row; physical pins require review. */
+  initialRouting?: FilamentRoutingSnapshot;
   /** Modal operation mode */
   mode: PrintModalMode;
   /** Archive ID to print (mutually exclusive with libraryFileId) */
@@ -326,12 +330,14 @@ export const DEFAULT_SCHEDULE_OPTIONS: ScheduleOptions = {
  * when the operator picks "Auto" instead of a specific printer.
  */
 export interface AutoModeOptionsState {
+  feed_policy?: FeedPolicy;
   target_model: string | null;
   target_location_id: number | null;
   force_color_match: boolean;
 }
 
 export const DEFAULT_AUTO_MODE_OPTIONS: AutoModeOptionsState = {
+  feed_policy: 'auto',
   target_model: null,
   target_location_id: null,
   force_color_match: false,

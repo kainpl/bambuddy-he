@@ -505,6 +505,8 @@ class VirtualPrinterInstance:
         nozzle_mapping_json = self._parse_nozzle_mapping(data)
         if nozzle_mapping_json is not None:
             patch["nozzle_mapping"] = nozzle_mapping_json
+        if "use_ams" in patch:
+            patch["feed_policy"] = "auto" if patch["use_ams"] else "external_only"
         if not patch:
             return
 
@@ -517,9 +519,14 @@ class VirtualPrinterInstance:
                 sa_select(AutoQueueItem).where(AutoQueueItem.id.in_(item_ids), AutoQueueItem.status == "pending")
             )
             rows = list(result.scalars().all())
+            from sqlalchemy import update
+
             for row in rows:
-                for column, value in patch.items():
-                    setattr(row, column, value)
+                await db.execute(
+                    update(AutoQueueItem)
+                    .where(AutoQueueItem.id == row.id, AutoQueueItem.status == "pending")
+                    .values(**patch)
+                )
             if rows:
                 await db.commit()
                 logger.info(
@@ -628,7 +635,16 @@ class VirtualPrinterInstance:
                 if not eligible_ids:
                     self._recent_queue_items.pop(stash_key, None)
                     return
-                await db.execute(update(PrintQueueItem).where(PrintQueueItem.id.in_(eligible_ids)).values(**patch))
+                from backend.app.services.filament_policy_write import routing_update
+
+                for iid in eligible_ids:
+                    item = await db.get(PrintQueueItem, iid)
+                    changes = await routing_update(db, item, patch)
+                    await db.execute(
+                        update(PrintQueueItem)
+                        .where(PrintQueueItem.id == iid, PrintQueueItem.status == "pending")
+                        .values(**changes)
+                    )
                 await db.commit()
                 logger.info(
                     "[VP %s] Late slicer MQTT for %s — retroactively stamped %s onto queue item(s) %s",
@@ -1163,6 +1179,21 @@ class VirtualPrinterInstance:
                         if raw_nozzle_mapping is not None:
                             nozzle_mapping_json = json.dumps(raw_nozzle_mapping)
 
+                from backend.app.services.filament_policy_write import prepare_routing
+                from backend.app.services.filament_requirements import PrintRequirementsCache
+
+                cache = PrintRequirementsCache()
+                routed_plates = [
+                    await prepare_routing(
+                        db,
+                        printer_id=queue.printer_id,
+                        library_file_id=library_file.id,
+                        library_file=library_file,
+                        options={"plate_id": plate, "ams_mapping": ams_mapping_json, "use_ams": use_ams},
+                        cache=cache,
+                    )
+                    for plate in plate_ids
+                ]
                 queue_item_ids: list[int] = []
                 # ⚠️ No ``created_by_id`` here, and that is the answer rather
                 # than a gap. A VirtualPrinter carries no owner, and the obvious
@@ -1173,7 +1204,7 @@ class VirtualPrinterInstance:
                 # Every other path that builds a queue item DOES set it —
                 # ``queue:read_own`` filters on it — so a missing value here has
                 # to stay a deliberate, documented one.
-                for offset, plate_id in enumerate(plate_ids, start=1):
+                for offset, (routing, plate_id) in enumerate(routed_plates, start=1):
                     queue_item = PrintQueueItem(
                         queue_id=queue.id,
                         library_file_id=library_file.id,
@@ -1194,6 +1225,7 @@ class VirtualPrinterInstance:
                         nozzle_mapping=nozzle_mapping_json,
                         # None unless this VP opted in — see above.
                         ams_mapping=ams_mapping_json,
+                        filament_routing=routing,
                         # Per-VP opt-in for auto-print G-code injection (#1516).
                         # Default off; when on, the dispatcher still no-ops unless
                         # gcode_snippets are configured for the target model, so
@@ -1328,47 +1360,17 @@ class VirtualPrinterInstance:
             from sqlalchemy import func as sa_func, select as sa_select
 
             from backend.app.models.auto_queue import AutoQueueItem
-            from backend.app.services.auto_queue_threemf import extract_auto_queue_requirements
-            from backend.app.services.filament_requirements import extract_filament_requirements
+            from backend.app.services.filament_intake import require_source_requirements
+            from backend.app.services.filament_requirements import PrintRequirementsCache
 
             plate_id = self._extract_plate_id_from_metadata(library_file.file_metadata)
-
-            # Re-extract requirements from the saved library file so the
-            # auto-queue's per-slot filament info matches the bytes we'll
-            # actually upload to the printer (the original upload temp is
-            # gone after _save_to_library cleans it up).
-            on_disk = Path(app_settings.base_dir) / library_file.file_path
-            requirements = extract_auto_queue_requirements(on_disk, plate_id=plate_id)
-
-            # When the per-VP toggle is on, also lift per-slot type+color from
-            # the 3MF and persist them as ``force_color_match=True`` overrides
-            # so the eligibility scheduler refuses printers loaded with the
-            # right material in the wrong colours (#1188). The eligibility
-            # path's `_get_missing_force_color_slots` validates the same JSON
-            # shape we build here. Default-off preserves legacy types-only
-            # routing for upgraders who don't want the colour filter.
-            filament_overrides_json: list[dict] | None = None
-            if self.queue_force_color_match:
-                per_slot = extract_filament_requirements(on_disk, plate_id=plate_id)
-                overrides = [
-                    {
-                        "slot_id": slot["slot_id"],
-                        "type": slot["type"],
-                        "color": slot.get("color", ""),
-                        # Carry the slicer's spool identity so force_color_match
-                        # can tell Bambu's PLA variants apart (#2650): Basic,
-                        # Matte and Silk all report tray_type "PLA" and differ
-                        # only here. A blank idx (custom or third-party spool)
-                        # means "no variant constraint" and eligibility falls
-                        # back to type+colour.
-                        "tray_info_idx": slot.get("tray_info_idx", ""),
-                        "force_color_match": True,
-                    }
-                    for slot in per_slot
-                    if slot.get("type") and slot.get("color")
-                ]
-                if overrides:
-                    filament_overrides_json = overrides
+            strict_requirements = await require_source_requirements(
+                PrintRequirementsCache(),
+                library_file=library_file,
+                plate_id=plate_id,
+            )
+            plate_id = strict_requirements.resolved_plate_id
+            filament_overrides_json = None
 
             sliced_model: str | None = None
             if isinstance(library_file.file_metadata, dict):
@@ -1379,7 +1381,7 @@ class VirtualPrinterInstance:
                 # the TARGET MODEL -> column default — the same ladder as
                 # ``_add_to_print_queue``, resolved before a printer exists.
                 system_opts = await self._load_system_print_options_for_model(
-                    db, requirements.target_model or sliced_model
+                    db, strict_requirements.model or sliced_model
                 )
                 bed_levelling = _resolve_print_option(slicer_opts, system_opts, "bed_leveling", "bed_levelling", True)
                 flow_cali = _resolve_print_option(slicer_opts, system_opts, "flow_cali", "flow_cali", True)
@@ -1407,14 +1409,14 @@ class VirtualPrinterInstance:
                 # requirements. The /auto-queue/ POST route already does this
                 # right (`auto_queue.py:268`); this aligns the VP path.
                 required_types_json = (
-                    json.dumps(list(requirements.required_filament_types))
-                    if requirements.required_filament_types
+                    json.dumps(list(dict.fromkeys(f["type"] for f in strict_requirements.used_filaments)))
+                    if strict_requirements.used_filaments
                     else None
                 )
                 item = AutoQueueItem(
                     library_file_id=library_file.id,
                     archive_id=None,  # archive created at print-start by _run_print_library_file
-                    target_model=requirements.target_model or sliced_model,
+                    target_model=strict_requirements.model or sliced_model,
                     required_filament_types=required_types_json,
                     filament_overrides=(json.dumps(filament_overrides_json) if filament_overrides_json else None),
                     plate_id=plate_id,
@@ -1427,6 +1429,8 @@ class VirtualPrinterInstance:
                     timelapse=timelapse,
                     timelapse_storage=timelapse_storage,
                     use_ams=use_ams,
+                    feed_policy="auto" if use_ams else "external_only",
+                    force_color_match=self.queue_force_color_match,
                     nozzle_mapping=nozzle_mapping_json,
                     # Per-VP auto-print G-code injection opt-in (#1516). Copied
                     # onto the per-printer print_queue item when the scheduler
@@ -1504,9 +1508,8 @@ class VirtualPrinterInstance:
         plates list whose index is the user-picked plate.
 
         Returns ``None`` when the metadata is missing / multi-plate /
-        malformed; the dispatcher then defaults plate_id to 1, which is
-        the existing behaviour for queue items uploaded without plate
-        context.
+        malformed; strict intake then resolves a unique printable plate
+        or refuses an ambiguous source.
         """
         if not isinstance(file_metadata, dict):
             return None
@@ -1527,7 +1530,7 @@ class VirtualPrinterInstance:
         each. A single-plate "Send" yields a one-element list (prior
         behaviour). Returns ``[None]`` when the metadata is missing / malformed
         / carries no valid index, so the caller still creates exactly one item
-        (the dispatcher then defaults plate_id to 1).
+        (strict intake must resolve the source before enqueueing).
         """
         if isinstance(file_metadata, dict):
             plates = file_metadata.get("plates")

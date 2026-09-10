@@ -16,25 +16,12 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, Field, PlainSerializer, field_validator, model_validator
 
 from backend.app.schemas.calibration_mode import CalibrationMode
+from backend.app.schemas.filament_routing import FilamentOverride
 from backend.app.schemas.print_queue import serialize_utc_datetime
 from backend.app.schemas.printer_location import PrinterLocationOut, reject_legacy_key
 from backend.app.schemas.timelapse import TimelapseStorage
 
 UTCDatetime = Annotated[datetime | None, PlainSerializer(serialize_utc_datetime)]
-
-
-class FilamentOverride(BaseModel):
-    """Override for a single filament slot. Mirrors upstream's filament_overrides format."""
-
-    slot_id: int = Field(ge=1)  # 1-indexed slot
-    type: str | None = None  # e.g. "PLA", "PETG"
-    color: str | None = None  # hex like "#FF0000"
-    # Slicer spool identity ("GFA00" PLA Basic, "GFA01" PLA Matte, "GFA06" Silk,
-    # "P4d64437" a custom preset). Only meaningful alongside force_color_match,
-    # where it keeps the variants apart — everything reports tray_type "PLA"
-    # (#2650). Blank means "no variant constraint".
-    tray_info_idx: str | None = None
-    force_color_match: bool = False  # exact-color requirement
 
 
 class AutoQueueItemCreate(BaseModel):
@@ -54,8 +41,8 @@ class AutoQueueItemCreate(BaseModel):
 
     # Multi-plate: pass a list of plate IDs to fan out N rows (one per plate).
     # Single plate_id also accepted for parity with print_queue API.
-    plate_id: int | None = None
-    plate_ids: list[int] | None = None
+    plate_id: int | None = Field(default=None, ge=0)
+    plate_ids: list[Annotated[int, Field(ge=0)]] | None = Field(default=None, max_length=64)
     # How many runs of a GIVEN plate, keyed by plate id. One shared Quantity
     # cannot say "plate 1 once, plate 2 twice" (upstream #342), and a
     # multi-plate file is exactly where that comes up. Absent — or absent for a
@@ -73,6 +60,7 @@ class AutoQueueItemCreate(BaseModel):
     timelapse: bool = False
     # Which medium records it — copied onto the per-printer item at promotion.
     timelapse_storage: TimelapseStorage | None = None
+    feed_policy: Literal["auto", "ams_only", "external_only"] | None = None
     use_ams: bool = True
     mesh_mode_fast_check: bool = True
     execute_swap_macros: bool = True
@@ -131,6 +119,7 @@ class AutoQueueItemUpdate(BaseModel):
     layer_inspect: bool | None = None
     timelapse: bool | None = None
     timelapse_storage: TimelapseStorage | None = None
+    feed_policy: Literal["auto", "ams_only", "external_only"] | None = None
     use_ams: bool | None = None
     mesh_mode_fast_check: bool | None = None
     execute_swap_macros: bool | None = None
@@ -169,6 +158,7 @@ class AutoQueueItemResponse(BaseModel):
     layer_inspect: bool
     timelapse: bool
     timelapse_storage: TimelapseStorage | None = None
+    feed_policy: Literal["auto", "ams_only", "external_only"] = "auto"
     use_ams: bool
     mesh_mode_fast_check: bool
     execute_swap_macros: bool

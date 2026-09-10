@@ -34,6 +34,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -46,8 +47,12 @@ from backend.app.models.print_queue import PrintQueueItem
 from backend.app.models.printer import Printer
 from backend.app.models.printer_queue import PrinterQueue
 from backend.app.models.settings import Settings
-from backend.app.services.auto_queue_ams import compute_ams_mapping_for_printer
 from backend.app.services.auto_queue_eligibility import find_eligible_printer, offline_candidates_for
+from backend.app.services.filament_intake import read_item_requirements
+from backend.app.services.filament_policy import auto_policy, serialize_policy
+from backend.app.services.filament_requirements import PrintRequirementsCache, SourceIdentity
+from backend.app.services.filament_routing import resolve_filament_routing
+from backend.app.services.printer_manager import printer_manager
 
 logger = logging.getLogger(__name__)
 
@@ -154,8 +159,12 @@ class AutoQueueScheduler:
             first_blocked: tuple[AutoQueueItem, str] | None = None
             # At most one printer is woken per pass — see _wake_offline_printer.
             woke_one = False
+            requirements_cache = PrintRequirementsCache()
             for item in items:
-                printer, reason = await find_eligible_printer(db, item, busy_printers)
+                eligible = await find_eligible_printer(
+                    db, item, busy_printers, cache=requirements_cache, prefer_lowest=prefer_lowest
+                )
+                printer, reason = eligible
                 if printer is None:
                     if not woke_one:
                         woke_one = await self._wake_offline_printer(db, item, busy_printers)
@@ -172,7 +181,14 @@ class AutoQueueScheduler:
                     continue
 
                 try:
-                    await self._assign(db, item, printer, prefer_lowest=prefer_lowest)
+                    await self._assign(
+                        db,
+                        item,
+                        printer,
+                        prefer_lowest=prefer_lowest,
+                        plan=eligible.plan,
+                        requirements=eligible.requirements,
+                    )
                 except Exception:
                     logger.exception("Failed to assign auto item %s to printer %s", item.id, printer.id)
                     continue
@@ -392,82 +408,135 @@ class AutoQueueScheduler:
         item: AutoQueueItem,
         printer: Printer,
         prefer_lowest: bool = False,
+        *,
+        plan=None,
+        requirements=None,
     ) -> PrintQueueItem:
         """Copy auto item into the printer's print_queue and mark assigned.
 
         Computes AMS mapping from current printer state (mirrors
         upstream's "compute on dispatch" approach — overrides applied here).
         """
-        # 1. Compute AMS mapping for this specific printer
-        ams_mapping = await compute_ams_mapping_for_printer(db, printer.id, item, prefer_lowest=prefer_lowest)
-        ams_mapping_json = json.dumps(ams_mapping) if ams_mapping is not None else None
+        async with db.begin_nested():
+            policy = auto_policy(item)
+            requirements = requirements or await read_item_requirements(db, item)
+            if plan is None:
+                plan = resolve_filament_routing(
+                    requirements, policy, printer_manager.get_feed_snapshot(printer.id), prefer_lowest=prefer_lowest
+                ).plan
+            if plan is None:
+                raise ValueError("No complete filament routing plan")
+            ams_mapping_json = json.dumps(plan.mapping)
 
-        # 2. Find target queue for this printer
-        queue_result = await db.execute(select(PrinterQueue).where(PrinterQueue.printer_id == printer.id))
-        printer_queue = queue_result.scalar_one_or_none()
-        if printer_queue is None:
-            raise RuntimeError(f"Printer {printer.id} has no PrinterQueue row")
-
-        # 3. Compute next position in the per-printer queue
-        max_pos = await db.scalar(
-            select(func.coalesce(func.max(PrintQueueItem.position), 0)).where(
-                PrintQueueItem.queue_id == printer_queue.id
+            # 2. Find target queue for this printer
+            queue_result = await db.execute(
+                select(PrinterQueue).where(PrinterQueue.printer_id == printer.id).with_for_update()
             )
-        )
-        next_pos = (max_pos or 0) + 1
+            printer_queue = queue_result.scalar_one_or_none()
+            if printer_queue is None:
+                raise RuntimeError(f"Printer {printer.id} has no PrinterQueue row")
 
-        # 4. Build the new per-printer item with copied options
-        new_item = PrintQueueItem(
-            queue_id=printer_queue.id,
-            archive_id=item.archive_id,
-            library_file_id=item.library_file_id,
-            project_id=item.project_id,
-            project_line_id=item.project_line_id,
-            position=next_pos,
-            scheduled_time=item.scheduled_time,
-            manual_start=False,
-            # Carried onto the per-printer row so the gate is re-checked at
-            # dispatch: eligibility only proves the printer was clean at the
-            # moment of routing, and another print can fail in between.
-            require_previous_success=item.require_previous_success,
-            auto_off_after=item.auto_off_after,
-            ams_mapping=ams_mapping_json,
-            nozzle_mapping=item.nozzle_mapping,
-            plate_id=item.plate_id,
-            bed_levelling=item.bed_levelling,
-            flow_cali=item.flow_cali,
-            layer_inspect=item.layer_inspect,
-            timelapse=item.timelapse,
-            timelapse_storage=item.timelapse_storage,
-            use_ams=item.use_ams,
-            mesh_mode_fast_check=item.mesh_mode_fast_check,
-            gcode_injection=item.gcode_injection,
-            execute_swap_macros=item.execute_swap_macros,
-            swap_macro_events=item.swap_macro_events,
-            selected_macro_ids=item.selected_macro_ids,
-            status="pending",
-            batch_id=item.batch_id,
-            created_by_id=item.created_by_id,
-            source_auto_item_id=item.id,
-        )
-        db.add(new_item)
-        await db.flush()
+            # 3. Compute next position in the per-printer queue
+            max_pos = await db.scalar(
+                select(func.coalesce(func.max(PrintQueueItem.position), 0)).where(
+                    PrintQueueItem.queue_id == printer_queue.id
+                )
+            )
+            next_pos = (max_pos or 0) + 1
 
-        # 5. Mark auto item as assigned (back-reference + timestamp + clear reason)
-        item.status = "assigned"
-        item.assigned_to_item_id = new_item.id
-        item.assigned_at = datetime.now(timezone.utc)
-        item.waiting_reason = None
+            # Revalidate the SAME plan after DB awaits and before claiming the row.
+            if (
+                printer_manager.get_feed_snapshot(printer.id).marker != plan.snapshot_marker
+                or policy.fingerprint != plan.policy_fingerprint
+                or requirements.source_identity != SourceIdentity.of(Path(requirements.source_identity.path))
+            ):
+                raise ValueError("Filament routing evidence changed before assignment")
+            if printer_queue.status == "printing" or printer_queue.is_paused:
+                raise ValueError("Printer queue is no longer available")
+            pending = await db.scalar(
+                select(PrintQueueItem.id)
+                .where(PrintQueueItem.queue_id == printer_queue.id, PrintQueueItem.status.in_(["pending", "printing"]))
+                .limit(1)
+            )
+            if pending is not None:
+                raise ValueError("Printer queue is already occupied")
+            claimed = await db.execute(
+                update(AutoQueueItem)
+                .where(
+                    AutoQueueItem.id == item.id, AutoQueueItem.status == "pending", AutoQueueItem.cancelled_at.is_(None)
+                )
+                .values(status="assigned")
+            )
+            if not claimed.rowcount:
+                raise ValueError("Auto item is no longer pending")
 
-        logger.info(
-            "Auto item %s assigned to printer %s (queue %s, position %d, new pq item %s)",
-            item.id,
-            printer.id,
-            printer_queue.id,
-            next_pos,
-            new_item.id,
-        )
-        return new_item
+            if printer_manager.get_feed_snapshot(
+                printer.id
+            ).marker != plan.snapshot_marker or requirements.source_identity != SourceIdentity.of(
+                Path(requirements.source_identity.path)
+            ):
+                raise ValueError("Filament routing evidence changed while claiming assignment")
+
+            # 4. Build the new per-printer item with copied options
+            new_item = PrintQueueItem(
+                queue_id=printer_queue.id,
+                archive_id=item.archive_id,
+                library_file_id=item.library_file_id,
+                project_id=item.project_id,
+                project_line_id=item.project_line_id,
+                position=next_pos,
+                scheduled_time=item.scheduled_time,
+                manual_start=False,
+                # Carried onto the per-printer row so the gate is re-checked at
+                # dispatch: eligibility only proves the printer was clean at the
+                # moment of routing, and another print can fail in between.
+                require_previous_success=item.require_previous_success,
+                auto_off_after=item.auto_off_after,
+                ams_mapping=ams_mapping_json,
+                filament_routing=serialize_policy(
+                    policy,
+                    archive_id=item.archive_id,
+                    library_file_id=item.library_file_id,
+                    requirements=requirements,
+                    printer_id=printer.id,
+                    exact_model=True,
+                ),
+                nozzle_mapping=item.nozzle_mapping,
+                plate_id=plan.resolved_plate_id,
+                bed_levelling=item.bed_levelling,
+                flow_cali=item.flow_cali,
+                layer_inspect=item.layer_inspect,
+                timelapse=item.timelapse,
+                timelapse_storage=item.timelapse_storage,
+                use_ams=plan.use_ams,
+                mesh_mode_fast_check=item.mesh_mode_fast_check,
+                gcode_injection=item.gcode_injection,
+                execute_swap_macros=item.execute_swap_macros,
+                swap_macro_events=item.swap_macro_events,
+                selected_macro_ids=item.selected_macro_ids,
+                status="pending",
+                batch_id=item.batch_id,
+                created_by_id=item.created_by_id,
+                source_auto_item_id=item.id,
+            )
+            db.add(new_item)
+            await db.flush()
+
+            # 5. Mark auto item as assigned (back-reference + timestamp + clear reason)
+            item.status = "assigned"
+            item.assigned_to_item_id = new_item.id
+            item.assigned_at = datetime.now(timezone.utc)
+            item.waiting_reason = None
+
+            logger.info(
+                "Auto item %s assigned to printer %s (queue %s, position %d, new pq item %s)",
+                item.id,
+                printer.id,
+                printer_queue.id,
+                next_pos,
+                new_item.id,
+            )
+            return new_item
 
     async def _mark_jumped_peers(self, db: AsyncSession, started_item: AutoQueueItem) -> None:
         """SJF starvation guard — mark peers that were skipped.

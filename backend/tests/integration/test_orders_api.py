@@ -2,6 +2,7 @@
 
 import json
 from collections import Counter
+from pathlib import Path
 
 import pytest
 from sqlalchemy import delete, select
@@ -29,6 +30,7 @@ from backend.app.services.order_filing import order_candidates, resolve_line_id
 from backend.app.services.order_metrics import attribute, load_order_context
 from backend.app.services.plan_engine import queued_yield_by_line
 from backend.app.services.product_composition import recipes_for_product
+from backend.tests.fixtures.filament_routing_cases import write_routing_3mf
 from backend.tests.unit.services.test_order_metrics import build_parity_fixture
 from backend.tests.unit.services.test_product_composition import counting_statements
 
@@ -40,11 +42,17 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.fixture
-async def catalog(db_session):
+async def catalog(db_session, tmp_path):
     """One product 'Lamp': 1 shade + 2 arms per unit, 4 screws purchased; one sliced plate yielding 1 shade + 2 arms."""
     file = LibraryFile(
         filename="lamp.gcode.3mf",
-        file_path="lamp",
+        file_path=str(
+            write_routing_3mf(
+                tmp_path / "lamp.gcode.3mf",
+                {1: [{"id": 1, "type": "PETG", "color": "#FFFFFF", "used_g": "1"}]},
+                model="P1S",
+            )
+        ),
         file_size=1,
         file_type="gcode",
         file_metadata={
@@ -1044,7 +1052,27 @@ async def _twin_plate(db, product, *, filename, model, seconds):
     """
     file = LibraryFile(
         filename=filename,
-        file_path=filename,
+        file_path=str(
+            write_routing_3mf(
+                Path(
+                    (
+                        await db.get(
+                            LibraryFile,
+                            (
+                                await db.execute(
+                                    select(ProductPlate.library_file_id).where(ProductPlate.product_id == product.id)
+                                )
+                            )
+                            .scalars()
+                            .first(),
+                        )
+                    ).file_path
+                ).parent
+                / filename,
+                {1: [{"id": 1, "type": "PETG", "color": "#FFFFFF", "used_g": "1"}]},
+                model=model,
+            )
+        ),
         file_size=1,
         file_type="gcode",
         file_metadata={
@@ -1068,6 +1096,7 @@ async def _twin_plate(db, product, *, filename, model, seconds):
 
 
 async def _name_the_catalog_file_a_model(db, file, model):
+    write_routing_3mf(Path(file.file_path), {1: [{"id": 1, "type": "PETG", "used_g": "1"}]}, model=model)
     """``file_metadata`` is a JSON column — mutating the dict in place is not a
     change SQLAlchemy sees, so the whole value is replaced."""
     meta = dict(file.file_metadata or {})
@@ -1173,7 +1202,7 @@ async def test_plan_enqueue_auto_creates_rows_and_the_next_plan_sees_them(commit
     assert {row.library_file_id for row in rows} == {catalog["file"].id}
     # ``plate_index = 0`` is "the whole file", which on a queue row is no plate
     # at all - the slicer's 1-based index is what that column carries.
-    assert {row.plate_id for row in rows} == {None}
+    assert {row.plate_id for row in rows} == {1}
     assert {row.status for row in rows} == {"pending"}
     assert len({row.batch_id for row in rows}) == 1 and all(row.batch_id for row in rows)
 
@@ -1210,7 +1239,7 @@ async def test_plan_enqueue_to_a_printer_fills_that_printers_queue(committing_cl
     assert {row.project_id for row in rows} == {pid}
     assert {row.project_line_id for row in rows} == {line_id}
     assert {row.library_file_id for row in rows} == {catalog["file"].id}
-    assert {row.plate_id for row in rows} == {None}
+    assert {row.plate_id for row in rows} == {1}
     assert {row.status for row in rows} == {"pending"}
     assert len({row.batch_id for row in rows}) == 1 and all(row.batch_id for row in rows)
 
@@ -1738,12 +1767,14 @@ async def test_the_orders_list_reports_what_each_order_page_reports(committing_c
 
 
 @pytest.fixture
-async def three_product_order(committing_client, db_session):
+async def three_product_order(committing_client, db_session, tmp_path):
     """An order with three lines, each on its own product and its own sliced file."""
     files = [
         LibraryFile(
             filename=f"p{i}.gcode.3mf",
-            file_path=f"p{i}",
+            file_path=str(
+                write_routing_3mf(tmp_path / f"p{i}.3mf", {1: [{"id": 1, "type": "PETG", "used_g": "1"}]}, model="P1S")
+            ),
             file_size=1,
             file_type="gcode",
             file_metadata={

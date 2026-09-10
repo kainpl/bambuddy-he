@@ -27,6 +27,7 @@ from backend.app.i18n.api_errors import json_error
 from backend.app.models.archive import PrintArchive
 from backend.app.models.auto_queue import AutoQueueItem
 from backend.app.models.customer import Customer
+from backend.app.models.library import LibraryFile
 from backend.app.models.print_queue import PrintQueueItem
 from backend.app.models.printer import Printer
 from backend.app.models.product import Product, ProductPart, ProductPlate
@@ -77,6 +78,8 @@ from backend.app.schemas.project import (
 )
 from backend.app.services import farm_forecast, filament_needs, order_from_files, part_stock, product_delete
 from backend.app.services.auto_queue_add import add_items_to_auto_queue
+from backend.app.services.filament_intake import require_source_requirements
+from backend.app.services.filament_requirements import PrintRequirementsCache
 from backend.app.services.order_metrics import (
     attribute,
     grouped_figures,
@@ -1749,8 +1752,8 @@ class _ResolvedPlate(NamedTuple):
     line_id: int
     plate_id: int
     library_file_id: int
-    #: The slicer's 1-based plate index, or ``None`` for "the whole file".
-    plate_number: int | None
+    #: The resolved slicer plate; the recipe can still name the whole file.
+    plate_number: int
     count: int
     #: The source file already carries swap macros (``LibraryFile.swap_compatible``).
     baked_swap_macros: bool
@@ -1849,37 +1852,41 @@ async def enqueue_order_plan(
         .all()
     )
     recipes_by_product = await recipes_for_products(db, products)
-    # ``swap_compatible`` rather than the file: the loaded row is wanted for one
-    # boolean, and carrying it would mean importing a model this module has no
-    # other use for.
-    plates_by_product: dict[int, dict[int, tuple[ProductPlate, bool, PlateRecipe]]] = {
-        product_id: {plate.id: (plate, bool(file.swap_compatible), recipe) for plate, file, recipe in rows}
+    # Keep the already-loaded source row for strict plate validation and its
+    # baked swap-macro flag; source validation must finish before any writer.
+    plates_by_product: dict[int, dict[int, tuple[ProductPlate, LibraryFile, PlateRecipe]]] = {
+        product_id: {plate.id: (plate, file, recipe) for plate, file, recipe in rows}
         for product_id, rows in recipes_by_product.items()
     }
     # Plain scalars, read BEFORE the first writer commits, because a commit may
     # expire every instance loaded above it.
     resolved: list[_ResolvedPlate] = []
+    requirements_cache = PrintRequirementsCache()
     for item in data.items:
         line = lines_by_id[item.line_id]
         plates = plates_by_product.get(line.product_id, {})
         entry = plates.get(item.plate_id)
         if entry is None:
             raise HTTPException(status_code=404, detail="Plate not found in this line's product")
-        plate, baked_swap_macros, recipe = entry
+        plate, source_file, recipe = entry
         if not recipe.sliced:
             raise HTTPException(status_code=404, detail="Plate is not sliced")
+        requirements = await require_source_requirements(
+            requirements_cache,
+            library_file=source_file,
+            plate_id=plate.plate_index,
+            product_plate_id=plate.id,
+        )
         resolved.append(
             _ResolvedPlate(
                 line_id=line.id,
                 plate_id=plate.id,
                 library_file_id=plate.library_file_id,
-                # ⚠️ ``plate_index = 0`` means the whole file, which on a queue
-                # row is no plate at all — that column carries the slicer's
-                # 1-based index.
-                plate_number=plate.plate_index or None,
+                # Recipe index zero remains unchanged; only the job is resolved.
+                plate_number=requirements.resolved_plate_id,
                 count=item.count,
-                baked_swap_macros=baked_swap_macros,
-                sliced_for_model=recipe.printer_model,
+                baked_swap_macros=bool(source_file.swap_compatible),
+                sliced_for_model=requirements.model or recipe.printer_model,
             )
         )
 
@@ -1949,12 +1956,14 @@ async def enqueue_order_plan(
                         **options,
                     ),
                     current_user,
+                    requirements_cache=requirements_cache,
                 )
             else:
                 rows, _batch_id = await enqueue_batch_copies(
                     db,
                     printer_id=printer_id,
                     count=plate.count,
+                    requirements_cache=requirements_cache,
                     library_file_id=plate.library_file_id,
                     plate_id=plate.plate_number,
                     project_id=project_id,

@@ -66,6 +66,7 @@ class PrintQueueItem(Base):
 
     # AMS mapping: JSON array of global tray IDs per filament slot
     # Format: "[5, -1, 2, -1]" - position=slot_id-1, value=global tray ID, -1=unused
+    filament_routing: Mapped[str | None] = mapped_column(Text, nullable=True)
     ams_mapping: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Plate ID for multi-plate 3MF files (1-indexed, None = plate 1)

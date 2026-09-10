@@ -4,6 +4,8 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 
+from backend.tests.fixtures.filament_routing_cases import write_routing_3mf
+
 
 async def _create_printer_with_queue(db_session, **printer_kwargs):
     """Helper: create a Printer + its PrinterQueue, return (printer, queue)."""
@@ -65,7 +67,7 @@ class TestPrintQueueAPI:
         return _create_printer
 
     @pytest.fixture
-    async def archive_factory(self, db_session):
+    async def archive_factory(self, db_session, tmp_path):
         """Factory to create test archives."""
         _counter = [0]
 
@@ -78,7 +80,14 @@ class TestPrintQueueAPI:
             defaults = {
                 "filename": f"test_print_{counter}.3mf",
                 "print_name": f"Test Print {counter}",
-                "file_path": f"/tmp/test_print_{counter}.3mf",
+                "file_path": str(
+                    write_routing_3mf(
+                        tmp_path / f"archive-{counter}.3mf",
+                        {i: [{"id": 1, "type": "PLA", "color": "#FFFFFF", "used_g": "1"}] for i in (1, 2, 3, 5)},
+                        model="X1C",
+                    )
+                ),
+                "plate_index": 1,
                 "file_size": 1024,
                 "content_hash": f"testhash{counter:08d}",
                 "status": "completed",
@@ -455,7 +464,7 @@ class TestPrintQueueAPI:
     async def test_update_queue_item_plate_id(self, async_client: AsyncClient, queue_item_factory, db_session):
         """Verify queue item plate_id can be updated."""
         item = await queue_item_factory()
-        response = await async_client.patch(f"/api/v1/queue/{item.id}", json={"plate_id": 5})
+        response = await async_client.patch(f"/api/v1/queue/{item.id}", json={"plate_id": 5, "ams_mapping": None})
         assert response.status_code == 200
         result = response.json()
         assert result["plate_id"] == 5
@@ -743,7 +752,7 @@ class TestQueueStartEndpoint:
         return _create_printer
 
     @pytest.fixture
-    async def archive_factory(self, db_session):
+    async def archive_factory(self, db_session, tmp_path):
         """Factory to create test archives."""
         _counter = [0]
 
@@ -756,7 +765,14 @@ class TestQueueStartEndpoint:
             defaults = {
                 "filename": f"test_print_{counter}.3mf",
                 "print_name": f"Test Print {counter}",
-                "file_path": f"/tmp/test_print_{counter}.3mf",
+                "file_path": str(
+                    write_routing_3mf(
+                        tmp_path / f"archive-{counter}.3mf",
+                        {i: [{"id": 1, "type": "PLA", "color": "#FFFFFF", "used_g": "1"}] for i in (1, 2, 3, 5)},
+                        model="X1C",
+                    )
+                ),
+                "plate_index": 1,
                 "file_size": 1024,
                 "content_hash": f"testhash{counter:08d}",
                 "status": "completed",
@@ -878,7 +894,7 @@ class TestQueueCancelEndpoint:
         return _create_printer
 
     @pytest.fixture
-    async def archive_factory(self, db_session):
+    async def archive_factory(self, db_session, tmp_path):
         """Factory to create test archives."""
 
         async def _create_archive(**kwargs):
@@ -981,7 +997,7 @@ class TestQueueRetryEndpoint:
         return _create_printer
 
     @pytest.fixture
-    async def archive_factory(self, db_session):
+    async def archive_factory(self, db_session, tmp_path):
         _counter = [0]
 
         async def _create_archive(**kwargs):
@@ -1110,7 +1126,7 @@ class TestQueueLibraryFileSupport:
         return _create_printer
 
     @pytest.fixture
-    async def library_file_factory(self, db_session):
+    async def library_file_factory(self, db_session, tmp_path):
         """Factory to create test library files."""
         _counter = [0]
 
@@ -1124,7 +1140,16 @@ class TestQueueLibraryFileSupport:
                 # .gcode.3mf, not a bare .3mf: only a sliced file can be queued,
                 # and every dispatch path has always refused the plain container.
                 "filename": f"library_test_{counter}.gcode.3mf",
-                "file_path": f"/test/library/library_test_{counter}.gcode.3mf",
+                "file_path": str(
+                    write_routing_3mf(
+                        tmp_path / f"library-{counter}.gcode.3mf",
+                        {
+                            i: [{"id": 1, "type": "PLA", "color": "#FFFFFF", "used_g": "1"}]
+                            for i in kwargs.pop("plates", (1,))
+                        },
+                        model="X1C",
+                    )
+                ),
                 "file_size": 2048,
                 "file_type": "3mf",
                 "file_metadata": {"print_name": f"Library Print {counter}", "print_time_seconds": 3600},
@@ -1170,7 +1195,7 @@ class TestQueueLibraryFileSupport:
     ):
         """Verify library file queue item can have all options set."""
         _printer, queue = await printer_factory()
-        lib_file = await library_file_factory()
+        lib_file = await library_file_factory(plates=(1, 2, 3))
 
         data = {
             "queue_id": queue.id,
@@ -1217,7 +1242,7 @@ class TestQueueLibraryFileSupport:
         from backend.app.models.print_queue import PrintQueueItem
 
         _printer, queue = await printer_factory()
-        lib_file = await library_file_factory()
+        lib_file = await library_file_factory(plates=(1, 2, 3))
 
         # Create queue item directly
         item = PrintQueueItem(
@@ -1233,7 +1258,7 @@ class TestQueueLibraryFileSupport:
         # Update the item
         response = await async_client.patch(
             f"/api/v1/queue/{item.id}",
-            json={"auto_off_after": True, "plate_id": 3},
+            json={"auto_off_after": True, "plate_id": 3, "ams_mapping": None},
         )
         assert response.status_code == 200
         result = response.json()
@@ -1301,7 +1326,7 @@ class TestBulkUpdateEndpoint:
         return _create_printer
 
     @pytest.fixture
-    async def archive_factory(self, db_session):
+    async def archive_factory(self, db_session, tmp_path):
         """Factory to create test archives."""
         _counter = [0]
 
@@ -1314,7 +1339,13 @@ class TestBulkUpdateEndpoint:
             defaults = {
                 "filename": f"bulk_test_{counter}.3mf",
                 "print_name": f"Bulk Test Print {counter}",
-                "file_path": f"/tmp/bulk_test_{counter}.3mf",
+                "file_path": str(
+                    write_routing_3mf(
+                        tmp_path / f"bulk_test_{counter}.3mf",
+                        {1: [{"id": 1, "type": "PLA", "color": "#FFFFFF", "used_g": "1"}]},
+                        model="X1C",
+                    )
+                ),
                 "file_size": 1024,
                 "content_hash": f"bulkhash{counter:04d}",
                 "status": "completed",
@@ -1449,9 +1480,9 @@ class TestBulkUpdateEndpoint:
 
         response = await async_client.patch(
             "/api/v1/queue/bulk",
-            json={"item_ids": [item1.id, item2.id], "queue_id": new_queue.id},
+            json={"item_ids": [item1.id, item2.id], "queue_id": new_queue.id, "ams_mapping": None},
         )
-        assert response.status_code == 200
+        assert response.status_code == 200, response.text
 
         await db_session.refresh(item1)
         await db_session.refresh(item2)
@@ -1523,7 +1554,7 @@ class TestAbortedStatusNormalisation:
         return _create_printer
 
     @pytest.fixture
-    async def archive_factory(self, db_session):
+    async def archive_factory(self, db_session, tmp_path):
         """Factory to create test archives."""
         _counter = [0]
 
@@ -1961,7 +1992,7 @@ class TestAbortedStatusNormalisation:
 # print against work nobody ordered.
 
 
-async def _order_catalog(db_session, *, materials):
+async def _order_catalog(db_session, tmp_path, *, materials):
     """A product with one sliced whole-file plate, and an order whose lines carry
     ``materials`` (one line per entry). Returns (library file, project, lines)."""
     from backend.app.models.library import LibraryFile
@@ -1971,7 +2002,13 @@ async def _order_catalog(db_session, *, materials):
 
     lib_file = LibraryFile(
         filename="lamp.gcode.3mf",
-        file_path="lamp.gcode.3mf",
+        file_path=str(
+            write_routing_3mf(
+                tmp_path / "lamp.gcode.3mf",
+                {1: [{"id": 1, "type": "PETG", "color": "#FFFFFF", "used_g": "1"}]},
+                model="X1C",
+            )
+        ),
         file_type="gcode",
         file_size=1,
         file_metadata={
@@ -2015,13 +2052,13 @@ async def _order_catalog(db_session, *, materials):
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_queueing_with_only_an_order_files_the_unambiguous_line(async_client: AsyncClient, db_session):
+async def test_queueing_with_only_an_order_files_the_unambiguous_line(async_client: AsyncClient, db_session, tmp_path):
     from backend.app.models.print_queue import PrintQueueItem
 
     _printer, queue = await _create_printer_with_queue(
         db_session, name="Filing", ip_address="192.168.9.1", serial_number="FILING0001", access_code="12345678"
     )
-    lib_file, order, lines = await _order_catalog(db_session, materials=["PLA", "PETG"])
+    lib_file, order, lines = await _order_catalog(db_session, tmp_path, materials=["PLA", "PETG"])
 
     r = await async_client.post(
         "/api/v1/queue/",
@@ -2037,13 +2074,13 @@ async def test_queueing_with_only_an_order_files_the_unambiguous_line(async_clie
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_queueing_leaves_the_line_null_when_two_lines_are_alike(async_client: AsyncClient, db_session):
+async def test_queueing_leaves_the_line_null_when_two_lines_are_alike(async_client: AsyncClient, db_session, tmp_path):
     from backend.app.models.print_queue import PrintQueueItem
 
     _printer, queue = await _create_printer_with_queue(
         db_session, name="Twins", ip_address="192.168.9.2", serial_number="FILING0002", access_code="12345678"
     )
-    lib_file, order, _lines = await _order_catalog(db_session, materials=["PETG", "PETG"])
+    lib_file, order, _lines = await _order_catalog(db_session, tmp_path, materials=["PETG", "PETG"])
 
     r = await async_client.post(
         "/api/v1/queue/",
@@ -2058,7 +2095,7 @@ async def test_queueing_leaves_the_line_null_when_two_lines_are_alike(async_clie
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_an_explicit_line_is_never_overridden(async_client: AsyncClient, db_session):
+async def test_an_explicit_line_is_never_overridden(async_client: AsyncClient, db_session, tmp_path):
     """The operator's own answer outranks anything derived here — even when the
     material rule would have chosen the other line."""
     from backend.app.models.print_queue import PrintQueueItem
@@ -2066,7 +2103,7 @@ async def test_an_explicit_line_is_never_overridden(async_client: AsyncClient, d
     _printer, queue = await _create_printer_with_queue(
         db_session, name="Explicit", ip_address="192.168.9.3", serial_number="FILING0003", access_code="12345678"
     )
-    lib_file, order, lines = await _order_catalog(db_session, materials=["PLA", "PETG"])
+    lib_file, order, lines = await _order_catalog(db_session, tmp_path, materials=["PLA", "PETG"])
 
     r = await async_client.post(
         "/api/v1/queue/",
@@ -2086,7 +2123,7 @@ async def test_an_explicit_line_is_never_overridden(async_client: AsyncClient, d
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_the_batch_writer_files_the_line_too(db_session):
+async def test_the_batch_writer_files_the_line_too(db_session, tmp_path):
     """``enqueue_batch_copies`` is the third door — the extra copies a
     quantity>1 direct print leaves behind — and it must file the same line the
     first copy went out under, or half a batch is counted and half is not."""
@@ -2096,7 +2133,7 @@ async def test_the_batch_writer_files_the_line_too(db_session):
     printer, _queue = await _create_printer_with_queue(
         db_session, name="Batch", ip_address="192.168.9.4", serial_number="FILING0004", access_code="12345678"
     )
-    lib_file, order, lines = await _order_catalog(db_session, materials=["PLA", "PETG"])
+    lib_file, order, lines = await _order_catalog(db_session, tmp_path, materials=["PLA", "PETG"])
 
     items, _batch = await enqueue_batch_copies(
         db_session, printer_id=printer.id, count=2, library_file_id=lib_file.id, plate_id=1, project_id=order.id
@@ -2112,13 +2149,13 @@ async def test_the_batch_writer_files_the_line_too(db_session):
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_a_queue_row_says_which_order_it_is_filed_under(async_client: AsyncClient, db_session):
+async def test_a_queue_row_says_which_order_it_is_filed_under(async_client: AsyncClient, db_session, tmp_path):
     """``project_name`` rides on the row so the copy-queue dialog can show where
     a copy will land without a second request — and stays None under no order."""
     _printer, queue = await _create_printer_with_queue(
         db_session, name="Named", ip_address="192.168.9.3", serial_number="NAMED00001", access_code="12345678"
     )
-    lib_file, order, _lines = await _order_catalog(db_session, materials=["PETG"])
+    lib_file, order, _lines = await _order_catalog(db_session, tmp_path, materials=["PETG"])
 
     filed = await async_client.post(
         "/api/v1/queue/",

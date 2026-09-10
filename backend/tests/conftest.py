@@ -843,3 +843,16 @@ def assert_no_log_errors(capture_logs):
     errors = capture_logs.get_errors()
     if errors:
         pytest.fail(f"Unexpected log errors:\n{capture_logs.format_errors()}")
+
+
+@pytest.fixture
+async def raw_gcode_source(db_session, tmp_path):
+    """A real raw source for tests about claim bookkeeping, independent of 3MF routing."""
+    from backend.app.models.library import LibraryFile
+
+    path = tmp_path / "claim.gcode"
+    path.write_text("; synthetic raw G-code\n", encoding="utf-8")
+    source = LibraryFile(filename=path.name, file_path=str(path), file_type="gcode", file_size=path.stat().st_size)
+    db_session.add(source)
+    await db_session.commit()
+    return source

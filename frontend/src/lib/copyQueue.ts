@@ -44,6 +44,7 @@ export function copyableItems(items: readonly PrintQueueItem[]): CopyableItem[] 
           source: fromLibrary ? ('library' as const) : ('archive' as const),
           name: item.library_file_name || item.archive_name || `#${item.id}`,
           plateId: item.plate_id,
+          routing: item.filament_routing ?? undefined,
           // What makes two copies of one file and plate two copies, and what
           // tells the run the plate is already decided.
           itemId: item.id,

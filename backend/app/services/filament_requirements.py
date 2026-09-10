@@ -33,6 +33,7 @@ result. Queue/dispatch callers must explicitly adopt that contract.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import math
@@ -91,6 +92,7 @@ class PrintRequirements:
     resolved_plate_id: int | None = None
     gcode_member: str | None = None
     model: str | None = None
+    print_time_seconds: int | None = None
     nozzle_constraints: dict = field(default_factory=dict)
     used_filaments: tuple[UsedFilament, ...] = ()
 
@@ -104,7 +106,7 @@ def _resolve_print_plate(
 ) -> tuple[int, Element, str]:
     if plate_id is not None and (type(plate_id) is not int or plate_id < 0):
         raise _Unavailable("invalid_plate_id")
-    requested = plate_id or archive_plate_id
+    requested = plate_id or (archive_plate_id if plate_id is None else None)
     if requested is not None and (type(requested) is not int or requested <= 0):
         raise _Unavailable("invalid_plate_id")
     plates: dict[int, Element] = {}
@@ -232,6 +234,7 @@ def read_print_requirements(
             resolved_plate_id=resolved,
             gcode_member=gcode,
             model=model,
+            print_time_seconds=(int(metadata["prediction"]) if str(metadata.get("prediction", "")).isdigit() else None),
             nozzle_constraints=constraints,
             used_filaments=slots,
         )
@@ -240,6 +243,41 @@ def read_print_requirements(
     except (OSError, ValueError, KeyError, RuntimeError, zipfile.BadZipFile, ET.ParseError, DefusedXmlException):
         logger.warning("Cannot read print requirements from %s", path, exc_info=True)
         return PrintRequirements(status="unavailable", reason="source_unreadable", source_identity=identity)
+
+
+class PrintRequirementsCache:
+    """One request/tick's revision-aware reads, with ZIP work off the event loop."""
+
+    def __init__(self):
+        self._results: dict[tuple[SourceIdentity, int | None, int | None], PrintRequirements] = {}
+
+    async def read(
+        self, file_path: Path | str | None, plate_id: int | None = None, *, archive_plate_id: int | None = None
+    ) -> PrintRequirements:
+        if plate_id is not None and (type(plate_id) is not int or plate_id < 0):
+            return PrintRequirements(status="unavailable", reason="invalid_plate_id")
+        if (
+            plate_id is None
+            and archive_plate_id is not None
+            and (type(archive_plate_id) is not int or archive_plate_id <= 0)
+        ):
+            return PrintRequirements(status="unavailable", reason="invalid_plate_id")
+        if file_path is None:
+            return PrintRequirements(status="unavailable", reason="source_unreadable")
+        path = Path(file_path)
+        try:
+            identity = await asyncio.to_thread(SourceIdentity.of, path)
+        except OSError:
+            return PrintRequirements(status="unavailable", reason="source_unreadable")
+        key = (identity, plate_id or None, archive_plate_id if plate_id is None else None)
+        if key not in self._results:
+            result = await asyncio.to_thread(read_print_requirements, path, plate_id, archive_plate_id=archive_plate_id)
+            if result.source_identity != identity:
+                return PrintRequirements(status="unavailable", reason="source_changed", source_identity=identity)
+            self._results[key] = result
+            if result.status == "ok":
+                self._results[(identity, result.resolved_plate_id, None)] = result
+        return self._results[key]
 
 
 def extract_filament_requirements(file_path: Path | str, plate_id: int | None = None) -> list[dict]:

@@ -83,9 +83,12 @@ class TestRetroStampAutoItem:
             "a.3mf", {"timelapse": True, "bed_leveling": False, "nozzle_mapping": [1, 0]}
         )
 
-        assert row.timelapse is True
-        assert row.bed_levelling is False
-        assert row.nozzle_mapping == json.dumps([1, 0])
+        statement = db.execute.await_args_list[1].args[0]
+        params = statement.compile().params
+        assert params["timelapse"] is True
+        assert params["bed_levelling"] is False
+        assert params["nozzle_mapping"] == json.dumps([1, 0])
+        assert "pending" in params.values()
         db.commit.assert_awaited_once()
         assert "a.3mf" not in vp._recent_auto_items
 

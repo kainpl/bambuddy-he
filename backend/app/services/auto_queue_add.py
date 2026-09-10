@@ -37,34 +37,19 @@ from backend.app.models.project_line import ProjectLine
 from backend.app.models.user import User
 from backend.app.schemas.auto_queue import AutoQueueItemCreate
 from backend.app.schemas.calibration_mode import mode_to_bool
-from backend.app.services.auto_queue_threemf import extract_auto_queue_requirements
-from backend.app.services.filament_requirements import overrides_for_plate
+from backend.app.services.filament_intake import require_source_requirements, routing_detail
+from backend.app.services.filament_policy import feed_policy
+from backend.app.services.filament_requirements import PrintRequirementsCache
 from backend.app.services.order_filing import line_filer
 from backend.app.utils.printer_models import normalize_model_name
-
-
-def _resolve_source_path(archive: PrintArchive | None, library_file: LibraryFile | None):
-    """The 3MF on disk behind the request, or ``None``.
-
-    Used at create-time to auto-fill routing inputs (target model, filament
-    types, print time) from the source file.
-    """
-    from pathlib import Path
-
-    from backend.app.core.config import settings as app_settings
-
-    if archive and archive.file_path:
-        return app_settings.base_dir / archive.file_path
-    if library_file and library_file.file_path:
-        p = Path(library_file.file_path)
-        return p if p.is_absolute() else app_settings.base_dir / library_file.file_path
-    return None
 
 
 async def add_items_to_auto_queue(
     db: AsyncSession,
     data: AutoQueueItemCreate,
     current_user: User | None,
+    *,
+    requirements_cache: PrintRequirementsCache | None = None,
 ) -> list[AutoQueueItem]:
     """Validate, build and persist the auto-queue rows ``data`` asks for.
 
@@ -119,7 +104,11 @@ async def add_items_to_auto_queue(
     # Auto-extract target_model + required_filament_types + print_time from 3MF
     # when not explicitly provided. Done per-plate so multi-plate items get
     # accurate per-plate info.
-    file_path = _resolve_source_path(archive, library_file)
+    cache = requirements_cache or PrintRequirementsCache()
+    resolved = [(plate, await require_source_requirements(cache, archive, library_file, plate)) for plate in plate_ids]
+    used_slots = {f["slot_id"] for _, req in resolved for f in req.used_filaments}
+    if any(o.slot_id not in used_slots for o in data.filament_overrides or []):
+        raise HTTPException(422, routing_detail("override_slot_not_used"))
 
     # Compute next position (auto-queue is global, single ordering)
     max_pos_q = await db.execute(
@@ -161,7 +150,8 @@ async def add_items_to_auto_queue(
 
     items: list[AutoQueueItem] = []
     pos_offset = 0
-    for plate_id in plate_ids:
+    for requested_plate_id, reqs in resolved:
+        plate_id = reqs.resolved_plate_id
         # The order without the line — file it ourselves when this plate points
         # at exactly one (spec pass 7, Decision 4a). ⚠️ **Per plate, inside the
         # fan-out**, not once for the request: a multi-plate 3MF can hold two
@@ -178,23 +168,21 @@ async def add_items_to_auto_queue(
         # but a row that keeps "C12" shows "C12" everywhere it is named.
         target_model = normalize_model_name(data.target_model)
         required_types = data.required_filament_types
-        print_time = None
-        if file_path is not None and file_path.exists():
-            reqs = extract_auto_queue_requirements(file_path, plate_id=plate_id)
-            if not target_model and reqs.target_model:
-                target_model = reqs.target_model
-            if required_types is None and reqs.required_filament_types:
-                required_types = reqs.required_filament_types
-            print_time = reqs.print_time_seconds
+        print_time = reqs.print_time_seconds
+        if not target_model:
+            target_model = reqs.model
+        if required_types is None:
+            required_types = list(dict.fromkeys(f["type"] for f in reqs.used_filaments))
 
         required_types_json = json.dumps(required_types) if required_types is not None else None
 
         # Narrow force-colour overrides to the slots THIS plate prints (#2551) —
         # otherwise a single-colour plate waits on every colour in the batch.
-        plate_overrides = overrides_for_plate(overrides_list, file_path, plate_id)
+        used_slots = {f["slot_id"] for f in reqs.used_filaments}
+        plate_overrides = [o for o in overrides_list if o["slot_id"] in used_slots]
         plate_overrides_json = json.dumps(plate_overrides) if plate_overrides else None
 
-        for _ in range(_quantity_for(plate_id)):
+        for _ in range(_quantity_for(requested_plate_id)):
             pos_offset += 1
             items.append(
                 AutoQueueItem(
@@ -213,6 +201,7 @@ async def add_items_to_auto_queue(
                     layer_inspect=data.layer_inspect,
                     timelapse=data.timelapse,
                     timelapse_storage=data.timelapse_storage,
+                    feed_policy=feed_policy(data.feed_policy, data.use_ams),
                     use_ams=data.use_ams,
                     mesh_mode_fast_check=data.mesh_mode_fast_check,
                     execute_swap_macros=data.execute_swap_macros,

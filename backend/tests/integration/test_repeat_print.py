@@ -390,3 +390,38 @@ class TestRepeatingSomethingWithNoFileIsRefused:
 
         assert again.status == "pending"
         assert again.archive_id is None
+
+
+async def test_repeat_retains_rules_and_original_archive_after_execution_rewrite(db_session, printer_factory, tmp_path):
+    import json
+
+    from backend.app.services.filament_policy import serialize_policy
+    from backend.app.services.filament_routing import RoutingPolicy
+
+    printer, _, row = await _finished(db_session, printer_factory)
+    row.library_file_id = None
+    policy = RoutingPolicy(
+        force_color_match=False, filament_overrides=({"slot_id": 2, "force_color_match": True, "color": "#FF0000"},)
+    )
+    saved = json.loads(serialize_policy(policy, archive_id=5, plate_id=2, printer_id=printer.id))
+    saved["runtime"] = {"blocked_revision": "old"}
+    row.filament_routing = json.dumps(saved)
+    await db_session.commit()
+    # The source guard of Repeat requires an actual archive row/file for archive-only rows.
+    from backend.app.models.archive import PrintArchive
+
+    source_path = tmp_path / "original.3mf"
+    source_path.write_bytes(b"repeat source")
+    db_session.add_all(
+        [
+            PrintArchive(id=i, filename="original.3mf", file_path=str(source_path), file_size=1, status="completed")
+            for i in (5, 7)
+        ]
+    )
+    await db_session.commit()
+    again = await answer_by_repeating(db_session, printer.id)
+    assert again.archive_id == 5
+    snapshot = json.loads(again.filament_routing)
+    assert snapshot["force_color_match"] is False
+    assert snapshot["filament_overrides"] == list(policy.filament_overrides)
+    assert "runtime" not in snapshot

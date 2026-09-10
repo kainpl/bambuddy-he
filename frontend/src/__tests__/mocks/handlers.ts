@@ -87,6 +87,14 @@ const mockPrinters = [
 ];
 
 export const handlers = [
+  http.post('/api/v1/auto-queue/routing-preview', async ({ request }) => {
+    const data = await request.json() as { plate_ids: number[] };
+    return HttpResponse.json({ plates: data.plate_ids.map(id => ({
+      requested_plate_id: id, plate_id: id || 1, model: 'X1C', status: 'ok', reason: null,
+      filaments: [{ slot_id: 1, type: 'PLA', color: '#FFFFFF', nozzle_id: null, used_grams: 1 }],
+      groups: [],
+    })) });
+  }),
   // ========================================================================
   // Smart Plugs
   // ========================================================================

@@ -3988,6 +3988,7 @@ export type CalibrationMode = 'off' | 'auto' | 'on';
 
 // Print Queue types
 export interface PrintQueueItem {
+  filament_routing?: FilamentRoutingSnapshot | null;
   id: number;
   queue_id: number;
   printer_id?: number | null;  // Convenience - resolved from queue
@@ -4154,6 +4155,9 @@ export interface OrderNeeds { project_id: number; rows: NeedRow[]; unknown_print
 export interface FarmNeeds { rows: FarmRow[]; orders_count: number; unknown_prints: number; stock_unavailable: boolean; assumptions: string[] }
 
 export interface PrintQueueItemCreate {
+  feed_policy?: FeedPolicy;
+  force_color_match?: boolean;
+  filament_overrides?: AutoQueueFilamentOverride[];
   queue_id: number;  // Required - which printer's queue
   archive_id?: number | null;
   library_file_id?: number | null;
@@ -4185,6 +4189,9 @@ export interface PrintQueueItemCreate {
 }
 
 export interface PrintQueueItemUpdate {
+  feed_policy?: FeedPolicy;
+  force_color_match?: boolean;
+  filament_overrides?: AutoQueueFilamentOverride[];
   queue_id?: number | null;  // Move to different queue
   position?: number;
   scheduled_time?: string | null;
@@ -4260,6 +4267,31 @@ export interface PrintQueueBulkUpdateResponse {
   message: string;
 }
 
+export type FeedPolicy = 'auto' | 'ams_only' | 'external_only';
+export interface FilamentRoutingSnapshot {
+  version: number;
+  mode: 'auto' | 'pinned';
+  feed_policy: FeedPolicy;
+  force_color_match: boolean;
+  filament_overrides: AutoQueueFilamentOverride[];
+  review_required?: boolean;
+}
+export interface RoutingPreview {
+  advisory_unavailable?: boolean;
+  evaluated_at?: string;
+  plates: {
+    requested_plate_id: number;
+    plate_id: number | null;
+    status: 'ok' | 'unavailable';
+    reason: { code: string; message: string } | null;
+    model: string | null;
+    filaments: { slot_id: number; type: string; color: string | null; nozzle_id: number | null; used_grams: number }[];
+    groups: { key: string; model: string; nozzles: number; ams: 'present' | 'absent' | 'unknown';
+      total: number; compatible: number; unknown: number; incompatible: number; ready: number;
+      reasons: { code: string; message: string; count: number }[] }[];
+  }[];
+}
+
 // Auto Queue types — see backend/app/schemas/auto_queue.py
 export interface AutoQueueFilamentOverride {
   slot_id: number;
@@ -4273,6 +4305,7 @@ export interface AutoQueueFilamentOverride {
 }
 
 export interface AutoQueueItem {
+  feed_policy?: FeedPolicy;
   id: number;
   archive_id: number | null;
   library_file_id: number | null;
@@ -4327,6 +4360,7 @@ export interface AutoQueueStats {
 }
 
 export interface AutoQueueItemCreate {
+  feed_policy?: FeedPolicy;
   archive_id?: number | null;
   library_file_id?: number | null;
   project_id?: number | null;
@@ -4360,6 +4394,7 @@ export interface AutoQueueItemCreate {
 }
 
 export interface AutoQueueItemUpdate {
+  feed_policy?: FeedPolicy;
   position?: number | null;
   target_model?: string | null;
   target_location_id?: number | null;
@@ -8781,6 +8816,10 @@ export const api = {
     const qs = params.toString();
     return request<AutoQueueItem[]>(`/auto-queue/${qs ? `?${qs}` : ''}`);
   },
+  previewAutoQueueRouting: (data: { archive_id?: number; library_file_id?: number; plate_ids: number[];
+    target_location_id?: number | null; feed_policy?: FeedPolicy; force_color_match: boolean;
+    filament_overrides?: AutoQueueFilamentOverride[] }) =>
+    request<RoutingPreview>('/auto-queue/routing-preview', { method: 'POST', body: JSON.stringify(data) }),
   getAutoQueueStats: () => request<AutoQueueStats>('/auto-queue/stats'),
   getAutoQueueItem: (id: number) => request<AutoQueueItem>(`/auto-queue/${id}`),
   addToAutoQueue: (data: AutoQueueItemCreate) =>

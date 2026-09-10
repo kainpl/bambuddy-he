@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 from backend.app.schemas.archive import PaginationMeta
 from backend.app.schemas.calibration_mode import CalibrationMode
+from backend.app.schemas.filament_routing import FilamentRoutingChoices
 from backend.app.schemas.timelapse import TimelapseStorage
 
 
@@ -348,7 +349,7 @@ class FileMoveRequest(BaseModel):
     folder_id: int | None = None  # None = move to root
 
 
-class FilePrintRequest(BaseModel):
+class FilePrintRequest(FilamentRoutingChoices):
     """Schema for printing a file from the library.
 
     Note: printer_id is passed as a query parameter, not in the body.

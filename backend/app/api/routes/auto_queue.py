@@ -47,13 +47,25 @@ from backend.app.schemas.auto_queue import (
     AutoQueueStatsResponse,
 )
 from backend.app.schemas.calibration_mode import derive_mode, mode_to_bool
+from backend.app.schemas.filament_routing import RoutingPreviewRequest
 from backend.app.services.auto_queue_add import add_items_to_auto_queue
 from backend.app.services.auto_queue_eligibility import find_eligible_printer
+from backend.app.services.filament_preview import routing_preview
 from backend.app.utils.printer_models import normalize_model_name
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auto-queue", tags=["auto-queue"])
+
+
+@router.post("/routing-preview")
+async def preview_routing(
+    data: RoutingPreviewRequest,
+    db: AsyncSession = Depends(get_db),
+    _: User | None = RequirePermission(Permission.QUEUE_CREATE),
+    user: User | None = RequirePermission(Permission.PRINTERS_READ),
+):
+    return await routing_preview(db, data, user)
 
 
 def _to_response(item: AutoQueueItem) -> AutoQueueItemResponse:
@@ -109,6 +121,7 @@ def _to_response(item: AutoQueueItem) -> AutoQueueItemResponse:
         layer_inspect=item.layer_inspect,
         timelapse=item.timelapse,
         timelapse_storage=item.timelapse_storage,
+        feed_policy=item.feed_policy or "auto",
         use_ams=item.use_ams,
         mesh_mode_fast_check=item.mesh_mode_fast_check,
         execute_swap_macros=item.execute_swap_macros,
@@ -238,6 +251,7 @@ async def auto_queue_stats(
     """
     result = await db.execute(
         select(PrintArchive.status, func.count())
+        .where(func.coalesce(PrintArchive.extra_data["dispatch_aborted"].as_boolean(), False).is_(False))
         .where(PrintArchive.from_auto_queue.is_(True))
         .group_by(PrintArchive.status)
     )
@@ -303,6 +317,11 @@ async def update_auto_queue_item(
 
 def _apply_item_update(item: AutoQueueItem, update_data: dict) -> None:
     """Field-by-field update shared by the single-item and batch PUTs."""
+    update_data = dict(update_data)
+    if update_data.get("feed_policy") is None:
+        update_data.pop("feed_policy", None)
+        if update_data.get("use_ams") is not None:
+            update_data["feed_policy"] = "auto" if update_data["use_ams"] else "external_only"
     for key, value in update_data.items():
         if key == "filament_overrides" and value is not None:
             value = json.dumps([o if isinstance(o, dict) else o.model_dump() for o in value])
@@ -462,14 +481,15 @@ async def assign_now(
     busy_result = await db.execute(select(PrinterQueue.printer_id).where(PrinterQueue.status == "printing"))
     busy_printers: set[int] = {pid for (pid,) in busy_result.all()}
 
-    printer, reason = await find_eligible_printer(db, item, busy_printers)
+    eligible = await find_eligible_printer(db, item, busy_printers)
+    printer, reason = eligible
     if printer is None:
         if reason:
             item.waiting_reason = reason
             await db.commit()
         raise HTTPException(409, reason or "No eligible printer available")
 
-    await auto_queue_scheduler._assign(db, item, printer)
+    await auto_queue_scheduler._assign(db, item, printer, plan=eligible.plan, requirements=eligible.requirements)
     await db.commit()
     await db.refresh(item)
     return _to_response(item)

@@ -1,4 +1,37 @@
 export default {
+  filamentRouting: {
+    copyReview: "This copy had a manual filament mapping. Check the mapping for the destination printer before queuing.",
+    copyRules: "This copy keeps its source feed and color rules. Automatic routing will validate them again before printing.",
+
+    advisoryUnavailable: "Live printer compatibility is unavailable. You can queue this file; it will wait for a compatible printer.",
+    "feedPolicy": "Filament source",
+    "feedAuto": "Automatic: AMS or external spool",
+    "feedAms": "AMS only",
+    "feedExternal": "External spools only",
+    "loading": "Reading plate requirements and checking printers…",
+    "failed": "Could not verify this source. Retry before adding it to the queue.",
+    "retry": "Retry",
+    "plate": "Plate {{id}}",
+    "channel": "Channel {{id}}",
+    "nozzle": "Nozzle {{id}}",
+    "material": "Material",
+    "materialForChannel": "Material for channel {{id}}",
+    "color": "Color",
+    "colorForChannel": "Color for channel {{id}}",
+    "pinColor": "Require this color",
+    "reset": "Reset channel",
+    "compatibilityHint": "Compatibility reflects the loaded filament. Ready also accounts for the printer state; dispatch checks again before starting.",
+    "noPrinters": "No matching printers yet. This valid job can wait in AutoQueue.",
+    "nozzles_one": "{{count}} nozzle",
+    "nozzles_few": "{{count}} nozzles",
+    "nozzles_many": "{{count}} nozzles",
+    "nozzles_other": "{{count}} nozzles",
+    "ams_present": "AMS connected",
+    "ams_absent": "Without AMS",
+    "ams_unknown": "AMS state unknown",
+    "counts": "Compatible: {{compatible}}/{{total}} · Ready: {{ready}}",
+    "nextFileReview": "Channel choices apply to this file. The next file in the group will open a dialog."
+},
   // Navigation
   nav: {
     printers: 'Printers',

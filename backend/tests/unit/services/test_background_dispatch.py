@@ -14,7 +14,7 @@ from backend.app.services.background_dispatch import (
 
 
 @pytest.fixture
-def dispatch_claim_db(monkeypatch, db_session):
+async def dispatch_claim_db(monkeypatch, db_session, tmp_path):
     """Point the enqueue path's claim at the test session.
 
     ⚠️ Required by every test that reaches ``_dispatch``: accepting a direct
@@ -30,6 +30,29 @@ def dispatch_claim_db(monkeypatch, db_session):
         yield db_session
 
     monkeypatch.setattr("backend.app.services.background_dispatch.async_session", _session_ctx)
+    from backend.app.models.archive import PrintArchive
+    from backend.app.models.library import LibraryFile
+    from backend.tests.fixtures.filament_routing_cases import write_routing_3mf
+
+    path = write_routing_3mf(
+        tmp_path / "cube.gcode.3mf",
+        {
+            2: [
+                {"id": 1, "type": "PLA", "color": "#FFFFFF", "used_g": "1"},
+            ]
+        },
+    )
+    db_session.add_all(
+        [
+            LibraryFile(
+                id=22, filename=path.name, file_path=str(path), file_type="gcode", file_size=path.stat().st_size
+            ),
+            PrintArchive(
+                id=1, filename=path.name, file_path=str(path), file_size=path.stat().st_size, status="completed"
+            ),
+        ]
+    )
+    await db_session.commit()
 
 
 @pytest.mark.asyncio
@@ -129,7 +152,9 @@ async def test_the_claim_a_direct_print_takes_says_it_is_direct(dispatch_claim_d
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_a_direct_print_carries_the_line_the_claim_resolved(dispatch_claim_db, db_session, printer_factory):
+async def test_a_direct_print_carries_the_line_the_claim_resolved(
+    dispatch_claim_db, db_session, printer_factory, tmp_path
+):
     """⚠️ The claim resolves the order LINE; the job is what stamps the ARCHIVE.
 
     ``claim_printer_for_direct_print`` files the line when the caller named only
@@ -151,9 +176,12 @@ async def test_a_direct_print_carries_the_line_the_claim_resolved(dispatch_claim
 
     printer = await printer_factory()
     db_session.add(PrinterQueue(id=printer.id, printer_id=printer.id))
+    from backend.tests.fixtures.filament_routing_cases import write_routing_3mf
+
+    path = write_routing_3mf(tmp_path / "lamp.gcode.3mf", {1: [{"id": 1, "type": "PETG", "used_g": "1"}]})
     file = LibraryFile(
         filename="lamp.gcode.3mf",
-        file_path="lamp.gcode.3mf",
+        file_path=str(path),
         file_type="gcode",
         file_size=1,
         file_metadata={

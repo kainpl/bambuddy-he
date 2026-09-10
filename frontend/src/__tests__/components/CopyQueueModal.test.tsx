@@ -80,6 +80,12 @@ function renderModal(items: PrintQueueItem[], droppedCount = 0) {
 }
 
 describe('what can be copied', () => {
+  it('carries explicit relaxed color and file-local slot rules on a copy', () => {
+    const routing = { version: 1, mode: 'auto' as const, feed_policy: 'external_only' as const,
+      force_color_match: false, filament_overrides: [{ slot_id: 3, color: '#FF0000', force_color_match: true }] };
+    expect(copyableItems([item({ filament_routing: routing })])[0].file.routing).toEqual(routing);
+  });
+
   it('carries the plate with the item — the same file has the same plates', () => {
     expect(copyableItems([item({ plate_id: 3 })])[0].file.plateId).toBe(3);
   });

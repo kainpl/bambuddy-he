@@ -206,7 +206,7 @@ def _copy_item_fields(src: PrintQueueItem, new_batch_id: str | None, new_positio
     column is added and forgotten; it also pins what is deliberately NOT
     carried, and why.
     """
-    return PrintQueueItem(
+    item = PrintQueueItem(
         queue_id=src.queue_id,
         archive_id=src.archive_id,
         library_file_id=src.library_file_id,
@@ -222,6 +222,7 @@ def _copy_item_fields(src: PrintQueueItem, new_batch_id: str | None, new_positio
         auto_off_after=src.auto_off_after,
         require_previous_success=src.require_previous_success,
         ams_mapping=src.ams_mapping,
+        filament_routing=src.filament_routing,
         nozzle_mapping=src.nozzle_mapping,
         plate_id=src.plate_id,
         bed_levelling=src.bed_levelling,
@@ -245,6 +246,11 @@ def _copy_item_fields(src: PrintQueueItem, new_batch_id: str | None, new_positio
         batch_id=new_batch_id,
         created_by_id=src.created_by_id,
     )
+
+    from backend.app.services.filament_policy import restore_routing_source
+
+    restore_routing_source(item)
+    return item
 
 
 async def clone_item(db: AsyncSession, item_id: int, keep_batch: bool = True) -> PrintQueueItem | None:

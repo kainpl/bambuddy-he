@@ -96,7 +96,7 @@ def patches():
 def _assert_nothing_was_refused(service, patches, job):
     service._release_direct_claim.assert_not_awaited()
     patches.report_failure.assert_not_awaited()
-    assert job.outcome == {}
+    assert job.outcome == {"success": False, "archive_id": None, "error": None, "cancelled": False, "deferred": False}
 
 
 @pytest.mark.asyncio
@@ -110,7 +110,7 @@ async def test_a_direct_print_is_refused_before_it_would_wait(service, job_facto
     # Refusing after the wait would be no refusal at all.
     patches.acquire.assert_not_awaited()
     service._run_reprint_archive.assert_not_awaited()
-    assert job.outcome == {"success": False, "archive_id": None, "error": REASON, "cancelled": False}
+    assert job.outcome == {"success": False, "archive_id": None, "error": REASON, "cancelled": False, "deferred": False}
     # queue_error=False: the item failed, the queue did not (Ruling 13).
     service._release_direct_claim.assert_awaited_once_with(job, status="failed", queue_error=False)
     service._mark_job_finished.assert_awaited_once_with(job, failed=True, message=REASON)
@@ -220,13 +220,15 @@ def dispatch_db(monkeypatch, db_session):
     monkeypatch.setattr("backend.app.services.background_dispatch.async_session", _session_ctx)
 
 
-async def _real_claim(db_session, printer_factory):
+async def _real_claim(db_session, printer_factory, raw_gcode_source):
     """The claim a direct print actually takes at submit, through its own writer."""
     from backend.app.models.printer_queue import PrinterQueue
     from backend.app.services.queue_batch import claim_printer_for_direct_print
 
     printer = await printer_factory()
-    item = await claim_printer_for_direct_print(db_session, printer_id=printer.id, origin="direct")
+    item = await claim_printer_for_direct_print(
+        db_session, printer_id=printer.id, origin="direct", library_file_id=raw_gcode_source.id
+    )
     await db_session.commit()
     queue = await db_session.get(PrinterQueue, item.queue_id)
     job = PrintDispatchJob(
@@ -238,18 +240,20 @@ async def _real_claim(db_session, printer_factory):
         printer_name=printer.name,
         queue_item_id=item.id,
     )
-    job.outcome = {"success": False, "archive_id": None, "error": REASON, "cancelled": False}
+    job.outcome = {"success": False, "archive_id": None, "error": REASON, "cancelled": False, "deferred": False}
     return queue, item, job
 
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_a_refusal_fails_the_item_and_leaves_the_queue_idle(db_session, printer_factory, dispatch_db):
+async def test_a_refusal_fails_the_item_and_leaves_the_queue_idle(
+    db_session, printer_factory, dispatch_db, raw_gcode_source
+):
     """⚠️ Ruling 13. ``check_queue`` skips every item in a queue whose status is
     ``error``, so failing the queue for a refusal would freeze exactly the queue
     strict mode exists to protect."""
     service = BackgroundDispatchService()
-    queue, item, job = await _real_claim(db_session, printer_factory)
+    queue, item, job = await _real_claim(db_session, printer_factory, raw_gcode_source)
 
     await service._release_direct_claim(job, status="failed", queue_error=False)
 
@@ -263,10 +267,10 @@ async def test_a_refusal_fails_the_item_and_leaves_the_queue_idle(db_session, pr
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_a_real_failure_still_puts_the_queue_in_error(db_session, printer_factory, dispatch_db):
+async def test_a_real_failure_still_puts_the_queue_in_error(db_session, printer_factory, dispatch_db, raw_gcode_source):
     """The default did not move: a dispatch that broke still stops the queue."""
     service = BackgroundDispatchService()
-    queue, item, job = await _real_claim(db_session, printer_factory)
+    queue, item, job = await _real_claim(db_session, printer_factory, raw_gcode_source)
 
     await service._release_direct_claim(job, status="failed")
 

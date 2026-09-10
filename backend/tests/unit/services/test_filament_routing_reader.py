@@ -57,7 +57,7 @@ def test_whole_file_resolves_actual_single_plate(tmp_path, index, requested):
     [
         (None, None, None, "plate_selection_required"),
         (None, 4, 4, None),
-        (0, 4, 4, None),
+        (0, 4, None, "plate_selection_required"),
         (1, 4, 1, None),
         (2, 4, None, "plate_not_found"),
         (1, -1, 1, None),

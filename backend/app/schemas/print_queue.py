@@ -4,6 +4,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, Field, PlainSerializer, model_validator
 
 from backend.app.schemas.calibration_mode import CalibrationMode
+from backend.app.schemas.filament_routing import FilamentRoutingChoices
 from backend.app.schemas.timelapse import TimelapseStorage
 from backend.app.utils.temperature_limits import MAX_CHAMBER_TEMP_C
 
@@ -18,7 +19,7 @@ def serialize_utc_datetime(dt: datetime | None) -> str | None:
 UTCDatetime = Annotated[datetime | None, PlainSerializer(serialize_utc_datetime)]
 
 
-class PrintQueueItemCreate(BaseModel):
+class PrintQueueItemCreate(FilamentRoutingChoices):
     queue_id: int  # Required - which printer's queue to add to
     # Either archive_id OR library_file_id must be provided
     archive_id: int | None = None
@@ -30,7 +31,7 @@ class PrintQueueItemCreate(BaseModel):
     # failure (m116). Off by default — a gate nobody asked for is a stalled farm.
     require_previous_success: bool = False
     ams_mapping: list[int] | None = None
-    plate_id: int | None = None
+    plate_id: int | None = Field(default=None, ge=0)
     # Print options — bed_levelling / flow_cali / nozzle_offset_cali are
     # tri-state (off/auto/on); the CalibrationMode field also accepts a legacy
     # bool (True->'on', False->'off') so older API clients keep working.
@@ -65,7 +66,7 @@ class PrintQueueItemCreate(BaseModel):
     project_line_id: int | None = None
 
 
-class PrintQueueItemUpdate(BaseModel):
+class PrintQueueItemUpdate(FilamentRoutingChoices):
     queue_id: int | None = None  # Move to different printer's queue
     position: int | None = None
     scheduled_time: datetime | None = None
@@ -73,7 +74,7 @@ class PrintQueueItemUpdate(BaseModel):
     manual_start: bool | None = None
     require_previous_success: bool | None = None
     ams_mapping: list[int] | None = None
-    plate_id: int | None = None
+    plate_id: int | None = Field(default=None, ge=0)
     # Print options — tri-state calibration (off/auto/on) or legacy bool; None
     # (field unset) means "leave unchanged".
     bed_levelling: CalibrationMode | None = None
@@ -97,6 +98,7 @@ class PrintQueueItemUpdate(BaseModel):
 
 
 class PrintQueueItemResponse(BaseModel):
+    filament_routing: dict | None = None
     id: int
     queue_id: int
     printer_id: int | None = None  # Convenience - resolved from queue
@@ -128,7 +130,7 @@ class PrintQueueItemResponse(BaseModel):
     manual_start: bool
     require_previous_success: bool = False
     ams_mapping: list[int] | None = None
-    plate_id: int | None = None
+    plate_id: int | None = Field(default=None, ge=0)
     # Print options — tri-state calibration (off/auto/on). Derived server-side
     # from the *_mode column (falling back to the legacy bool) in _enrich_response.
     bed_levelling: CalibrationMode = "on"
@@ -227,8 +229,10 @@ class PrintQueueBatchCreate(BaseModel):
     item_ids: list[int]
 
 
-class PrintQueueBulkUpdate(BaseModel):
+class PrintQueueBulkUpdate(FilamentRoutingChoices):
     """Bulk update multiple queue items with the same values."""
+
+    ams_mapping: list[int] | None = None
 
     item_ids: list[int]
     queue_id: int | None = None  # Move all to different queue
