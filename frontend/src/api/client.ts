@@ -1722,6 +1722,9 @@ export interface LinePlan {
   candidates: number[];
   /** `ProductPlate` ids skipped because they are not sliced. */
   not_sliced: number[];
+  /** This line's pending, unassigned auto-queue rows — the Rebalance button shows off it.
+   *  Optional: a server that predates the field says nothing, which reads as 0. */
+  pending_auto_prints?: number;
 }
 
 export interface PlanTotals {
@@ -1835,6 +1838,20 @@ export interface PlanEnqueueCreated {
 
 export interface PlanEnqueueResponse {
   created: PlanEnqueueCreated[];
+}
+
+export interface RebalanceSkipped {
+  item_id: number;
+  /** One of the backend's closed list — translated under `autoQueue.rebalance.skipped.<reason>`. */
+  reason: string;
+}
+
+export interface RebalanceResult {
+  converted: number;
+  created: number;
+  cancelled: number;
+  moved_parts: number;
+  skipped: RebalanceSkipped[];
 }
 
 // ---- customers ----
@@ -2561,6 +2578,7 @@ export interface AppSettings {
   ams_humidity_thresholds: string;  // JSON blob of per-filament humidity thresholds (#1605)
   // Auto-queue routing
   queue_shortest_first: boolean;  // SJF + been_jumped guard for the auto-queue scheduler
+  auto_queue_rebalance_models: boolean;  // Move an order line's pending prints to idle printers of another model when that finishes sooner (spec 2026-09-10)
   auto_order_for_batches: boolean;  // A multi-print batch from the print dialog proposes a new order when nothing open needs the plate
   prefer_lowest_filament: boolean;  // Drain the emptiest compatible spool first — honoured by AutoQueue AND by the Print dialog's auto-match
   // Preheat & heat-soak before queued prints (#1468)
@@ -4373,6 +4391,7 @@ export interface AutoQueueItem {
   archive_id: number | null;
   library_file_id: number | null;
   project_id: number | null;
+  project_line_id?: number | null;
   target_model: string | null;
   target_location: PrinterLocation | null;
   target_location_id: number | null;
@@ -4404,6 +4423,9 @@ export interface AutoQueueItem {
   print_time_seconds: number | null;
   been_jumped: boolean;
   batch_id: string | null;
+  /** m171: set when the rebalancer moved this row's work here from another model. */
+  rebalanced_at?: string | null;
+  rebalanced_from_model?: string | null;
   created_at: string;
   created_by_id: number | null;
   archive_name?: string | null;
@@ -8907,6 +8929,11 @@ export const api = {
     }),
   assignAutoQueueNow: (id: number) =>
     request<AutoQueueItem>(`/auto-queue/${id}/assign-now`, { method: 'POST' }),
+  rebalanceAutoQueueItems: (itemIds: number[]) =>
+    request<RebalanceResult>('/auto-queue/rebalance', {
+      method: 'POST',
+      body: JSON.stringify({ item_ids: itemIds }),
+    }),
   // One edit for every still-pending copy of a batch (position excluded
   // server-side so a group edit cannot undo a manual reorder).
   updateAutoQueueBatch: (batchId: string, data: AutoQueueItemUpdate) =>
@@ -10101,6 +10128,8 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+  rebalanceOrderLine: (orderId: number, lineId: number) =>
+    request<RebalanceResult>(`/projects/${orderId}/lines/${lineId}/rebalance`, { method: 'POST' }),
   /**
    * The ETA of a page of orders.
    *

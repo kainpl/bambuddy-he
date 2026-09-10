@@ -34,6 +34,15 @@ const mockSettings = {
   bed_cooled_threshold: 35,
 };
 
+/** The checkbox that sits in the same row as a given label. */
+const toggleFor = (label: string): HTMLInputElement => {
+  const row = screen.getByText(label).closest('.flex.items-center.justify-between');
+  expect(row, `no toggle row around "${label}"`).not.toBeNull();
+  const input = row!.querySelector('input[type="checkbox"]');
+  expect(input, `no checkbox in the "${label}" row`).not.toBeNull();
+  return input as HTMLInputElement;
+};
+
 describe('SettingsPage', () => {
   beforeEach(() => {
     server.use(
@@ -519,15 +528,6 @@ describe('SettingsPage', () => {
       await screen.findByText(LABEL);
     };
 
-    /** The checkbox that sits in the same row as a given label. */
-    const toggleFor = (label: string): HTMLInputElement => {
-      const row = screen.getByText(label).closest('.flex.items-center.justify-between');
-      expect(row, `no toggle row around "${label}"`).not.toBeNull();
-      const input = row!.querySelector('input[type="checkbox"]');
-      expect(input, `no checkbox in the "${label}" row`).not.toBeNull();
-      return input as HTMLInputElement;
-    };
-
     it('renders the toggle off when the server has never set it', async () => {
       const user = userEvent.setup();
       render(<SettingsPage />);
@@ -569,6 +569,39 @@ describe('SettingsPage', () => {
         },
         { timeout: 5000 }
       );
+    });
+  });
+
+  describe('Auto-queue routing — auto_queue_rebalance_models', () => {
+    const LABEL = 'Rebalance across printer models';
+
+    const switchToPrintingTab = async (user: ReturnType<typeof userEvent.setup>) => {
+      render(<SettingsPage />);
+      await user.click(await screen.findByText('Printing'));
+      await screen.findByText(LABEL);
+    };
+
+    it('renders off when the server has never set it', async () => {
+      const user = userEvent.setup();
+      await switchToPrintingTab(user);
+      expect(toggleFor(LABEL)).not.toBeChecked();
+    });
+
+    it('sends auto_queue_rebalance_models: true once switched on', async () => {
+      let receivedBody: Record<string, unknown> | null = null;
+      server.use(
+        http.put('/api/v1/settings/', async ({ request }) => {
+          receivedBody = (await request.json()) as Record<string, unknown>;
+          return HttpResponse.json({ ...mockSettings, ...receivedBody });
+        }),
+      );
+      const user = userEvent.setup();
+      await switchToPrintingTab(user);
+
+      await user.click(toggleFor(LABEL));
+      expect(toggleFor(LABEL)).toBeChecked();
+      await waitFor(() => expect(receivedBody).not.toBeNull());
+      expect(receivedBody).toMatchObject({ auto_queue_rebalance_models: true });
     });
   });
 
