@@ -6,14 +6,14 @@ discipline — and nothing here writes (``inv-stock-ledger-single-writer``).
 """
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from backend.app.core.auth import RequirePermission
 from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
-from backend.app.models.product import Product
+from backend.app.models.product import Product, ProductPart
 from backend.app.models.project import Project
 from backend.app.models.project_line import ProjectLine
 from backend.app.models.user import User
@@ -46,10 +46,18 @@ async def stock_summary(
     anything — a counted part above zero, or a live reservation: kits out on
     loan are still the shelf's business, and a product whose whole stock is
     reserved reads as zero balances with a reservation, never as absent.
+
+    The product select is pre-filtered in SQL to those with at least one
+    counted printed part — the EXISTS keeps part-less one-off products (adhoc
+    plate products are created with no parts) out of the load.
     """
-    stmt = select(Product).options(selectinload(Product.parts))
-    if q:
-        stmt = stmt.where(Product.name.ilike(f"%{q}%"))
+    stmt = (
+        select(Product)
+        .options(selectinload(Product.parts))
+        .where(Product.parts.any(and_(ProductPart.kind == "printed", ProductPart.qty_per_unit > 0)))
+    )
+    if q and q.strip():
+        stmt = stmt.where(Product.name.ilike(f"%{q.strip()}%"))
     products = [p for p in (await db.execute(stmt)).scalars().all() if any(part_stock.is_counted(pt) for pt in p.parts)]
     if not products:
         return StockSummaryOut(products=[])

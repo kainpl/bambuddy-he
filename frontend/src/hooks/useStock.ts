@@ -1,4 +1,5 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import type { InfiniteData } from '@tanstack/react-query';
 import { api, STOCK_JOURNAL_PAGE } from '../api/client';
 import type { StockMovementsPage, StockMovementsParams, StockSummary, StockSummaryParams } from '../api/client';
 
@@ -28,7 +29,13 @@ export function useStockSummary(params: StockSummaryParams) {
 export type StockJournalFilters = Pick<StockMovementsParams, 'product_id' | 'part_id' | 'reason'>;
 
 export function useStockMovements(filters: StockJournalFilters) {
-  return useInfiniteQuery<StockMovementsPage, Error, { pages: StockMovementsPage[] }, unknown[], number | null>({
+  return useInfiniteQuery<
+    StockMovementsPage,
+    Error,
+    InfiniteData<StockMovementsPage, number | null>,
+    unknown[],
+    number | null
+  >({
     queryKey: ['stock-movements', filters],
     queryFn: ({ pageParam }) =>
       api.getStockMovements({ ...filters, before_id: pageParam, limit: STOCK_JOURNAL_PAGE }),

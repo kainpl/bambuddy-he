@@ -66,7 +66,7 @@ describe('StockPage', () => {
     render(<StockPage />);
     const lamp = await screen.findByTestId('stock-row-1');
     expect(within(lamp).getByText('Lamp')).toBeInTheDocument();
-    expect(within(lamp).getByText('3 kits')).toBeInTheDocument();
+    expect(within(lamp).getByTestId('stock-kits-1')).toHaveTextContent('3');
     expect(within(screen.getByTestId('stock-row-2')).getByText(/not in the catalog/i)).toBeInTheDocument();
     expect(getSummary).toHaveBeenLastCalledWith({});
   });
@@ -112,10 +112,18 @@ describe('StockPage', () => {
   it('re-queries the journal when a reason is picked', async () => {
     render(<StockPage />);
     await screen.findByTestId('stock-movement-9');
+    getMovements.mockResolvedValueOnce({ items: [], next_before_id: null });
     fireEvent.change(screen.getByLabelText(/^reason$/i), { target: { value: 'manual' } });
     await waitFor(() =>
       expect(getMovements).toHaveBeenLastCalledWith({ reason: 'manual', before_id: null, limit: 50 }),
     );
+    expect(await screen.findByText('No movement matches these filters.')).toBeInTheDocument();
+  });
+
+  it('shows the unfiltered empty state when the ledger has nothing yet', async () => {
+    getMovements.mockResolvedValue({ items: [], next_before_id: null });
+    render(<StockPage />);
+    expect(await screen.findByText('Nothing has moved yet.')).toBeInTheDocument();
   });
 
   it('re-queries the journal when a product is picked, from the catalog rather than the (filtered) summary', async () => {

@@ -41,7 +41,7 @@ export function StockProductsTable({ products, canEdit, onAdjust }: StockProduct
             <th className="font-normal p-2 w-8" />
             <th className="font-normal p-2">{t('stock.page.product')}</th>
             <th className="font-normal p-2">{t('stock.page.kits')}</th>
-            <th className="font-normal p-2">{t('stock.part')}</th>
+            <th className="font-normal p-2">{t('stock.page.partsColumn')}</th>
             <th className="font-normal p-2" />
           </tr>
         </thead>
@@ -56,7 +56,7 @@ export function StockProductsTable({ products, canEdit, onAdjust }: StockProduct
                       type="button"
                       onClick={() => toggle(p.id)}
                       aria-expanded={expanded}
-                      aria-label={t(expanded ? 'stock.page.collapse' : 'stock.page.expand')}
+                      aria-label={`${t(expanded ? 'stock.page.collapse' : 'stock.page.expand')} — ${p.name}`}
                       className="p-1 rounded hover:bg-bambu-dark-tertiary text-bambu-gray"
                     >
                       {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
@@ -70,7 +70,7 @@ export function StockProductsTable({ products, canEdit, onAdjust }: StockProduct
                     {p.origin !== 'catalog' && <span className="ml-2 text-xs text-bambu-gray">{t('stock.page.oneOff')}</span>}
                   </td>
                   <td className="p-2 tabular-nums font-medium" data-testid={`stock-kits-${p.id}`}>
-                    {t('stock.kits', { count: p.kits_available })}
+                    {p.kits_available}
                   </td>
                   <td className="p-2 text-bambu-gray">{t('stock.page.partsCount', { count: p.parts.length })}</td>
                   <td className="p-2 text-right">

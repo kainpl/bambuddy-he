@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Loader2 } from 'lucide-react';
-import { api } from '../../api/client';
+import { api, STOCK_REASONS } from '../../api/client';
 import { useStockMovements } from '../../hooks/useStock';
 import type { StockJournalFilters } from '../../hooks/useStock';
 import { formatDateOnly } from '../../utils/date';
@@ -10,8 +10,6 @@ import type { DateFormat } from '../../utils/date';
 import { Button } from '../Button';
 import { isNoteToken, signed } from '../products/stockMovementHelpers';
 import { MovementSource } from '../products/MovementSource';
-
-const REASONS = ['surplus_banked', 'unfiled_print', 'reserved_for_order', 'reservation_released', 'manual'] as const;
 
 const FIELD_CLASS =
   'px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-sm focus:border-bambu-green focus:outline-none';
@@ -56,7 +54,7 @@ export function StockJournal() {
             onChange={(e) => setFilters((f) => ({ ...f, product_id: e.target.value ? Number(e.target.value) : undefined }))}
           >
             <option value="">{t('stock.page.anyProduct')}</option>
-            {catalog.map((p) => (
+            {catalog.filter((p) => p.parts_count > 0).map((p) => (
               <option key={p.id} value={p.id}>{p.name}</option>
             ))}
           </select>
@@ -69,7 +67,7 @@ export function StockJournal() {
             onChange={(e) => setFilters((f) => ({ ...f, reason: e.target.value || undefined }))}
           >
             <option value="">{t('stock.page.anyReason')}</option>
-            {REASONS.map((r) => (
+            {STOCK_REASONS.map((r) => (
               <option key={r} value={r}>{t(`stock.reason.${r}`)}</option>
             ))}
           </select>
@@ -83,7 +81,9 @@ export function StockJournal() {
           <p className="flex items-center gap-2 text-sm text-bambu-gray"><Loader2 className="w-4 h-4 animate-spin" />{t('common.loading')}</p>
         )
       ) : rows.length === 0 ? (
-        <p className="text-sm text-bambu-gray">{t('stock.page.journalEmpty')}</p>
+        <p className="text-sm text-bambu-gray">
+          {t(filters.product_id != null || filters.reason ? 'stock.page.journalEmptyFiltered' : 'stock.page.journalEmpty')}
+        </p>
       ) : (
         <div className="overflow-x-auto rounded-xl border border-bambu-dark-tertiary bg-bambu-dark-secondary">
           <table className="w-full text-sm">
@@ -103,6 +103,12 @@ export function StockJournal() {
                 const note = m.note ? (isNoteToken(m.note) ? t(`stock.note.${m.note}`) : m.note) : null;
                 return (
                   <tr key={m.id} data-testid={`stock-movement-${m.id}`} className="border-t border-bambu-dark-tertiary text-white">
+                    {/* ⚠️ `formatDateOnly`, never `new Date(x).toLocaleDateString()`:
+                        the column is NAIVE UTC (no `Z`), which the platform
+                        parser reads as LOCAL time — at UTC+3 the last three
+                        hours of every UTC day would be dated yesterday. The
+                        helper appends the `Z` and honours the user's own
+                        `date_format`, exactly as `OrderPrints` does. */}
                     <td className="p-2 text-bambu-gray whitespace-nowrap">{formatDateOnly(m.created_at, undefined, dateFormat)}</td>
                     <td className="p-2">{m.product_name}</td>
                     <td className="p-2">{m.part_name}</td>
