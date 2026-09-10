@@ -170,12 +170,12 @@ Each `mNNN_*.py` has `version`, `name`, `async def upgrade(conn)` (DDL), optiona
 ## Branching & Release
 
 - `main` — production; `kainpl/bamdude:latest` + `ghcr.io/kainpl/bamdude:latest` track it.
-- `dev` — active dev; CI on push+PR; `:dev` Docker rebuilt every push.
+- `dev` — active dev; CI on push+PR. A push to `dev` publishes no image (the `Docker Build` CI job only builds and probes one); `:dev` moves with every pre-release tag.
 - `feature/*` — short-lived; long-running upstream-port branches track `dev` via periodic merges.
-- **Channels** (full table: `temp/release_guide.md`):
-  - **Stable** `vX.Y.Z` on main → `:latest` + `:X.Y.Z`. `gh release create` after dev→main FF. **Docker publishes itself** — pushing a `v*` tag fires `docker-publish-tag.yml` (GHCR + Docker Hub, both arches) and `windows-installer.yml`; never also run the script.
-  - **Beta** `vX.Y.ZbN` on dev → `:X.Y.ZbN` (no `:latest`).
-  - **Rolling `:dev`** auto on push.
+- **Channels** (the whole procedure: `docs/release-guide.md`):
+  - **Stable** `vX.Y.Z` on main → `:latest` + `:X.Y.Z`. `gh release create` after dev→main FF. **Docker publishes itself** — pushing a `v*` tag fires `docker-publish-tag.yml` (GHCR + Docker Hub, both arches), `windows-installer.yml` and `publish-code-graph.yml`; never also run the script.
+  - **Beta** `vX.Y.ZbN` on dev → `:X.Y.ZbN` + `:dev` (no `:latest`).
+  - **`:dev`** = the latest beta, moved by that tag (since 2026-08-18); `docker-publish-dev.yml` is a manual `workflow_dispatch` for the raw `dev` head only.
 - **The CI gate is the run on `dev`, never the one on `main`.** `ci.yml` opens with `check-duplicate` (`fkirc/skip-duplicate-actions`) and every job hangs on `if: needs.check-duplicate.outputs.should_skip != 'true'`. A FF `dev` → `main` is the *same SHA on another ref*, so main's run skips every job and reports ✓ in ~10s having tested nothing. Order: push `dev` → `gh run watch --exit-status` on dev → FF `main` → tag. Skipping this shipped 0.5.1.2, whose dev run was red while main showed green.
 - **Naming — one format, no exceptions.** Tag `v<version>`; release title `BamDude v<version>`, plus ` (pre-release)` when prerelease. No subtitles in the title — the body and CHANGELOG say what's in it. Drift check: `gh release list --limit 100 --json tagName,name,isPrerelease --jq '.[] | select(.name != ("BamDude " + .tagName + (if .isPrerelease then " (pre-release)" else "" end)))'` must print nothing. Titles are cosmetic — `gh release edit <tag> --title` touches no tag, image or asset, so fix in place, never re-release.
 - **Tag immutability** — never force-push. Ship `X.Y.ZbN+1` or `X.Y.Z.1`.

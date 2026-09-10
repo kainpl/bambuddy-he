@@ -1,5 +1,8 @@
-# Claude
-.claude/
+# Claude — everything in .claude/ is this machine's (permission allowlist,
+# hooks with absolute paths, worktrees) except the shared settings.json,
+# which names the plugins the project is worked on with.
+.claude/*
+!.claude/settings.json
 CLAUDE.local.md
 .mcp.json
 
