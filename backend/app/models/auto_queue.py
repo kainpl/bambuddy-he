@@ -125,6 +125,14 @@ class AutoQueueItem(Base):
     # Batch grouping — UUID v4 shared across N copies; mirrors print_queue.batch_id
     batch_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
 
+    # Stamped by ``services/queue_rebalance.py`` when the auto-queue moved this
+    # row's work to another printer model (m171): ``rebalanced_from_model`` is
+    # the model it targeted before, in the display spelling (``P1S``), and
+    # ``rebalanced_at`` the moment. The panel's badge and the scheduler's
+    # per-line cooldown read them. NULL = nobody moved it.
+    rebalanced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    rebalanced_from_model: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
     # Tracking
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)

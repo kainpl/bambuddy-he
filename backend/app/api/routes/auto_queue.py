@@ -135,6 +135,8 @@ def _to_response(item: AutoQueueItem) -> AutoQueueItemResponse:
         print_time_seconds=item.print_time_seconds,
         been_jumped=item.been_jumped,
         batch_id=item.batch_id,
+        rebalanced_at=item.rebalanced_at,
+        rebalanced_from_model=item.rebalanced_from_model,
         created_at=item.created_at,
         created_by_id=item.created_by_id,
     )

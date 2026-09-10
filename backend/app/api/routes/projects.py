@@ -1607,7 +1607,7 @@ def _counts(mapping: dict[int, int], names: dict[int, str]) -> list[PlanPartCoun
     return [PlanPartCount(part_id=pid, name=names.get(pid, "?"), count=n) for pid, n in sorted(mapping.items())]
 
 
-def _plan_response(plan: OrderPlan) -> OrderPlanResponse:
+def _plan_response(plan: OrderPlan, pending_auto: dict[int, int] | None = None) -> OrderPlanResponse:
     """Name every id the engine returned — no SELECT, no walk.
 
     The engine builds the plan from an ``OrderContext`` that already holds every
@@ -1669,6 +1669,7 @@ def _plan_response(plan: OrderPlan) -> OrderPlanResponse:
                 ),
                 candidates=line.candidates,
                 not_sliced=line.not_sliced,
+                pending_auto_prints=(pending_auto or {}).get(line.line_id, 0),
             )
             for line in plan.lines
         ],
@@ -1680,6 +1681,24 @@ def _plan_response(plan: OrderPlan) -> OrderPlanResponse:
         ),
         truncated=plan.truncated,
     )
+
+
+async def _pending_auto_prints(db: AsyncSession, line_ids: list[int]) -> dict[int, int]:
+    """``line_id → pending, unassigned auto-queue rows`` — one grouped query for the whole plan."""
+    if not line_ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(AutoQueueItem.project_line_id, func.count())
+            .where(
+                AutoQueueItem.project_line_id.in_(line_ids),
+                AutoQueueItem.status == "pending",
+                AutoQueueItem.assigned_to_item_id.is_(None),
+            )
+            .group_by(AutoQueueItem.project_line_id)
+        )
+    ).all()
+    return {line_id: int(n) for line_id, n in rows}
 
 
 @router.get("/{project_id}/plan", response_model=OrderPlanResponse)
@@ -1697,7 +1716,7 @@ async def get_order_plan(
     plan = await plan_for_order(db, project_id)
     if plan is None:
         raise HTTPException(status_code=404, detail="Project not found")
-    return _plan_response(plan)
+    return _plan_response(plan, await _pending_auto_prints(db, [line.line_id for line in plan.lines]))
 
 
 @router.get("/{project_id}/forecast", response_model=OrderForecastDetailOut)

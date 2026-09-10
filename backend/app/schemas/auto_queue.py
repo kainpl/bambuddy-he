@@ -175,6 +175,9 @@ class AutoQueueItemResponse(BaseModel):
     been_jumped: bool
 
     batch_id: str | None
+    # m171: set when the rebalancer moved this row's work here from another model.
+    rebalanced_at: UTCDatetime = None
+    rebalanced_from_model: str | None = None
     created_at: UTCDatetime
     created_by_id: int | None
 

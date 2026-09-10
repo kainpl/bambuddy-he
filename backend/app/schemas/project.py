@@ -402,6 +402,10 @@ class LinePlanOut(BaseModel):
     unsatisfiable: list[PlanPartCount] = []
     candidates: list[int] = []  # ProductPlate ids eligible for this line
     not_sliced: list[int] = []  # ProductPlate ids skipped because not sliced
+    # This line's pending, unassigned auto-queue rows — the same "still waiting"
+    # rule ``plan_engine.queued_yield_by_line`` applies to that table. The order
+    # page shows its Rebalance button off it (spec 2026-09-10).
+    pending_auto_prints: int = 0
 
 
 class PlanTotalsOut(BaseModel):
@@ -469,6 +473,27 @@ class PlanEnqueueCreated(BaseModel):
 
 class PlanEnqueueResponse(BaseModel):
     created: list[PlanEnqueueCreated] = []
+
+
+class RebalanceSkipped(BaseModel):
+    item_id: int
+    reason: str  # one of services.queue_rebalance.SKIP_REASONS
+
+
+class RebalanceOut(BaseModel):
+    """What a rebalance run did (spec 2026-09-10 §3.3).
+
+    ``cancelled`` is always 0 today — a conversion replaces a row, it never
+    deletes one — and exists so a later variant that consolidates prints has a
+    place to report. ``skipped`` names every item the run looked at and left,
+    with a code the frontend translates.
+    """
+
+    converted: int = 0
+    created: int = 0
+    cancelled: int = 0
+    moved_parts: int = 0
+    skipped: list[RebalanceSkipped] = []
 
 
 class StockMovedOut(BaseModel):

@@ -1029,6 +1029,31 @@ async def test_plan_subtracts_finished_and_queued_work(committing_client, db_ses
 
 
 @pytest.mark.asyncio
+async def test_plan_counts_this_lines_pending_auto_prints(committing_client, db_session, catalog):
+    """Two pending router rows filed under the line count; one already handed to a
+    printer does not — the line's Rebalance button shows off this figure."""
+    pid, line_id = await _order_with_line(committing_client, catalog["product"].id, 4)
+    file_id = catalog["file"].id
+    db_session.add_all(
+        [
+            AutoQueueItem(
+                project_id=pid, project_line_id=line_id, library_file_id=file_id, status="pending", position=1
+            ),
+            AutoQueueItem(
+                project_id=pid, project_line_id=line_id, library_file_id=file_id, status="pending", position=2
+            ),
+            AutoQueueItem(
+                project_id=pid, project_line_id=line_id, library_file_id=file_id, status="assigned", position=3
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    body = (await committing_client.get(f"/api/v1/projects/{pid}/plan")).json()
+    assert body["lines"][0]["pending_auto_prints"] == 2
+
+
+@pytest.mark.asyncio
 async def test_plan_ignores_an_auto_queue_row_already_handed_to_a_printer(committing_client, db_session, catalog):
     """An assigned auto-queue row is counted once - through the printer item it
     was copied into. Counting it twice would plan one print too few."""
