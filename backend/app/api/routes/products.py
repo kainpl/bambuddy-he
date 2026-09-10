@@ -36,9 +36,7 @@ from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
 from backend.app.i18n.api_errors import json_error
 from backend.app.models.library import LibraryFile, LibraryFolder
-from backend.app.models.part_stock import ProductPartStockMovement
 from backend.app.models.product import Product, ProductOrigin, ProductPart, ProductPlate, product_files, product_folders
-from backend.app.models.project import Project
 from backend.app.models.project_line import ProjectLine, ProjectProcurement
 from backend.app.models.user import User
 from backend.app.schemas.product import (
@@ -103,6 +101,7 @@ from backend.app.services.product_files import (
     sorted_attachments,
 )
 from backend.app.services.product_sync import apply_folder_products, sync_product_for_file
+from backend.app.services.stock_views import movement_out, orders_of_lines
 from backend.app.utils.http import build_content_disposition
 
 logger = logging.getLogger(__name__)
@@ -798,56 +797,6 @@ async def remove_part_alias(
 # ---------- free stock (pass 8, Decision 6) ----------
 
 
-async def _orders_of_lines(db: AsyncSession, line_ids: set[int]) -> dict[int, tuple[int, str]]:
-    """``line_id → (order id, order name)`` for the whole movements page, in ONE join.
-
-    A reservation names an order LINE and nothing else — the ledger has no
-    order column, because a line already has one and two would be able to
-    disagree. The page still has to show the order the operator recognises, so
-    the hop is made here, once for every line on the page rather than once per
-    movement.
-
-    A line id that resolves to nothing is simply absent: the caller reads
-    ``.get(...)`` and sends ``None``. That is a deleted line whose rows
-    ``part_stock.detach_line`` has not reached (PostgreSQL's ``SET NULL`` and
-    SQLite's silence differ here), and a movement with no order left is still a
-    movement that happened.
-    """
-    if not line_ids:
-        return {}
-    rows = await db.execute(
-        select(ProjectLine.id, Project.id, Project.name)
-        .join(Project, Project.id == ProjectLine.project_id)
-        .where(ProjectLine.id.in_(line_ids))
-    )
-    return {line_id: (order_id, name) for line_id, order_id, name in rows.all()}
-
-
-def _movement_out(
-    row: ProductPartStockMovement, names: dict[int, str], orders: dict[int, tuple[int, str]]
-) -> StockMovementOut:
-    """One ledger row on the wire, with its part named and its order resolved.
-
-    Both maps are the caller's — built once for a whole page — so this stays a
-    pure formatter with no query hidden in it.
-    """
-    order = orders.get(row.project_line_id) if row.project_line_id is not None else None
-    return StockMovementOut(
-        id=row.id,
-        part_id=row.product_part_id,
-        part_name=names[row.product_part_id],
-        delta=row.delta,
-        reason=row.reason,
-        project_line_id=row.project_line_id,
-        order_id=order[0] if order else None,
-        order_name=order[1] if order else None,
-        archive_id=row.archive_id,
-        note=row.note,
-        created_by=row.created_by,
-        created_at=row.created_at,
-    )
-
-
 @router.get("/{product_id}/stock", response_model=ProductStockOut)
 async def get_product_stock(
     product_id: int,
@@ -868,7 +817,7 @@ async def get_product_stock(
     # Every movement's part is one of this product's own — ``part_stock.movements``
     # joins ``product_parts`` on this very product — so the names cost nothing.
     names = {part.id: part.name for part in product.parts}
-    orders = await _orders_of_lines(db, {r.project_line_id for r in rows if r.project_line_id is not None})
+    orders = await orders_of_lines(db, {r.project_line_id for r in rows if r.project_line_id is not None})
     return ProductStockOut(
         balances=[
             StockBalanceOut(part_id=p.id, name=p.name, qty_per_unit=p.qty_per_unit, balance=part_balances[p.id])
@@ -876,7 +825,7 @@ async def get_product_stock(
             if p.id in part_balances
         ],
         kits_available=part_stock.kits_available(part_balances, list(product.parts)),
-        movements=[_movement_out(row, names, orders) for row in rows],
+        movements=[movement_out(row, names, orders) for row in rows],
     )
 
 
@@ -924,7 +873,7 @@ async def adjust_product_stock(
         # refuses one) or a clamped reservation (this is not one). Answered
         # rather than dereferenced so a future clamp is a refusal, not a 500.
         raise HTTPException(status_code=422, detail="a correction has to move something")
-    return _movement_out(movement, {part.id: part.name}, {})
+    return movement_out(movement, {part.id: part.name}, {})
 
 
 # ---------- plates ----------
