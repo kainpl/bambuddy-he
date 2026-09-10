@@ -1,182 +1,15 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Loader2, PackageCheck } from 'lucide-react';
-import { api, STOCK_MOVEMENT_LIMIT, STOCK_NOTE_TOKENS } from '../../api/client';
-import type { StockMovement } from '../../api/client';
-import { useToast } from '../../contexts/ToastContext';
+import { api, STOCK_MOVEMENT_LIMIT } from '../../api/client';
 import { useProductStock } from '../../hooks/useProductStock';
 import { formatDateOnly } from '../../utils/date';
 import type { DateFormat } from '../../utils/date';
 import { Button } from '../Button';
-import { Modal } from '../Modal';
-
-const FIELD_CLASS =
-  'w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-sm focus:border-bambu-green focus:outline-none';
-
-/** The seven tokens, as a set, for the one question this file asks of them. */
-const NOTE_TOKENS: ReadonlySet<string> = new Set(STOCK_NOTE_TOKENS);
-
-/**
- * Whether a note is one the SERVER wrote, and therefore one to translate.
- *
- * ⚠️ **The token set is closed and the fallback is verbatim, not blank.** The
- * backend writes tokens (Ruling 17) precisely so its half can be read in the
- * operator's language; the other half is a hand correction, whose whole value
- * is the sentence the person typed. Translating by prefix or dropping an
- * unknown note would lose exactly the notes that matter.
- */
-function isNoteToken(note: string): boolean {
-  return NOTE_TOKENS.has(note);
-}
-
-/** `+5` / `−3`. Signed on purpose: a reversal is a movement too, and a column
- *  of unsigned numbers cannot be read as a ledger. The ledger never writes a
- *  zero, so there is no third case. */
-function signed(delta: number): string {
-  return delta > 0 ? `+${delta}` : `−${Math.abs(delta)}`;
-}
-
-/**
- * Where a movement came from: its order, or the print that made it.
- *
- * ⚠️ **The archive is text, not a link.** There is no per-archive route in this
- * app — `/archives` is a filtered list and takes `printer`, `file` and `search`
- * params, none of which addresses one row — so a link would have to invent a
- * destination. The id is what the operator searches with; the order, which does
- * have a page, is a real link.
- */
-function MovementSource({ movement }: { movement: StockMovement }) {
-  const { t } = useTranslation();
-  if (movement.order_id != null) {
-    return (
-      <Link to={`/projects/${movement.order_id}`} className="text-bambu-green hover:underline">
-        {movement.order_name ?? `#${movement.order_id}`}
-      </Link>
-    );
-  }
-  if (movement.archive_id != null) {
-    return <span>{t('stock.archiveRef', { n: movement.archive_id })}</span>;
-  }
-  return <span className="text-bambu-gray">—</span>;
-}
-
-interface AdjustDialogProps {
-  productId: number;
-  parts: { part_id: number; name: string }[];
-  onClose: () => void;
-}
-
-/**
- * The hand correction: the operator counted the shelf and it disagreed with us.
- *
- * Only COUNTED parts are offered, because they are the only ones that hold a
- * balance — the server answers 422 for any other, and offering a part whose
- * only possible outcome is an error is worse than not offering it.
- *
- * ⚠️ It rides the shared shell like every other dialog here, which is what
- * carries the `role`, the `aria-modal`, the name, the focus and Escape
- * (finding M1). An overlay without them is an anonymous `<div>` a screen reader
- * never announces, and a keyboard user who opens it starts at the top of the
- * page behind.
- */
-function AdjustDialog({ productId, parts, onClose }: AdjustDialogProps) {
-  const { t } = useTranslation();
-  const { showToast } = useToast();
-  const queryClient = useQueryClient();
-
-  const [partId, setPartId] = useState<number>(parts[0]?.part_id ?? 0);
-  const [delta, setDelta] = useState('1');
-  const [note, setNote] = useState('');
-
-  const adjust = useMutation({
-    mutationFn: () => api.adjustProductStock(productId, { part_id: partId, delta: Number(delta), note: note.trim() }),
-    onSuccess: () => {
-      // The shelf, the product's own `kits_available`, and the catalog card
-      // that shows it. No order view moves: a hand correction changes what is
-      // free, never what a line has already reserved.
-      queryClient.invalidateQueries({ queryKey: ['product-stock', productId] });
-      queryClient.invalidateQueries({ queryKey: ['product', productId] });
-      queryClient.invalidateQueries({ queryKey: ['products'] });
-      showToast(t('stock.adjust.saved'));
-      onClose();
-    },
-    // 409 (would go below zero) and 422 (not a counted part) both arrive as the
-    // server's own sentence in `detail`, which is what `ApiError.message` is.
-    onError: (e: Error) => showToast(e.message, 'error'),
-  });
-
-  const parsed = Number(delta);
-  const valid = Number.isInteger(parsed) && parsed !== 0 && note.trim().length > 0 && partId > 0;
-
-  return (
-    <Modal onClose={onClose} title={t('stock.adjust.title')} size="md">
-      <div className="p-4 space-y-3">
-        <div>
-          <label htmlFor="stock-adjust-part" className="block text-sm text-bambu-gray mb-1">
-            {t('stock.adjust.part')}
-          </label>
-          <select
-            id="stock-adjust-part"
-            value={partId}
-            onChange={(e) => setPartId(Number(e.target.value))}
-            className={FIELD_CLASS}
-          >
-            {parts.map((p) => (
-              <option key={p.part_id} value={p.part_id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div>
-          <label htmlFor="stock-adjust-delta" className="block text-sm text-bambu-gray mb-1">
-            {t('stock.adjust.delta')}
-          </label>
-          <input
-            id="stock-adjust-delta"
-            type="number"
-            value={delta}
-            onChange={(e) => setDelta(e.target.value)}
-            className={FIELD_CLASS}
-          />
-        </div>
-
-        <div>
-          <label htmlFor="stock-adjust-note" className="block text-sm text-bambu-gray mb-1">
-            {t('stock.adjust.note')}
-          </label>
-          <input
-            id="stock-adjust-note"
-            type="text"
-            maxLength={500}
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            placeholder={t('stock.adjust.notePlaceholder')}
-            className={FIELD_CLASS}
-          />
-        </div>
-      </div>
-
-      <div className="p-4 border-t border-bambu-dark-tertiary flex gap-3">
-        <Button type="button" variant="secondary" onClick={onClose} className="flex-1">
-          {t('common.cancel')}
-        </Button>
-        <Button
-          type="button"
-          onClick={() => adjust.mutate()}
-          disabled={!valid || adjust.isPending}
-          className="flex-1"
-          data-testid="stock-adjust-submit"
-        >
-          {t('stock.adjust.submit')}
-        </Button>
-      </div>
-    </Modal>
-  );
-}
+import { AdjustStockDialog } from './AdjustStockDialog';
+import { MovementSource } from './MovementSource';
+import { isNoteToken, signed } from './stockMovementHelpers';
 
 interface ProductStockProps {
   productId: number;
@@ -381,7 +214,7 @@ export function ProductStock({ productId, canEdit }: ProductStockProps) {
       )}
 
       {adjusting && (
-        <AdjustDialog
+        <AdjustStockDialog
           productId={productId}
           parts={balances.map((b) => ({ part_id: b.part_id, name: b.name }))}
           onClose={() => setAdjusting(false)}

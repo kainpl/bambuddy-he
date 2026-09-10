@@ -126,6 +126,9 @@ describe('invalidateOrderViews', () => {
       'product-stock',
       'product',
       'products',
+      // stock tab (2026-09-10)
+      'stock-summary',
+      'stock-movements',
     ]);
   });
 });

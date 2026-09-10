@@ -36,6 +36,10 @@ const OWNER: Record<string, string> = {
   // `enabled` by construction, so two hand-written declarations would be a race
   // for whose options apply rather than two watchers of one key.
   'product-stock': 'hooks/useProductStock.ts',
+  // The Stock tab's two questions (pass 8, final-review fix wave) — one owner
+  // each, for the same reason as every other key here.
+  'stock-summary': 'hooks/useStock.ts',
+  'stock-movements': 'hooks/useStock.ts',
 };
 
 /** The invalidation helper is allowed to spell any key out; it observes none.
