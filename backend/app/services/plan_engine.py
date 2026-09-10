@@ -174,6 +174,66 @@ def line_yield(recipe: PlateRecipe, counted_part_ids: set[int]) -> dict[int, int
     return {pid: n for pid, n in recipe.yield_by_part.items() if pid in counted_part_ids and n > 0}
 
 
+def plate_recipe_index(
+    recipes_by_product: dict[int, list[Candidate]],
+) -> tuple[dict[tuple[int, int], dict[int, PlateRecipe]], dict[int, dict[int, PlateRecipe]]]:
+    """``(by_plate, by_file)`` — the two indexes that answer "whose plate is this".
+
+    Keyed by PLATE, not by product: one caller asks "this product's recipe for
+    this plate" and another asks "whose plate is this", and one pair of maps
+    answers both. ``by_plate`` is the exact index, ``by_file`` the whole-file
+    (``plate_index = 0``) plate that claims every plate of its file; exact wins
+    wherever both exist for the same product — see :func:`recipes_for_row`.
+
+    ⚠️ **Shared on purpose.** :func:`queued_yield_by_line` and
+    ``queue_rebalance.load_line_catalog`` resolve the same question about the
+    same rows, and this exact resolution was already wrong once (a single-plate
+    file gets a 0-row from the product side and the slicer's index 1 from the
+    row side, so an exact tuple lookup alone misses nearly every single-plate
+    print there is). Two copies of it is one copy too many.
+    """
+    by_plate: dict[tuple[int, int], dict[int, PlateRecipe]] = {}
+    by_file: dict[int, dict[int, PlateRecipe]] = {}
+    for product_id, rows in recipes_by_product.items():
+        for plate, _file, recipe in rows:
+            by_plate.setdefault((plate.library_file_id, plate.plate_index), {})[product_id] = recipe
+            if plate.plate_index == 0:
+                by_file.setdefault(plate.library_file_id, {})[product_id] = recipe
+    return by_plate, by_file
+
+
+def recipes_for_row(
+    by_plate: dict[tuple[int, int], dict[int, PlateRecipe]],
+    by_file: dict[int, dict[int, PlateRecipe]],
+    library_file_id: int,
+    plate_index: int,
+) -> dict[int, PlateRecipe]:
+    """``product_id → recipe`` for one row's ``(file, plate)``, exact plate winning.
+
+    The whole-file plate is laid down first and the exact one overrides it, so a
+    product that links both gets its plate-specific recipe and a product that
+    links only the file still answers. The one rule; see
+    :func:`plate_recipe_index` for why it lives here rather than in each caller.
+    """
+    return {**by_file.get(library_file_id, {}), **by_plate.get((library_file_id, plate_index), {})}
+
+
+def counted_parts_by_line(figures_by_project: dict[int, dict[int, LineFigures]]) -> dict[int, set[int]]:
+    """``line_id → the part ids that line COUNTS``, from one ``attribute`` pass.
+
+    What :func:`line_yield` filters on, and what every reader of a plate's yield
+    toward a line needs first. Shared with ``queue_rebalance`` for the reason
+    :func:`plate_recipe_index` is: the figures are the authority on which parts
+    a line counts, and a second derivation of that set would eventually
+    disagree with the plan on screen.
+    """
+    return {
+        line_id: {pf.part_id for pf in figs.parts}
+        for figures in figures_by_project.values()
+        for line_id, figs in figures.items()
+    }
+
+
 def _pick_key(useful: int, waste: int, secs: int | None, plate_id: int) -> tuple:
     """Spec decision 4, as a sort key (lower is better).
 
@@ -507,21 +567,10 @@ async def queued_yield_by_line(
     lines_by_project: dict[int, list[ProjectLine]] = {}
     for line in lines:
         lines_by_project.setdefault(line.project_id, []).append(line)
-    # Keyed by PLATE, not by product: the line branch asks "this product's
-    # recipe for this plate" and the implicit branch asks "whose plate is this",
-    # and one pair of maps answers both. ``by_plate`` is the exact index,
-    # ``by_file`` the whole-file (index 0) plate that claims every plate of its
-    # file; exact wins wherever both exist for the same product.
-    by_plate: dict[tuple[int, int], dict[int, PlateRecipe]] = {}
-    by_file: dict[int, dict[int, PlateRecipe]] = {}
-    for product_id, rows in recipes_by_product.items():
-        for plate, _file, recipe in rows:
-            by_plate.setdefault((plate.library_file_id, plate.plate_index), {})[product_id] = recipe
-            if plate.plate_index == 0:
-                by_file.setdefault(plate.library_file_id, {})[product_id] = recipe
+    by_plate, by_file = plate_recipe_index(recipes_by_product)
 
     def _recipes_for(library_file_id: int, plate_index: int) -> dict[int, PlateRecipe]:
-        return {**by_file.get(library_file_id, {}), **by_plate.get((library_file_id, plate_index), {})}
+        return recipes_for_row(by_plate, by_file, library_file_id, plate_index)
 
     def _count(line_id: int, recipe: PlateRecipe) -> None:
         bucket = out[line_id]
@@ -660,11 +709,7 @@ async def plan_for_orders(db: AsyncSession, project_ids: list[int]) -> dict[int,
     # that recomputes its plan on every read); per BATCH it is one for all.
     products_by_id = {pid: product for ctx in contexts for pid, product in ctx.products_by_id.items()}
     recipes_by_product = await recipes_for_products(db, products_by_id.values())
-    counted_by_line = {
-        line_id: {pf.part_id for pf in figs.parts}
-        for figures in figures_by_project.values()
-        for line_id, figs in figures.items()
-    }
+    counted_by_line = counted_parts_by_line(figures_by_project)
     all_lines = [line for ctx in contexts for line in ctx.lines]
     queued = await queued_yield_by_line(db, recipes_by_product, all_lines, counted_by_line)
     rate_per_kg = await default_rate_per_kg(db)
@@ -688,10 +733,13 @@ __all__ = [
     "PlanAlternative",
     "PlanRow",
     "PlanTotals",
+    "counted_parts_by_line",
     "cover",
     "line_yield",
     "plan_for_order",
     "plan_for_orders",
     "plan_lines",
+    "plate_recipe_index",
     "queued_yield_by_line",
+    "recipes_for_row",
 ]
