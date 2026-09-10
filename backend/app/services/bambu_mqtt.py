@@ -2150,6 +2150,11 @@ class BambuMQTTClient:
     # Maximum time (seconds) without a message before considering connection stale
     STALE_TIMEOUT = 60.0
 
+    @property
+    def status_received_at(self) -> float | None:
+        """Last received MQTT message, without reconnecting or refreshing it."""
+        return self._last_message_time or None
+
     def is_stale(self) -> bool:
         """Check if the connection is stale (no messages for too long)."""
         if self._last_message_time == 0:

@@ -21,6 +21,7 @@ from backend.app.core.auth import (
     REFRESH_TOKEN_EXPIRE_DAYS_REMEMBER,
     SECRET_KEY,
     Permission,
+    RequireAnyPermission,
     RequirePermission,
     _is_token_fresh,
     _validate_api_key,
@@ -1859,10 +1860,25 @@ def _long_lived_token_to_response(record, *, plaintext: str | None = None) -> di
     }
 
 
+def _can_manage_long_lived_token(user: User | None, scope: str, action: str) -> bool:
+    if user is None:
+        return False
+    if scope != "monitor":
+        return user.has_permission(Permission.CAMERA_VIEW.value)
+    permission = {
+        "create": Permission.API_KEYS_CREATE,
+        "read": Permission.API_KEYS_READ,
+        "delete": Permission.API_KEYS_DELETE,
+    }[action]
+    if not user.has_permission(permission.value):
+        return False
+    return action != "create" or user.has_all_permissions(Permission.PRINTERS_READ.value, Permission.QUEUE_READ.value)
+
+
 @router.post("/tokens", response_model=dict, status_code=status.HTTP_201_CREATED)
 async def create_long_lived_camera_token(
     payload: dict,
-    current_user: User = RequirePermission(Permission.CAMERA_VIEW),
+    current_user: User = RequireAnyPermission(Permission.CAMERA_VIEW, Permission.API_KEYS_CREATE),
     db: AsyncSession = Depends(get_db),
 ):
     """Mint a long-lived camera-stream token (#1108).
@@ -1897,6 +1913,9 @@ async def create_long_lived_camera_token(
     if scope not in ALLOWED_SCOPES:
         raise HTTPException(status_code=400, detail=f"unsupported scope: {scope!r}")
 
+    if not _can_manage_long_lived_token(current_user, scope, "create"):
+        raise HTTPException(status_code=403, detail="monitor_token_permission_denied")
+
     try:
         created = await create_token(
             db,
@@ -1920,7 +1939,7 @@ async def create_long_lived_camera_token(
 @router.get("/tokens", response_model=list[dict])
 async def list_long_lived_tokens(
     user_id: int | None = None,
-    current_user: User = RequirePermission(Permission.CAMERA_VIEW),
+    current_user: User = RequireAnyPermission(Permission.CAMERA_VIEW, Permission.API_KEYS_READ),
     db: AsyncSession = Depends(get_db),
 ):
     """List long-lived tokens.
@@ -1930,6 +1949,9 @@ async def list_long_lived_tokens(
     to see everything (handy for leak triage).
     """
     from backend.app.services.long_lived_tokens import list_user_tokens
+
+    if current_user is None:
+        raise HTTPException(status_code=403, detail="User session required")
 
     # Reload with groups so is_admin reflects group membership reliably.
     user_with_groups = (
@@ -1945,18 +1967,23 @@ async def list_long_lived_tokens(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only admins can list other users' tokens",
         )
-    return [_long_lived_token_to_response(r) for r in records]
+    return [
+        _long_lived_token_to_response(r) for r in records if _can_manage_long_lived_token(current_user, r.scope, "read")
+    ]
 
 
 @router.get("/tokens/all", response_model=list[dict])
 async def list_all_long_lived_tokens(
-    current_user: User = RequirePermission(Permission.CAMERA_VIEW),
+    current_user: User = RequireAnyPermission(Permission.CAMERA_VIEW, Permission.API_KEYS_READ),
     db: AsyncSession = Depends(get_db),
 ):
     """Admin-only: every active long-lived token in the system, newest first.
     Used by the leak-triage view in admin settings.
     """
     from backend.app.services.long_lived_tokens import list_all_tokens
+
+    if current_user is None:
+        raise HTTPException(status_code=403, detail="User session required")
 
     user_with_groups = (
         await db.execute(select(User).where(User.id == current_user.id).options(selectinload(User.groups)))
@@ -1967,13 +1994,15 @@ async def list_all_long_lived_tokens(
             detail="Admin only",
         )
     records = await list_all_tokens(db)
-    return [_long_lived_token_to_response(r) for r in records]
+    return [
+        _long_lived_token_to_response(r) for r in records if _can_manage_long_lived_token(current_user, r.scope, "read")
+    ]
 
 
 @router.delete("/tokens/{token_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def revoke_long_lived_token(
     token_id: int,
-    current_user: User = RequirePermission(Permission.CAMERA_VIEW),
+    current_user: User = RequireAnyPermission(Permission.CAMERA_VIEW, Permission.API_KEYS_DELETE),
     db: AsyncSession = Depends(get_db),
 ):
     """Revoke a long-lived token. Owners can revoke their own; admins any."""
@@ -1985,6 +2014,9 @@ async def revoke_long_lived_token(
     record = (await db.execute(select(LongLivedToken).where(LongLivedToken.id == token_id))).scalar_one_or_none()
     if record is None:
         raise HTTPException(status_code=404, detail="Token not found")
+
+    if not _can_manage_long_lived_token(current_user, record.scope, "delete"):
+        raise HTTPException(status_code=403, detail="monitor_token_permission_denied")
 
     if record.user_id != current_user.id:
         # Reload for is_admin so admins can revoke any user's token (leak response).

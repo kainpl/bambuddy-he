@@ -54,6 +54,7 @@ from backend.app.api.routes import (
     measurement_history,
     metrics,
     mfa,
+    monitor,
     notification_templates,
     notifications,
     obico,
@@ -6279,7 +6280,9 @@ async def on_print_complete(printer_id: int, data: dict):
                                 )
                                 _next_item = _next.scalar_one_or_none()
                                 if _next_item:
-                                    _next_item.waiting_reason = f"Swap macro failed: {_sw_msg}"
+                                    from backend.app.services.queue_wait_reason import set_wait_reason
+
+                                    set_wait_reason(_next_item, "dispatch_failed", f"Swap macro failed: {_sw_msg}")
                                 await db.commit()
         except Exception as e:
             logger.error("[SWAP] change_table macro error: %s", e)
@@ -9392,6 +9395,8 @@ PUBLIC_API_PATTERNS: tuple[re.Pattern[str], ...] = (
     # above: a TV or Pi has no login session, so the wall carries a long-lived
     # ``camwall``-scoped token in the URL, checked by RequireCamWallToken.
     re.compile(r"^/api/v1/camwall/printers$"),
+    # Only these anchored read feeds validate a monitor-scoped Bearer grant.
+    re.compile(r"^/api/v1/monitor/kiosk/(?:snapshot|forecast)$"),
     # Camera (streams loaded via <img> tag). ⚠️ NOT the token MINTER beside
     # them — ``POST /printers/camera/stream-token`` needs CAMERA_VIEW and is
     # what a substring "/camera/stream" quietly opened.
@@ -9902,6 +9907,7 @@ app.include_router(macros.router, prefix=app_settings.api_prefix)
 app.include_router(maintenance.router, prefix=app_settings.api_prefix)
 app.include_router(camera.router, prefix=app_settings.api_prefix)
 app.include_router(camwall.router, prefix=app_settings.api_prefix)
+app.include_router(monitor.router, prefix=app_settings.api_prefix)
 app.include_router(external_links.router, prefix=app_settings.api_prefix)
 app.include_router(projects.router, prefix=app_settings.api_prefix)
 app.include_router(customers.router, prefix=app_settings.api_prefix)

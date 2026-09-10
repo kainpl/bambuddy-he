@@ -44,7 +44,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 from backend.app.services import chamber_history
@@ -261,6 +261,7 @@ async def preheat_and_soak(
     *,
     options: dict[str, Any] | None = None,
     cancel_check: Callable[[], None] | None = None,
+    on_heating: Callable[[], Awaitable[None]] | None = None,
 ) -> None:
     """Run the preheat + heat-soak stage on the idle printer (see module docstring).
 
@@ -350,6 +351,13 @@ async def preheat_and_soak(
     except Exception as exc:  # noqa: BLE001 — best-effort
         logger.warning("Preheat bed M140 failed on printer %s: %s", printer.id, exc)
         return
+
+    if on_heating:
+        try:
+            await on_heating()
+        except Exception:
+            # An observer must never abort dispatch after heaters are enabled.
+            logger.debug("Could not publish preheat phase", exc_info=True)
 
     # Airduct flap: flip to heating before the setpoint when the preheat wants chamber heat,
     # back to cooling otherwise (a PLA-only print on an H2D that previously ran ABS

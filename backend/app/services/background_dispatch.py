@@ -651,6 +651,7 @@ async def report_failure_if_unwatched(job: PrintDispatchJob) -> None:
 class ActiveDispatchState:
     job: PrintDispatchJob
     message: str
+    phase: str = "preparing"
     upload_bytes: int | None = None
     upload_total_bytes: int | None = None
 
@@ -1298,12 +1299,13 @@ class BackgroundDispatchService:
             logger.warning("Dispatch job %s: failed to resolve gcode_snippets (%s), skipping", job.id, exc)
             return None
 
-    async def _set_active_message(self, job: PrintDispatchJob, message: str):
+    async def _set_active_message(self, job: PrintDispatchJob, message: str, *, phase: str = "preparing"):
         async with self._lock:
             active = self._active_jobs.get(job.id)
             if not active:
                 return
             active.message = message
+            active.phase = phase
             # New phase → previous upload progress is no longer relevant.
             # Without this the toast keeps rendering a 100% progress bar
             # during post-upload phases (swap macros, "Starting print…")
@@ -1331,6 +1333,7 @@ class BackgroundDispatchService:
                 return
 
             active.upload_bytes = max(0, int(uploaded))
+            active.phase = "uploading"
             active.upload_total_bytes = max(0, int(total))
             payload = self._build_state_payload_unlocked(
                 recent_event={
@@ -1443,6 +1446,7 @@ class BackgroundDispatchService:
                     "printer_name": active.job.printer_name,
                     "message": active.message,
                     "upload_bytes": active.upload_bytes,
+                    "phase": active.phase,
                     "upload_total_bytes": active.upload_total_bytes,
                     "upload_progress_pct": upload_progress_pct,
                 }
@@ -1856,7 +1860,9 @@ class BackgroundDispatchService:
             self._raise_if_cancel_requested(job)
 
             try:
-                await self._set_active_message(job, f"Uploading {archive_filename} to {printer_name}...")
+                await self._set_active_message(
+                    job, f"Uploading {archive_filename} to {printer_name}...", phase="uploading"
+                )
                 loop = asyncio.get_running_loop()
                 progress_state = {"last_emit": 0.0, "last_bytes": 0}
 
@@ -1943,6 +1949,7 @@ class BackgroundDispatchService:
                     archive,
                     options=job.options,
                     cancel_check=lambda: self._raise_if_cancel_requested(job),
+                    on_heating=lambda: self._set_active_message(job, "Preheating...", phase="heating"),
                 )
 
                 register_expected_print(
@@ -1976,7 +1983,7 @@ class BackgroundDispatchService:
                 if archive and remove_swap_pending_event(archive, "swap_mode_start"):
                     await db.commit()
 
-                await self._set_active_message(job, f"Starting print on {printer_name}...")
+                await self._set_active_message(job, f"Starting print on {printer_name}...", phase="starting")
                 await _apply_calibrations_for_print(
                     db=db,
                     printer_id=job.printer_id,
@@ -2057,7 +2064,9 @@ class BackgroundDispatchService:
                 pre_subtask_id = getattr(_post_status, "subtask_id", None)
                 pre_gcode_file = getattr(_post_status, "gcode_file", None)
                 if pre_state:
-                    await self._set_active_message(job, f"Waiting for {printer_name} to acknowledge print...")
+                    await self._set_active_message(
+                        job, f"Waiting for {printer_name} to acknowledge print...", phase="acknowledging"
+                    )
                     transitioned = await self._verify_print_response(
                         job.printer_id,
                         printer_name,
@@ -2212,7 +2221,7 @@ class BackgroundDispatchService:
             )
             return
 
-        await self._set_active_message(job, status_message)
+        await self._set_active_message(job, status_message, phase="swapping")
         success, msg = await printer_manager.execute_macro_and_wait(job.printer_id, macro.gcode, macro.name)
         if not success:
             raise RuntimeError(f"Swap macro '{macro.name}' failed: {msg}")
@@ -2480,7 +2489,9 @@ class BackgroundDispatchService:
             self._raise_if_cancel_requested(job)
 
             try:
-                await self._set_active_message(job, f"Uploading {library_filename} to {printer_name}...")
+                await self._set_active_message(
+                    job, f"Uploading {library_filename} to {printer_name}...", phase="uploading"
+                )
                 loop = asyncio.get_running_loop()
                 progress_state = {"last_emit": 0.0, "last_bytes": 0}
 
@@ -2567,6 +2578,7 @@ class BackgroundDispatchService:
                     archive,
                     options=job.options,
                     cancel_check=lambda: self._raise_if_cancel_requested(job),
+                    on_heating=lambda: self._set_active_message(job, "Preheating...", phase="heating"),
                 )
 
                 register_expected_print(
@@ -2600,7 +2612,7 @@ class BackgroundDispatchService:
                 if archive and remove_swap_pending_event(archive, "swap_mode_start"):
                     await db.commit()
 
-                await self._set_active_message(job, f"Starting print on {printer_name}...")
+                await self._set_active_message(job, f"Starting print on {printer_name}...", phase="starting")
                 await _apply_calibrations_for_print(
                     db=db,
                     printer_id=job.printer_id,
@@ -2706,7 +2718,9 @@ class BackgroundDispatchService:
                 pre_subtask_id = getattr(_post_status, "subtask_id", None)
                 pre_gcode_file = getattr(_post_status, "gcode_file", None)
                 if pre_state:
-                    await self._set_active_message(job, f"Waiting for {printer_name} to acknowledge print...")
+                    await self._set_active_message(
+                        job, f"Waiting for {printer_name} to acknowledge print...", phase="acknowledging"
+                    )
                     transitioned = await self._verify_print_response(
                         job.printer_id,
                         printer_name,

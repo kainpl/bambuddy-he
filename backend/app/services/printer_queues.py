@@ -251,7 +251,11 @@ async def _rekey_queue(
                 f"the id is still held by printer {still_taken.printer_id}"
             )
 
-    await db.execute(update(PrintQueueItem).where(PrintQueueItem.queue_id == old_id).values(queue_id=new_id))
+    await db.execute(
+        update(PrintQueueItem)
+        .where(PrintQueueItem.queue_id == old_id)
+        .values(queue_id=new_id, waiting_reason=None, waiting_reason_code=None, waiting_reason_checked_at=None)
+    )
     await db.execute(update(PrintArchive).where(PrintArchive.queue_id == old_id).values(queue_id=new_id))
     # ⚠️ The identity map keys on the primary key we are about to change: leave
     # the old instance attached and the next ``PrinterQueue(id=old_id, ...)``

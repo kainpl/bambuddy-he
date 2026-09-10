@@ -80,5 +80,11 @@ async def routing_update(db, item, changes, cache=None):
         routing = json.dumps(stored)
     for key in CHOICE_FIELDS:
         changes.pop(key, None)
-    changes.update(filament_routing=routing, plate_id=plate)
+    changes.update(
+        filament_routing=routing,
+        plate_id=plate,
+        waiting_reason=None,
+        waiting_reason_code=None,
+        waiting_reason_checked_at=None,
+    )
     return changes

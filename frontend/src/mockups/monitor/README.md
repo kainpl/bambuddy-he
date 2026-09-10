@@ -1,5 +1,10 @@
 # Status monitor design preview
 
+Production follow-up: [v1 specification](../../../../docs/specs/status-monitor.md)
+and [implementation plan](../../../../docs/plans/status-monitor.md). These define
+the live monitor, including authenticated and token-based TV access;
+the preview below remains demonstration data only.
+
 An isolated, interactive prototype for reviewing the **Printers** and **Queue**
 monitor screens. It uses BamDude's actual `Card`, `Button`, `CardSizeSwitch`,
 `Modal`, theme CSS, printer images and ETA comparators. The uniform monitor

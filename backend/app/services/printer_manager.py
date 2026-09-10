@@ -1105,6 +1105,13 @@ class PrinterManager:
             return client.state
         return None
 
+    def peek_status(self, printer_id: int) -> tuple[PrinterState | None, float | None, bool]:
+        """Read-only telemetry for monitoring: never run reconnect side effects."""
+        client = self._clients.get(printer_id)
+        if client is None:
+            return None, None, False
+        return client.state, client.status_received_at, client.is_stale()
+
     # Gcode states in which a job is loaded / in progress and cutting power
     # would ruin the print. PAUSE is included on purpose — a paused print is
     # still loaded on the bed. Used by the smart-plug auto-off guard (#1890) so

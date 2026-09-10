@@ -789,6 +789,7 @@
   "User is not in this group": "Користувача немає в цій групі",
   "User must have an email address to receive notifications": "Щоб отримувати сповіщення, користувач повинен мати email-адресу",
   "User not found": "Користувача не знайдено",
+  "User session required": "Потрібна сесія користувача",
   "User with this username already exists": "Користувач із таким імʼям уже існує",
   "user_setting not supported on this printer": "user_setting не підтримується на цьому принтері",
   "Username already exists": "Таке імʼя користувача вже існує",

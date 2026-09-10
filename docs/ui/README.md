@@ -1,5 +1,8 @@
 # BamDude UI — how to build with it
 
+Feature design: [status monitor specification](../specs/status-monitor.md) ·
+[implementation plan](../plans/status-monitor.md) · [operator guide](../status-monitor.md).
+
 The frontend is React 19 + Tailwind 4 (`frontend/src`). This page is the
 styling idiom a new screen or component is expected to follow — the same
 rules the maintainer's design tooling is fed, written for a human or an agent

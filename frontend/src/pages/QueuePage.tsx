@@ -21,6 +21,9 @@ import { AutoQueuePanel } from '../components/Queue/AutoQueuePanel';
 import { QueueToolbar } from '../components/Queue/QueueToolbar';
 import { readStoredCardSize } from '../utils/cardSize';
 import { PrintModal } from '../components/PrintModal';
+import { OpenMonitorButton } from '../features/monitor/OpenMonitorButton';
+import { useMonitorTarget } from '../features/monitor/useMonitorTarget';
+import { Button } from '../components/Button';
 
 type ViewMode = 'expanded' | 'all' | 'timeline';
 
@@ -37,6 +40,7 @@ const VALID_VIEW_MODES: ViewMode[] = ['expanded', 'all', 'timeline'];
 export function QueuePage() {
   const { t } = useTranslation();
   const [searchParams, setSearchParams] = useSearchParams();
+  const [monitorTarget, clearMonitorTarget] = useMonitorTarget();
   const queryClient = useQueryClient();
 
   const [viewMode, setViewMode] = useState<ViewMode>(() => {
@@ -50,6 +54,7 @@ export function QueuePage() {
   });
 
   const [editingItem, setEditingItem] = useState<PrintQueueItem | null>(null);
+  const effectiveView = monitorTarget ? 'expanded' : viewMode;
 
   // Card size — the same S · M · L · XL scale as the Printers page. For now it
   // only decides how many queue cards share a row; the card itself does not
@@ -187,6 +192,7 @@ export function QueuePage() {
     if (!queues) return [];
     const term = search.trim().toLowerCase();
     const filtered = queues.filter(q => {
+      if (monitorTarget) return q.printer_id === monitorTarget;
       if (statusFilter !== 'all' && q.status !== statusFilter) return false;
       // By id and by subtree: picking a workshop keeps everything beneath it,
       // and a name is no longer an identity now that it can exist twice.
@@ -212,7 +218,7 @@ export function QueuePage() {
       forecastOf: (printerId) => forecastRows.get(printerId),
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- statusCacheVersion is intentional: it forces recompute when WS / poll updates printer status cache; queryClient is stable
-  }, [queues, search, statusFilter, locationFilter, locationIndex, hideOffline, sortBy, sortAsc, statusCacheVersion, forecastRows]);
+  }, [queues, monitorTarget, search, statusFilter, locationFilter, locationIndex, hideOffline, sortBy, sortAsc, statusCacheVersion, forecastRows]);
 
   const hasActiveFilters = search.trim() !== '' || statusFilter !== 'all' || locationFilter !== 'all';
 
@@ -256,11 +262,13 @@ export function QueuePage() {
 
   return (
     <div className="p-4">
+      {monitorTarget && <Button size="sm" variant="outline" onClick={clearMonitorTarget}>{t('monitor.clearTarget', { id: monitorTarget })}</Button>}
       {/* Header: title + inline toolbar (search / filters / view modes) */}
       <div className="space-y-3 mb-4">
         <h1 className="text-2xl font-bold text-white flex items-center gap-3">
           <Calendar className="w-6 h-6 text-bambu-green" />
           {t('queue.title')}
+          <span className="ml-auto"><OpenMonitorButton view="queues" sort={sortBy} /></span>
         </h1>
 
         {!isLoading && queues && queues.length > 0 && (
@@ -276,7 +284,7 @@ export function QueuePage() {
             onSortByChange={handleSortChange}
             sortAsc={sortAsc}
             onSortDirectionToggle={toggleSortDirection}
-            viewMode={viewMode}
+            viewMode={effectiveView}
             onViewModeChange={handleViewChange}
             cardSize={cardSize}
             onCardSizeChange={handleCardSizeChange}
@@ -313,14 +321,14 @@ export function QueuePage() {
       )}
 
       {/* No search/filter results (S / M / Timeline) */}
-      {!isLoading && queues && queues.length > 0 && viewMode !== 'all' && sortedQueues.length === 0 && hasActiveFilters && (
+      {!isLoading && queues && queues.length > 0 && effectiveView !== 'all' && sortedQueues.length === 0 && (hasActiveFilters || monitorTarget) && (
         <div className="text-center py-12 text-bambu-gray">
           {t('printers.noSearchResults')}
         </div>
       )}
 
       {/* Card grid (S and M modes) */}
-      {!isLoading && queues && queues.length > 0 && viewMode !== 'all' && viewMode !== 'timeline' && sortedQueues.length > 0 && (
+      {!isLoading && queues && queues.length > 0 && effectiveView !== 'all' && effectiveView !== 'timeline' && sortedQueues.length > 0 && (
         groupedQueues ? (
           // Grouped by location or by tag
           <div className="space-y-4">
@@ -344,7 +352,7 @@ export function QueuePage() {
       )}
 
       {/* Timeline view */}
-      {!isLoading && queues && queues.length > 0 && viewMode === 'timeline' && sortedQueues.length > 0 && (
+      {!isLoading && queues && queues.length > 0 && effectiveView === 'timeline' && sortedQueues.length > 0 && (
         <QueueTimelineView
           queues={sortedQueues}
           items={allTimelineItems}
@@ -354,7 +362,7 @@ export function QueuePage() {
 
       {/* All view - flat list: active prints first (real + virtual
           external/direct), then pending items numbered #1, #2, … */}
-      {!isLoading && viewMode === 'all' && (
+      {!isLoading && effectiveView === 'all' && (
         <div className="space-y-2">
           {((allPrintingItems?.length ?? 0) === 0 && (allPendingItems?.length ?? 0) === 0) ? (
             <div className="text-center py-12">

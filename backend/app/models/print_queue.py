@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from backend.app.core.database import Base
 
@@ -19,6 +19,20 @@ class PrintQueueItem(Base):
     # Waiting reason - why this pending item hasn't started yet
     # e.g. "Plate not cleared", "Printer offline", "Drying in progress", "Previous print failed"
     waiting_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    waiting_reason_code: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    waiting_reason_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    @validates("waiting_reason", "status", "scheduled_time", "manual_start", "queue_id", "position")
+    def _invalidate_wait_reason(self, key, value):
+        # A recorded decision must not survive retry/reorder/edit or a legacy
+        # producer replacing its prose. The scheduler sets the typed decision
+        # AFTER setting waiting_reason. Loading from the DB skips validators.
+        if getattr(self, key, None) != value:
+            if key != "waiting_reason" and key in self.__dict__:
+                self.waiting_reason = None
+            self.waiting_reason_code = None
+            self.waiting_reason_checked_at = None
+        return value
 
     # Source file (either archive_id OR library_file_id; archive created at print start from library file)
     archive_id: Mapped[int | None] = mapped_column(ForeignKey("print_archives.id", ondelete="CASCADE"), nullable=True)

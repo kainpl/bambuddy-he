@@ -690,7 +690,7 @@ async def archive_printer(
         cancel_result = await db.execute(
             sql_update(PrintQueueItem)
             .where(PrintQueueItem.queue_id.in_(queue_ids), PrintQueueItem.status == "pending")
-            .values(status="cancelled")
+            .values(status="cancelled", waiting_reason=None, waiting_reason_code=None, waiting_reason_checked_at=None)
         )
         cancelled = cancel_result.rowcount or 0
 
