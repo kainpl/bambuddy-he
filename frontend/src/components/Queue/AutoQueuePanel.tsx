@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import {
   ListPlus, Loader2, Sparkles, Trash2, Upload, Zap, ChevronRight,
-  ChevronDown, ChevronUp, GripVertical, Pencil,
+  ChevronDown, ChevronUp, GripVertical, Pencil, Shuffle,
 } from 'lucide-react';
 import { DndContext, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
@@ -18,7 +18,8 @@ import { useAuth } from '../../contexts/AuthContext';
 import { LibraryPickerModal } from '../LibraryPickerModal';
 import { QueueSequencer } from '../QueueSequencer';
 import type { SequencedFile } from '../QueueSequencer';
-import { invalidateQueueViews } from '../../utils/queryInvalidation';
+import { invalidateOrderViews, invalidateQueueViews } from '../../utils/queryInvalidation';
+import { formatDateTime } from '../../utils/date';
 
 /**
  * Top-of-page panel that surfaces pending auto-queue items — the router
@@ -91,6 +92,33 @@ export function AutoQueuePanel() {
       queryClient.invalidateQueries({ queryKey: ['auto-queue'] });
       invalidateQueueViews(queryClient);
       showToast(t('autoQueue.assigned'));
+    },
+    onError: (err: Error) => showToast(err.message, 'error'),
+  });
+
+  // Rebalance across printer models (spec 2026-09-10): a row or a whole block,
+  // by id. Router rows move and extra prints appear, so the auto-queue, the
+  // queue tile and the order views are all re-read; a refused row says why.
+  const rebalanceMutation = useMutation({
+    mutationFn: (ids: number[]) => api.rebalanceAutoQueueItems(ids),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ['auto-queue'] });
+      invalidateQueueViews(queryClient);
+      invalidateOrderViews(queryClient);
+      if (result.converted > 0) {
+        showToast(
+          t('autoQueue.rebalance.moved', {
+            parts: result.moved_parts,
+            converted: result.converted,
+            created: result.created,
+          }),
+          'success',
+        );
+      } else if (result.skipped.length > 0) {
+        showToast(t(`autoQueue.rebalance.skipped.${result.skipped[0].reason}`), 'info');
+      } else {
+        showToast(t('autoQueue.rebalance.nothing'), 'info');
+      }
     },
     onError: (err: Error) => showToast(err.message, 'error'),
   });
@@ -316,7 +344,12 @@ export function AutoQueuePanel() {
                     }
                     onAssignNow={canAssign ? () => assignNowMutation.mutate(head.id) : undefined}
                     onDelete={canDelete ? () => deleteRun(entry.run.items) : undefined}
-                    busy={cancelMutation.isPending || assignNowMutation.isPending}
+                    onRebalance={
+                      canEdit && entry.run.items[0].project_line_id != null
+                        ? () => rebalanceMutation.mutate(entry.run.items.map((it) => it.id))
+                        : undefined
+                    }
+                    busy={cancelMutation.isPending || assignNowMutation.isPending || rebalanceMutation.isPending}
                     t={t}
                   />
                 );
@@ -341,7 +374,12 @@ export function AutoQueuePanel() {
                   onEdit={canEdit ? () => setEditTarget({ item: entry.item, batchCount: 1 }) : undefined}
                   onAssignNow={canAssign ? () => assignNowMutation.mutate(entry.item.id) : undefined}
                   onDelete={canDelete ? () => cancelMutation.mutate(entry.item.id) : undefined}
-                  busy={cancelMutation.isPending || assignNowMutation.isPending}
+                  onRebalance={
+                    canEdit && entry.item.project_line_id != null
+                      ? () => rebalanceMutation.mutate([entry.item.id])
+                      : undefined
+                  }
+                  busy={cancelMutation.isPending || assignNowMutation.isPending || rebalanceMutation.isPending}
                   t={t}
                 />
               );
@@ -434,7 +472,7 @@ export function AutoQueuePanel() {
 
 function AutoQueueRow({
   sortableId, item, countBadge, copyLabel, draggable, busy,
-  onExpand, onCollapse, onEdit, onAssignNow, onDelete, t,
+  onExpand, onCollapse, onEdit, onAssignNow, onRebalance, onDelete, t,
 }: {
   sortableId: string;
   item: AutoQueueItem;
@@ -448,6 +486,7 @@ function AutoQueueRow({
   onCollapse?: () => void;
   onEdit?: () => void;
   onAssignNow?: () => void;
+  onRebalance?: () => void;
   onDelete?: () => void;
   t: (key: string, opts?: Record<string, unknown>) => string;
 }) {
@@ -508,6 +547,18 @@ function AutoQueueRow({
             <ChevronRight className="inline w-3 h-3" />
             {targetModel}
           </span>
+          {item.rebalanced_from_model && (
+            <span
+              className="text-bambu-green/80"
+              data-testid={`auto-queue-rebalanced-${item.id}`}
+              title={t('autoQueue.rebalance.movedFrom', {
+                model: item.rebalanced_from_model,
+                when: formatDateTime(item.rebalanced_at),
+              })}
+            >
+              ← {item.rebalanced_from_model}
+            </span>
+          )}
           {targetLocation && <span>· {targetLocation}</span>}
           {item.force_color_match && <span>· {t('autoQueue.exactColor')}</span>}
           {item.waiting_reason && (
@@ -536,6 +587,17 @@ function AutoQueueRow({
         >
           <Zap className="w-3.5 h-3.5" />
           <span className="hidden sm:inline">{t('autoQueue.assignNow')}</span>
+        </button>
+      )}
+      {onRebalance && (
+        <button
+          type="button"
+          onClick={onRebalance}
+          disabled={busy}
+          className="px-2 py-1 text-xs text-bambu-gray hover:text-white hover:bg-bambu-dark-tertiary rounded inline-flex items-center gap-1 disabled:opacity-40 shrink-0"
+          title={t('autoQueue.rebalance.action')}
+        >
+          <Shuffle className="w-3.5 h-3.5" />
         </button>
       )}
       {onDelete && (

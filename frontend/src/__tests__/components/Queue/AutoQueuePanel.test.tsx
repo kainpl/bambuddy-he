@@ -18,6 +18,7 @@ import { render } from '../../utils';
 import { AutoQueuePanel } from '../../../components/Queue/AutoQueuePanel';
 import { api } from '../../../api/client';
 import type { LibraryFileListItem, LibraryGroupingMetadata, OrderCandidate } from '../../../api/client';
+import type { AutoQueueItem } from '../../../api/client';
 
 const CANDIDATE: OrderCandidate = {
   project_id: 4,
@@ -118,5 +119,85 @@ describe('AutoQueuePanel — the order a routed print is filed under', () => {
 
     await waitFor(() => expect(add).toHaveBeenCalled());
     expect(add.mock.calls[0][0]).toMatchObject({ project_id: undefined, project_line_id: null });
+  });
+});
+
+function routerRow(overrides: Partial<AutoQueueItem>): AutoQueueItem {
+  return {
+    id: 1,
+    archive_id: null,
+    library_file_id: 5,
+    project_id: 4,
+    project_line_id: 9,
+    target_model: 'P1S',
+    target_location: null,
+    target_location_id: null,
+    required_filament_types: ['PLA'],
+    filament_overrides: null,
+    force_color_match: false,
+    plate_id: 1,
+    position: 1,
+    scheduled_time: null,
+    manual_start: false,
+    auto_off_after: false,
+    require_previous_success: false,
+    bed_levelling: 'on',
+    flow_cali: 'on',
+    layer_inspect: false,
+    timelapse: false,
+    use_ams: true,
+    mesh_mode_fast_check: true,
+    execute_swap_macros: true,
+    swap_macro_events: null,
+    selected_macro_ids: null,
+    status: 'pending',
+    waiting_reason: null,
+    assigned_to_item_id: null,
+    assigned_at: null,
+    cancelled_at: null,
+    print_time_seconds: 3600,
+    been_jumped: false,
+    batch_id: null,
+    created_at: '2026-09-10T10:00:00Z',
+    created_by_id: null,
+    library_file_name: 'lamp.gcode.3mf',
+    ...overrides,
+  };
+}
+
+describe('AutoQueuePanel — rebalancing across models', () => {
+  it('offers Rebalance on a collapsed block and sends every copy of it', async () => {
+    vi.spyOn(api, 'getAutoQueue').mockResolvedValue([
+      routerRow({ id: 1, batch_id: 'b1', position: 1 }),
+      routerRow({ id: 2, batch_id: 'b1', position: 2 }),
+      routerRow({ id: 3, project_id: null, project_line_id: null, position: 3, library_file_name: 'loose.3mf' }),
+    ]);
+    const rebalance = vi
+      .spyOn(api, 'rebalanceAutoQueueItems')
+      .mockResolvedValue({ converted: 2, created: 4, cancelled: 0, moved_parts: 12, skipped: [] });
+    const user = userEvent.setup();
+    render(<AutoQueuePanel />);
+
+    const buttons = await screen.findAllByTitle('Rebalance');
+    expect(buttons).toHaveLength(1); // the block; the un-filed row offers none
+    await user.click(buttons[0]);
+
+    await waitFor(() => expect(rebalance).toHaveBeenCalledWith([1, 2]));
+    expect(await screen.findByText('Moved 12 parts: 2 prints re-targeted, 4 added')).toBeInTheDocument();
+  });
+
+  it('says why a row stayed, and shows where a moved row came from', async () => {
+    vi.spyOn(api, 'getAutoQueue').mockResolvedValue([
+      routerRow({ id: 7, rebalanced_from_model: 'P1S', rebalanced_at: '2026-09-10T10:05:00Z', target_model: 'A1MINI' }),
+    ]);
+    vi.spyOn(api, 'rebalanceAutoQueueItems').mockResolvedValue({
+      converted: 0, created: 0, cancelled: 0, moved_parts: 0, skipped: [{ item_id: 7, reason: 'no_faster_model' }],
+    });
+    const user = userEvent.setup();
+    render(<AutoQueuePanel />);
+
+    expect(await screen.findByTestId('auto-queue-rebalanced-7')).toHaveTextContent('← P1S');
+    await user.click(await screen.findByTitle('Rebalance'));
+    expect(await screen.findByText('No other model would finish it sooner')).toBeInTheDocument();
   });
 });
