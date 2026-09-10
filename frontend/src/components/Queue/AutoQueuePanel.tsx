@@ -120,7 +120,15 @@ export function AutoQueuePanel() {
         showToast(t('autoQueue.rebalance.nothing'), 'info');
       }
     },
-    onError: (err: Error) => showToast(err.message, 'error'),
+    // The client sends a long run in chunks of 64, so a failure on a later
+    // chunk leaves the earlier chunks' moves durable: the views are re-read on
+    // error too, or the moved rows would sit stale until some other refetch.
+    onError: (err: Error) => {
+      queryClient.invalidateQueries({ queryKey: ['auto-queue'] });
+      invalidateQueueViews(queryClient);
+      invalidateOrderViews(queryClient);
+      showToast(err.message, 'error');
+    },
   });
 
   // Order-faithful grouping: the list follows the actual queue order, and
