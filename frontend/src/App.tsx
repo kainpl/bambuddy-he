@@ -18,6 +18,7 @@ import { ProductsPage } from './pages/products/ProductsPage';
 import { ProductPage } from './pages/products/ProductPage';
 import { CustomersPage } from './pages/customers/CustomersPage';
 import { CustomerPage } from './pages/customers/CustomerPage';
+import { StockPage } from './pages/stock/StockPage';
 import { OrderPage } from './pages/orders/OrderPage';
 import { FileManagerPage } from './pages/FileManagerPage';
 import { LibraryTrashPage } from './pages/LibraryTrashPage';
@@ -265,6 +266,7 @@ function App() {
                   <Route path="products/:id" element={<ProductPage />} />
                   <Route path="customers" element={<CustomersPage />} />
                   <Route path="customers/:id" element={<CustomerPage />} />
+                  <Route path="stock" element={<StockPage />} />
                   <Route path="inventory" element={<InventoryPage />} />
                   <Route path="files" element={<FileManagerPage />} />
                   <Route path="files/trash" element={<LibraryTrashPage />} />

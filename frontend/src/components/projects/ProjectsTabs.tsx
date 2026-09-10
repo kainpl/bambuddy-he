@@ -1,21 +1,23 @@
 import { Link, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { ClipboardList, Package, Users } from 'lucide-react';
+import { ClipboardList, Package, Users, Warehouse } from 'lucide-react';
 
-// ⚠️ **All three exclude a detail path, and they must stay identical.** Only
-// the three LIST pages render this nav (`OrdersPage`, `ProductsPage`,
-// `CustomersPage` — grep), so a detail route never reaches these regexes at
-// all; the exclusion is belt-and-braces for the day one of them does, and the
-// three disagreeing about the same question is exactly the rot this comment
-// exists to stop. A detail page carries a breadcrumb instead of a lit tab.
+// ⚠️ **All four exclude a detail path, and they must stay identical.** Only
+// the list pages render this nav (`OrdersPage`, `ProductsPage`,
+// `CustomersPage`, `StockPage` — grep), so a detail route never reaches these
+// regexes at all; the exclusion is belt-and-braces for the day one of them
+// does, and the four disagreeing about the same question is exactly the rot
+// this comment exists to stop. A detail page carries a breadcrumb instead of
+// a lit tab.
 const TABS = [
   { to: '/projects', key: 'projects.tabs.orders', icon: ClipboardList, match: /^\/projects(?!\/\d)/ },
   { to: '/products', key: 'projects.tabs.products', icon: Package, match: /^\/products(?!\/\d)/ },
   { to: '/customers', key: 'projects.tabs.customers', icon: Users, match: /^\/customers(?!\/\d)/ },
+  { to: '/stock', key: 'projects.tabs.stock', icon: Warehouse, match: /^\/stock/ },
 ] as const;
 
 /**
- * The three faces of the Projects section.
+ * The four faces of the Projects section.
  *
  * Tabs are navigation between sibling roots, not `?tab=` state — a product URL
  * must stand on its own when someone copies it out of the address bar.
