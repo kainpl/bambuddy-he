@@ -4456,7 +4456,7 @@ export interface AutoQueueItem {
   execute_swap_macros: boolean;
   swap_macro_events: string[] | null;
   selected_macro_ids: number[] | null;
-  status: 'pending' | 'assigned' | 'cancelled';
+  status: 'pending' | 'assigned' | 'cancelled' | 'failed';
   waiting_reason: string | null;
   assigned_to_item_id: number | null;
   assigned_at: string | null;
@@ -8953,7 +8953,7 @@ export const api = {
     }),
 
   // Auto Queue — single global router-queue above per-printer queues
-  getAutoQueue: (status?: 'pending' | 'assigned' | 'cancelled', batchId?: string) => {
+  getAutoQueue: (status?: 'pending' | 'assigned' | 'cancelled' | 'failed' | 'pending,failed', batchId?: string) => {
     const params = new URLSearchParams();
     if (status) params.set('status', status);
     if (batchId) params.set('batch_id', batchId);
@@ -8985,6 +8985,8 @@ export const api = {
     }),
   assignAutoQueueNow: (id: number) =>
     request<AutoQueueItem>(`/auto-queue/${id}/assign-now`, { method: 'POST' }),
+  retryAutoQueue: (id: number) =>
+    request<AutoQueueItem>(`/auto-queue/${id}/retry`, { method: 'POST' }),
   /**
    * Rebalance the named rows across printer models (spec 2026-09-10).
    *

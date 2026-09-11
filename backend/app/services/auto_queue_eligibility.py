@@ -318,7 +318,7 @@ async def find_eligible_printer(
             return EligiblePrinter(reason=f"No active {normalized_model} printers{location_suffix} eligible")
     req = await read_item_requirements(db, item, cache)
     if req.status != "ok":
-        return EligiblePrinter(reason=routing_detail(req.reason)["message"])
+        return EligiblePrinter(reason=routing_detail(req.reason)["message"], requirements=req)
     item.plate_id = req.resolved_plate_id
     if not item.target_model:
         item.target_model = req.model

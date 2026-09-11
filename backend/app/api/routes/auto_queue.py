@@ -53,7 +53,9 @@ from backend.app.schemas.project import RebalanceOut
 from backend.app.services import queue_rebalance
 from backend.app.services.auto_queue_add import add_items_to_auto_queue
 from backend.app.services.auto_queue_eligibility import find_eligible_printer
+from backend.app.services.filament_intake import fail_auto_source, read_item_requirements, routing_detail
 from backend.app.services.filament_preview import routing_preview
+from backend.app.services.source_io import SOURCE_FAILURES, SourceUnavailable
 from backend.app.utils.printer_models import normalize_model_name
 
 logger = logging.getLogger(__name__)
@@ -229,7 +231,7 @@ async def list_auto_queue(
         selectinload(AutoQueueItem.assigned_to).selectinload(PrintQueueItem.queue).selectinload(PrinterQueue.printer),
     )
     if status_filter:
-        stmt = stmt.where(AutoQueueItem.status == status_filter)
+        stmt = stmt.where(AutoQueueItem.status.in_(status_filter.split(",")))
     if batch_id:
         stmt = stmt.where(AutoQueueItem.batch_id == batch_id)
     stmt = stmt.order_by(AutoQueueItem.position)
@@ -420,7 +422,7 @@ async def cancel_auto_queue_item(
 
     now = datetime.now(timezone.utc)
 
-    if item.status == "pending" and item.assigned_to_item_id is None:
+    if item.status in ("pending", "failed") and item.assigned_to_item_id is None:
         # Snapshot before the row stops existing. The client asked for a
         # cancel and gets the item back in the state it asked for; the two
         # fields are the response's alone, never written.
@@ -507,15 +509,52 @@ async def assign_now(
     eligible = await find_eligible_printer(db, item, busy_printers)
     printer, reason = eligible
     if printer is None:
+        source_reason = getattr(eligible.requirements, "reason", None)
+        if source_reason in SOURCE_FAILURES:
+            await fail_auto_source(db, item, source_reason)
         if reason:
             item.waiting_reason = reason
             await db.commit()
         raise HTTPException(409, reason or "No eligible printer available")
 
-    await auto_queue_scheduler._assign(db, item, printer, plan=eligible.plan, requirements=eligible.requirements)
+    try:
+        await auto_queue_scheduler._assign(db, item, printer, plan=eligible.plan, requirements=eligible.requirements)
+    except SourceUnavailable as exc:
+        await db.refresh(item)
+        if exc.reason in SOURCE_FAILURES:
+            await fail_auto_source(db, item, exc.reason)
+            await db.commit()
+        raise HTTPException(409, routing_detail(exc.reason)) from exc
     await db.commit()
-    await db.refresh(item)
-    return _to_response(item)
+    return await get_auto_queue_item(item_id, db, _)
+
+
+@router.post("/{item_id}/retry", response_model=AutoQueueItemResponse)
+async def retry_auto_queue_item(
+    item_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: User | None = RequirePermission(Permission.QUEUE_REORDER),
+):
+    """Revalidate a failed source before returning the same job to the router."""
+    from sqlalchemy import update
+
+    item = await db.get(AutoQueueItem, item_id)
+    if item is None:
+        raise HTTPException(404, "Auto-queue item not found")
+    if item.status != "failed":
+        raise HTTPException(409, routing_detail("source_retry_not_failed"))
+    requirements = await read_item_requirements(db, item)
+    if requirements.status != "ok":
+        raise HTTPException(409, routing_detail(requirements.reason))
+    result = await db.execute(
+        update(AutoQueueItem)
+        .where(AutoQueueItem.id == item_id, AutoQueueItem.status == "failed", AutoQueueItem.cancelled_at.is_(None))
+        .values(status="pending", waiting_reason=None)
+    )
+    if not result.rowcount:
+        raise HTTPException(409, routing_detail("source_retry_not_failed"))
+    await db.commit()
+    return await get_auto_queue_item(item_id, db, _)
 
 
 @router.delete("/batch/{batch_id}", response_model=AutoQueueBatchActionResponse)
@@ -533,7 +572,7 @@ async def cancel_auto_queue_batch(
     pending_result = await db.execute(
         select(AutoQueueItem).where(
             AutoQueueItem.batch_id == batch_id,
-            AutoQueueItem.status == "pending",
+            AutoQueueItem.status.in_(["pending", "failed"]),
         )
     )
     pending = list(pending_result.scalars().all())
