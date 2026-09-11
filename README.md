@@ -410,6 +410,31 @@ Open **http://localhost:8000** in your browser.
 
 > **macOS/Windows:** Docker Desktop doesn't support `--network host`. Use `-p 8000:8000` instead and add printers manually by IP.
 
+#### Optional RTSP hardware decode on Linux
+
+Built-in RTSP camera streams can opt into ffmpeg VAAPI hardware decode:
+
+```bash
+docker run -d \
+  --name bamdude \
+  --network host \
+  --device /dev/dri:/dev/dri \
+  --group-add "$(getent group video | cut -d: -f3)" \
+  --group-add "$(getent group render | cut -d: -f3)" \
+  -e BAMDUDE_RTSP_HWACCEL=vaapi \
+  -e BAMDUDE_VAAPI_DEVICE=/dev/dri/renderD128 \
+  -e LIBVA_DRIVER_NAME=iHD \
+  -e TZ=Europe/Kyiv \
+  -v bamdude_data:/app/data \
+  -v bamdude_logs:/app/logs \
+  --restart unless-stopped \
+  kainpl/bamdude:latest
+```
+
+Older Intel GPUs may need `LIBVA_DRIVER_NAME=i965` instead of `iHD`.
+When disabled or unavailable, BamDude keeps using software decode and the
+MJPEG camera output stays unchanged.
+
 ### Docker Compose (from source)
 
 ```bash
