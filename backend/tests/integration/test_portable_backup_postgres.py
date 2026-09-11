@@ -6,6 +6,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+import zipfile
 from contextlib import asynccontextmanager, closing
 
 import pytest
@@ -43,10 +44,20 @@ def test_postgres_zip_restores_to_sqlite_and_postgres(tmp_path):
     _wipe(url)
     original = run("export", tmp_path / "source", url, tmp_path)
     zip_path = original.pop("zip")
+    assert run("restore-fail", tmp_path / "source", url, zip_path) == {"rollback": True}
     for backend, target in ((None, "sqlite"), (url, "postgresql")):
         restored = run("restore", tmp_path / target, backend, zip_path)
         expected = {**original, "dialect": target}
         assert restored == expected
+
+    # Backwards compatibility for ZIPs created before manifests were added.
+    legacy = tmp_path / "legacy.zip"
+    with zipfile.ZipFile(zip_path) as source, zipfile.ZipFile(legacy, "w") as target:
+        for item in source.infolist():
+            if item.filename != "backup-manifest.json":
+                target.writestr(item, source.read(item))
+    restored = run("restore", tmp_path / "legacy-sqlite", None, legacy)
+    assert restored == {**original, "dialect": "sqlite"}
 
 
 @pytest.fixture

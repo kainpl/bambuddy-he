@@ -2,7 +2,9 @@
 
 import asyncio
 import json
+import sqlite3
 import sys
+from contextlib import closing
 from pathlib import Path
 
 from sqlalchemy import select, text
@@ -65,9 +67,21 @@ async def seed():
         provider.client_secret = "synthetic-secret"
         db.add(provider)
         await db.commit()
-    archive = settings.base_dir / "archive"
+    archive = settings.archive_dir
     archive.mkdir(parents=True, exist_ok=True)
     (archive / "test.3mf").write_bytes(b"fixture")
+    from backend.app.services.backup_files import directories
+
+    for name, directory in directories(settings).items():
+        (directory / "empty").mkdir(parents=True, exist_ok=True)
+        if name != "icons":  # An entirely empty directory must clear old files.
+            (directory / "fixture.bin").write_bytes(name.encode())
+    (settings.base_dir / ".install_id").write_bytes(b"fixture-identity")
+    (settings.base_dir / "zigbee").mkdir(exist_ok=True)
+    with closing(sqlite3.connect(settings.base_dir / "zigbee/zigbee.db")) as db:
+        db.execute("CREATE TABLE network(key TEXT)")
+        db.execute("INSERT INTO network VALUES ('fixture-network-key')")
+        db.commit()
 
 
 async def report():
@@ -128,8 +142,11 @@ async def main(mode, path):
     from backend.app.api.routes.settings import create_backup_zip, restore_backup
     from backend.app.core import database
     from backend.app.core.config import settings
+    from backend.app.services.backup_files import directories
 
     try:
+        # Export and restore on different external archive roots.
+        settings.archive_dir = settings.base_dir.parent / (settings.base_dir.name + "-archives")
         await database.init_db()
         if mode == "export":
             await seed()
@@ -137,14 +154,50 @@ async def main(mode, path):
             output, _ = await create_backup_zip(path)
             result["zip"] = str(output)
             return result
+        for directory in directories(settings).values():
+            directory.mkdir(parents=True, exist_ok=True)
+            (directory / "old-only.bin").write_bytes(b"old")
+        (settings.base_dir / ".install_id").write_bytes(b"old-identity")
+        previous_key = (settings.base_dir / ".mfa_encryption_key").read_bytes()
+        if mode == "restore-fail":
+            from sqlalchemy import event
+
+            before = await report()
+            load_failures = []
+
+            def fail_load(conn, cursor, statement, parameters, context, executemany):
+                if statement.startswith("INSERT INTO") and '"print_archives"' in statement:
+                    load_failures.append(statement)
+                    raise RuntimeError("injected real restore load failure")
+
+            event.listen(database.engine.sync_engine, "before_cursor_execute", fail_load)
         # Exercise the route, including request-session closure, ZIP validation,
         # MFA key restoration, reinitialization and pending migrations.
         async with database.async_session() as db:
             await db.execute(text("SELECT id FROM settings LIMIT 1"))
             with path.open("rb") as stream:
                 response = await restore_backup(file=UploadFile(file=stream, filename="backup.zip"), db=db, _=None)
+            if mode == "restore-fail":
+                assert response.status_code == 500
+                assert len(load_failures) == 1
+                assert await report() == before
+                for directory in directories(settings).values():
+                    assert (directory / "old-only.bin").read_bytes() == b"old"
+                    assert not list(directory.glob(".bamdude-restore-*"))
+                assert (settings.base_dir / ".install_id").read_bytes() == b"old-identity"
+                assert (settings.base_dir / ".mfa_encryption_key").read_bytes() == previous_key
+                return {"rollback": True}
             assert isinstance(response, dict) and response["success"], response
-        assert (settings.base_dir / "archive" / "test.3mf").read_bytes() == b"fixture"
+        assert (settings.archive_dir / "test.3mf").read_bytes() == b"fixture"
+        for name, directory in directories(settings).items():
+            assert not (directory / "old-only.bin").exists()
+            assert (directory / "empty").is_dir()
+            assert not list(directory.glob(".bamdude-restore-*"))
+            if name != "icons":
+                assert (directory / "fixture.bin").read_bytes() == name.encode()
+        assert (settings.base_dir / ".install_id").read_bytes() == b"fixture-identity"
+        with closing(sqlite3.connect(settings.base_dir / "zigbee/zigbee.db")) as db:
+            assert db.execute("SELECT key FROM network").fetchone() == ("fixture-network-key",)
         return await exercise_restored_database()
     finally:
         await database.engine.dispose()

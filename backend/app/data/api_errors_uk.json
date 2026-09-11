@@ -6,6 +6,7 @@
   "'{}' is {} x {} mm and does not fit the {} x {} mm stock loaded in this printer": "«{}» має розмір {} x {} мм і не вміщується в касету {} x {} мм, заряджену в цей принтер",
   "'{}' is {} × {} mm and does not fit a {} × {} mm cell of '{}'": "«{}» має розмір {} × {} мм і не вміщується в комірку {} × {} мм у «{}»",
   "'{}': the shortest gap between reports cannot be longer than the longest.": "«{}»: найменший інтервал між звітами не може бути більшим за найбільший.",
+  "A backup or restore is already running": "Резервне копіювання або відновлення вже виконується",
   "A batch needs at least 2 items": "Пакет має містити щонайменше 2 елементи",
   "a correction has to move something": "корекція має щось змінити",
   "A file named {} already exists in the external folder": "Файл з назвою {} уже існує в зовнішній теці",
@@ -311,10 +312,11 @@
   "Invalid archive IDs format": "Некоректний формат ID архівів",
   "Invalid audio file extension": "Некоректне розширення аудіофайлу",
   "Invalid backup code": "Некоректний резервний код",
+  "Invalid backup database: damaged or incompatible. Check server logs.": "Некоректна база резервної копії: файл пошкоджений або несумісний. Перевірте журнали сервера.",
   "Invalid backup file: must be a .zip file": "Некоректний файл резервної копії: має бути .zip",
   "Invalid backup file: not a valid ZIP": "Некоректний файл резервної копії: не є коректним ZIP",
+  "Invalid backup files: unsafe paths or failed integrity check. Check server logs.": "Некоректні файли резервної копії: небезпечні шляхи або порушена цілісність. Перевірте журнали сервера.",
   "Invalid backup: missing database file (bamdude.db or bambuddy.db)": "Некоректна резервна копія: немає файлу бази даних (bamdude.db або bambuddy.db)",
-  "Invalid backup: unsafe path in ZIP: {}": "Некоректна резервна копія: небезпечний шлях у ZIP: {}",
   "Invalid code": "Некоректний код",
   "Invalid date_from format": "Некоректний формат date_from",
   "Invalid date_to format": "Некоректний формат date_to",
@@ -618,7 +620,6 @@
   "Refusing to save: the target repository is not private. BamDude backups include MQTT credentials, Home Assistant tokens, Prometheus tokens, your Bambu Cloud email, the printer access codes via K-profiles, and other settings that must not be exposed publicly. Make the repository private in your provider's UI and try again.": "Збереження відхилено: цільовий репозиторій не приватний. Резервні копії BamDude містять облікові дані MQTT, токени Home Assistant, токени Prometheus, вашу пошту Bambu Cloud, коди доступу принтерів через K-профілі та інші налаштування, які не можна робити публічними. Зробіть репозиторій приватним в інтерфейсі свого провайдера й повторіть спробу.",
   "Request failed: {}": "Не вдалося виконати запит: {}",
   "Requires admin role": "Потрібна роль адміністратора",
-  "Restore aborted: MFA key write failed. Database is unchanged. Check server logs.": "Відновлення перервано: не вдалося записати ключ MFA. База даних без змін. Перевірте логи сервера.",
   "retention_days must be between {} and {}": "retention_days має бути між {} і {}",
   "rgba must be a 6 or 8 character hex string (RRGGBB or RRGGBBAA)": "rgba має бути hex-рядком із 6 або 8 символів (RRGGBB або RRGGBBAA)",
   "Role must be 'admin' or 'user'": "Роль має бути «admin» або «user»",
@@ -835,6 +836,5 @@
   "{} not supported on this printer": "{} не підтримується на цьому принтері",
   "{} partially applied: {}/{} spools updated": "{} застосовано частково: оновлено {}/{} котушок",
   "{} target must be 0 (off) or between {} and {} °C": "Ціль {} має бути 0 (вимкнено) або в діапазоні від {} до {} °C",
-  "{}: '{}' must be a list": "{}: «{}» має бути списком",
-  "Invalid backup database: damaged or incompatible. Check server logs.": "Некоректна база резервної копії: файл пошкоджений або несумісний. Перевірте журнали сервера."
+  "{}: '{}' must be a list": "{}: «{}» має бути списком"
 }
