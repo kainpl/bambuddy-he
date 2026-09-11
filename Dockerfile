@@ -27,8 +27,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gnupg \
     gosu \
     iproute2 \
+    i965-va-driver \
+    intel-media-va-driver \
+    libva-drm2 \
+    libva2 \
     libcap2-bin \
     openssh-client \
+    vainfo \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 

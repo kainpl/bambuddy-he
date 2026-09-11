@@ -108,6 +108,31 @@ volumes:
   bamdude_logs:
 ```
 
+### Optional RTSP hardware decode on Linux
+
+Built-in RTSP camera streams can opt into ffmpeg VAAPI hardware decode. Pass
+the host render device into the container, add matching `video`/`render` group
+access, and set:
+
+```yaml
+services:
+  bamdude:
+    environment:
+      - BAMDUDE_RTSP_HWACCEL=vaapi
+      - BAMDUDE_VAAPI_DEVICE=/dev/dri/renderD128
+      - LIBVA_DRIVER_NAME=iHD
+    volumes:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "<video-gid>"
+      - "<render-gid>"
+```
+
+Use `getent group video render` on the host to find the numeric group IDs.
+Older Intel GPUs may need `LIBVA_DRIVER_NAME=i965`. The frontend/API contract
+does not change: BamDude still serves MJPEG, but ffmpeg can decode the RTSP
+input through VAAPI.
+
 ## Upgrading & migration
 
 Full manual (every source version × every install method, backup/rollback, troubleshooting):

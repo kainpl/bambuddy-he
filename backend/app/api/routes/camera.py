@@ -42,6 +42,11 @@ from backend.app.services.camera_fanout import (
     shutdown_broadcaster,
 )
 from backend.app.services.camera_profiles import get_camera_profile
+from backend.app.services.ffmpeg_hwaccel import (
+    rtsp_hwaccel_filter_args,
+    rtsp_hwaccel_input_args,
+    rtsp_hwaccel_mode,
+)
 from backend.app.services.ffmpeg_stderr import FfmpegStderrDrain
 
 logger = logging.getLogger(__name__)
@@ -468,6 +473,7 @@ async def generate_rtsp_mjpeg_stream(
     # hardened Debian defaults rejecting TLS renegotiation.
     proxy_port, proxy_server = await create_tls_proxy(ip_address, port)
     camera_url = f"rtsp://bblp:{access_code}@127.0.0.1:{proxy_port}/streaming/live/1"
+    hwaccel_mode = rtsp_hwaccel_mode()
 
     # ffmpeg command to output MJPEG stream to stdout
     cmd = [
@@ -501,8 +507,10 @@ async def generate_rtsp_mjpeg_stream(
         "-flags",
         "low_delay",  # Minimize decode latency
         *profile.extra_ffmpeg_input_args,
+        *rtsp_hwaccel_input_args(hwaccel_mode),
         "-i",
         camera_url,
+        *rtsp_hwaccel_filter_args(hwaccel_mode),
         "-f",
         "mjpeg",
         "-q:v",
@@ -518,13 +526,14 @@ async def generate_rtsp_mjpeg_stream(
         _disconnect_events[stream_id] = disconnect_event
 
     logger.info(
-        "Starting RTSP camera stream for %s (stream_id=%s, model=%s, fps=%s, probesize=%s, analyzeduration=%s)",
+        "Starting RTSP camera stream for %s (stream_id=%s, model=%s, fps=%s, probesize=%s, analyzeduration=%s, hwaccel=%s)",
         ip_address,
         stream_id,
         model,
         fps,
         profile.probesize,
         profile.analyzeduration,
+        hwaccel_mode or "software",
     )
     # Log the full argv so a support bundle shows the actual ffmpeg flags
     # (probesize, analyzeduration, transport, ...). Only camera_url carries a

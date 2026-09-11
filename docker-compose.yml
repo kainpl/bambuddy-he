@@ -80,6 +80,11 @@ services:
       # system trust store on container startup. Enable trust-store loading
       # with USE_SYSTEM_TRUST_STORE=true in the environment block below.
       #- /path/to/certs:/usr/local/share/ca-certificates
+      #
+      # Optional VAAPI hardware decode for built-in RTSP camera streams.
+      # Uncomment this together with BAMDUDE_RTSP_HWACCEL=vaapi below. On older
+      # Intel GPUs (for example Ivy Bridge), also set LIBVA_DRIVER_NAME=i965.
+      #- /dev/dri:/dev/dri
     environment:
       - TZ=${TZ:-Europe/Kyiv}
       # User/group the container drops to after the entrypoint normalises
@@ -120,6 +125,18 @@ services:
       # use case: a local Home Assistant instance with a self-signed cert
       # that BamDude needs to talk to over HTTPS.
       #- USE_SYSTEM_TRUST_STORE=true
+      #
+      # Optional ffmpeg VAAPI hardware decode for built-in RTSP camera streams.
+      # Requires /dev/dri above and matching render/video group access. If your
+      # device node is not renderD128, override BAMDUDE_VAAPI_DEVICE.
+      #- BAMDUDE_RTSP_HWACCEL=vaapi
+      #- BAMDUDE_VAAPI_DEVICE=/dev/dri/renderD128
+      #- LIBVA_DRIVER_NAME=iHD
+    # Optional VAAPI group access. Use numeric host IDs from:
+    #   getent group video render
+    #group_add:
+    #  - "${BAMDUDE_VIDEO_GID:-44}"
+    #  - "${BAMDUDE_RENDER_GID:-109}"
     restart: unless-stopped
 
 volumes:
