@@ -340,3 +340,99 @@ def test_flat_defective_attributes_only_on_a_mono_part_plate():
     assert (a.defective or 0) == 0 and (b.defective or 0) == 0
 
     assert apply_flat_defective([], 3) is False
+
+
+@pytest.mark.asyncio
+async def test_a_flat_count_typed_before_the_rows_existed_survives_the_seeding(db_session, tmp_path, printer_factory):
+    """Ruling I1. The flat counter is offered exactly when the rows do not exist
+    yet: an external print reaches ``completed`` before its 3MF arrives, so the
+    card and Telegram both ask for one number. Then ``seed_archive_parts`` used
+    to create every row with ``defective = 0`` and leave ``defective_count``
+    saying N — an archive contradicting itself — while ``credit_if_unfiled``
+    credited the FULL quantity, putting the scrapped parts on the shelf.
+    """
+    from backend.app.models.product import Product, ProductPart, ProductPlate
+    from backend.app.services import part_stock
+    from backend.app.services.archive import ArchiveService
+    from backend.app.services.archive_defects import DefectsWrite, record_defects
+
+    printer = await printer_factory()
+    product = Product(name="Lamp")
+    db_session.add(product)
+    await db_session.flush()
+    lid = ProductPart(product_id=product.id, kind="printed", name="lid", name_key="lid", qty_per_unit=1)
+    db_session.add_all([lid, ProductPlate(product_id=product.id, library_file_id=904, plate_index=0)])
+    archive = PrintArchive(
+        printer_id=printer.id,
+        filename="late.3mf",
+        print_name="Late",
+        file_path="",
+        file_size=0,
+        status="completed",
+        library_file_id=904,
+        plate_index=1,
+        quantity=2,
+        started_at=datetime.now(timezone.utc),
+        extra_data={"no_3mf_available": True},
+    )
+    db_session.add(archive)
+    await db_session.flush()
+
+    # The operator grades the plate at the printer, before the file lands: no
+    # part rows, so the one number is all there is to give.
+    result = await record_defects(db_session, archive, DefectsWrite(flat=1))
+    assert result.defective_count == 1 and result.parts == []
+    await db_session.commit()
+    product_id, lid_id, archive_id = product.id, lid.id, archive.id
+
+    f = tmp_path / "late.gcode.3mf"
+    f.write_bytes(_3mf({5: "lid", 6: "lid"}))
+    assert await ArchiveService(db_session).attach_3mf_to_archive(archive_id, f)
+
+    rows = await _rows(db_session, archive_id)
+    assert [(r.name_key, r.quantity, r.defective) for r in rows] == [("lid", 2, 1)]
+    assert (await db_session.get(PrintArchive, archive_id)).defective_count == 1, "the two halves agree"
+    assert await part_stock.balances(db_session, product_id) == {lid_id: 1}, "printed - defective, not printed"
+
+
+@pytest.mark.asyncio
+async def test_a_flat_count_a_multi_part_plate_cannot_adopt_is_kept_and_logged(
+    db_session, tmp_path, printer_factory, caplog
+):
+    """The other half of the m158 rule: a plate of two different parts does not
+    say which one went in the bin, so the number is not attributed. The flat
+    count is KEPT (the operator typed it and it is true of the plate) and the
+    disagreement is said out loud, rather than silently resolved either way.
+    """
+    import logging
+
+    from backend.app.services.archive import ArchiveService
+    from backend.app.services.archive_defects import DefectsWrite, record_defects
+
+    printer = await printer_factory()
+    archive = PrintArchive(
+        printer_id=printer.id,
+        filename="late.3mf",
+        print_name="Late",
+        file_path="",
+        file_size=0,
+        status="completed",
+        plate_index=1,
+        quantity=2,
+        started_at=datetime.now(timezone.utc),
+    )
+    db_session.add(archive)
+    await db_session.flush()
+    await record_defects(db_session, archive, DefectsWrite(flat=1))
+    await db_session.commit()
+    archive_id = archive.id
+
+    f = tmp_path / "late.gcode.3mf"
+    f.write_bytes(_3mf({5: "lid", 6: "base"}))
+    with caplog.at_level(logging.WARNING, logger="backend.app.services.archive_parts"):
+        assert await ArchiveService(db_session).attach_3mf_to_archive(archive_id, f)
+
+    rows = await _rows(db_session, archive_id)
+    assert sorted((r.name_key, r.defective) for r in rows) == [("base", 0), ("lid", 0)]
+    assert (await db_session.get(PrintArchive, archive_id)).defective_count == 1, "kept, not zeroed"
+    assert any(str(archive_id) in rec.getMessage() for rec in caplog.records), "and named in the log"

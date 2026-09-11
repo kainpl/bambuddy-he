@@ -25,6 +25,25 @@ from backend.app.services.part_names import tally_objects
 logger = logging.getLogger(__name__)
 
 
+async def load_rows(db: AsyncSession, archive_id: int) -> list[PrintArchivePart]:
+    """This archive's part rows in id order — the plate as everything reads it.
+
+    One function because the order matters and is load-bearing: Telegram walks
+    the rows by ascending id ("the next part"), the two wire shapes render them
+    in that order, and the ledger's ``wanted`` map is built from the same walk.
+    Four identical selects used to say so separately.
+    """
+    return list(
+        (
+            await db.execute(
+                select(PrintArchivePart).where(PrintArchivePart.archive_id == archive_id).order_by(PrintArchivePart.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
 async def seed_archive_parts(db: AsyncSession, archive: PrintArchive, data: bytes | Path) -> None:
     """(Re)build the archive's part rows from 3MF bytes.
 
@@ -59,17 +78,41 @@ async def seed_archive_parts(db: AsyncSession, archive: PrintArchive, data: byte
         for row in old_rows:
             await db.delete(row)
 
-        for part in tally_objects(objects):
-            db.add(
-                PrintArchivePart(
-                    archive_id=archive.id,
-                    name=part.name,
-                    name_key=part.name_key,
-                    identify_ids=part.identify_ids,
-                    quantity=part.quantity,
-                    defective=min(old_defective.get(part.name_key, 0), part.quantity),
-                )
+        new_rows = [
+            PrintArchivePart(
+                archive_id=archive.id,
+                name=part.name,
+                name_key=part.name_key,
+                identify_ids=part.identify_ids,
+                quantity=part.quantity,
+                defective=min(old_defective.get(part.name_key, 0), part.quantity),
             )
+            for part in tally_objects(objects)
+        ]
+        for row in new_rows:
+            db.add(row)
+
+        # ⚠️ A flat count typed BEFORE the rows existed must survive them.
+        # An external print reaches ``completed`` before its 3MF arrives, so the
+        # card and Telegram both offer the FLAT counter — and the rows seeded
+        # afterwards were all born with ``defective = 0``, which reset
+        # ``defective_count`` on the next write and let the free-stock credit
+        # put the scrapped parts on the shelf. Same rule as m158's backfill: a
+        # plate holding copies of exactly one part can adopt the number; a
+        # multi-part plate cannot, and the mismatch is said out loud rather than
+        # quietly resolved either way.
+        if not old_rows and (archive.defective_count or 0) > 0:
+            if apply_flat_defective(new_rows, int(archive.defective_count)):
+                archive.defective_count = sum(r.defective or 0 for r in new_rows)
+            else:
+                logger.warning(
+                    "seed_archive_parts: archive %s carries a flat defective_count of %s that its %d part row(s) "
+                    "cannot adopt (a multi-part plate does not say which part went in the bin) — the flat count is "
+                    "kept and the rows read 0; re-enter the defects per part",
+                    archive.id,
+                    archive.defective_count,
+                    len(new_rows),
+                )
     except Exception as e:  # noqa: BLE001 — the ledger must never fail a print
         logger.warning("seed_archive_parts failed for archive %s: %s", archive.id, e)
 
