@@ -11,6 +11,7 @@ import { getArchiveStatusBadge } from '../../utils/archiveStatus';
 import { CardActionMenu, CardActionMenuItem } from '../CardActionMenu';
 import { LoadingBlock } from '../LoadingBlock';
 import { OrderLinePicker } from '../pickers/OrderLinePicker';
+import { OrderPrintDefectsDialog } from './OrderPrintDefectsDialog';
 import { invalidateOrderViews } from '../../utils/queryInvalidation';
 
 interface OrderPrintsProps {
@@ -259,10 +260,12 @@ function ArchivePrintMenu({
   archive,
   order,
   close,
+  onDefects,
 }: {
   archive: Archive;
   order: Order;
   close: () => void;
+  onDefects: () => void;
 }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -315,6 +318,16 @@ function ArchivePrintMenu({
 
   return (
     <>
+      {archive.status === 'completed' && (
+        <CardActionMenuItem
+          onSelect={() => {
+            close();
+            onDefects();
+          }}
+        >
+          {t('orders.prints.defects.action')}
+        </CardActionMenuItem>
+      )}
       <CardActionMenuItem onSelect={() => setPickingLine(true)}>{t('orders.prints.fileUnderLine')}</CardActionMenuItem>
       {/* ⚠️ `disabled` while the unlink is in flight. The hand-rolled button
           this menu item replaced had it, and the port lost it — leaving a second
@@ -331,6 +344,7 @@ function ArchivePrintMenu({
 /** One print: what it was, how it ended, and which line it answers to. */
 function ArchiveCard({ archive, order, lines, canEdit }: ArchiveCardProps) {
   const { t } = useTranslation();
+  const [defectsOpen, setDefectsOpen] = useState(false);
 
   const badge = getArchiveStatusBadge(archive.status);
   const name = archive.print_name || archive.filename;
@@ -379,6 +393,12 @@ function ArchiveCard({ archive, order, lines, canEdit }: ArchiveCardProps) {
           >
             {archive.project_line_id != null ? t('orders.prints.explicit') : t('orders.prints.attributed')}
           </span>
+          {archive.status === 'completed' && (
+            <span className="text-[10px] text-bambu-gray" data-testid={`print-defects-${archive.id}`}>
+              {archive.quantity}
+              {(archive.defective_count ?? 0) > 0 && ` · ${t('orders.prints.defective', { count: archive.defective_count })}`}
+            </span>
+          )}
         </div>
         {when && <p className="text-[11px] text-bambu-gray/70 mt-0.5">{formatDateOnly(when)}</p>}
       </div>
@@ -392,9 +412,14 @@ function ArchiveCard({ archive, order, lines, canEdit }: ArchiveCardProps) {
               the page by hand. `CardActionMenu` portals to `document.body` and
               answers all four the same way every other card menu does. */}
           <CardActionMenu label={t('orders.prints.actions')} testId={`print-menu-${archive.id}`} width={224}>
-            {(close) => <ArchivePrintMenu archive={archive} order={order} close={close} />}
+            {(close) => (
+              <ArchivePrintMenu archive={archive} order={order} close={close} onDefects={() => setDefectsOpen(true)} />
+            )}
           </CardActionMenu>
         </div>
+      )}
+      {defectsOpen && (
+        <OrderPrintDefectsDialog orderId={order.id} archive={archive} onClose={() => setDefectsOpen(false)} />
       )}
     </div>
   );

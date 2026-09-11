@@ -314,6 +314,69 @@ describe('OrderPrints', () => {
     expect(get.mock.calls.every((call) => call[0] === 2)).toBe(true);
   });
 
+  it('shows how many came out bad and records defects from the card menu', async () => {
+    vi.spyOn(api, 'getProjectArchives').mockResolvedValue([
+      { id: 1, filename: 'a.3mf', status: 'completed', project_line_id: 10, quantity: 6, defective_count: 2 },
+    ] as never);
+    vi.spyOn(api, 'getOrderPrintParts').mockResolvedValue({
+      archive_id: 1,
+      quantity: 6,
+      defective_count: 2,
+      parts: [
+        { id: 11, name: 'lid', name_key: 'lid', quantity: 2, defective: 0 },
+        { id: 12, name: 'base', name_key: 'base', quantity: 4, defective: 2 },
+      ],
+      ledger_refused_parts: 0,
+    });
+    const record = vi.spyOn(api, 'recordOrderPrintDefects').mockResolvedValue({
+      archive_id: 1, quantity: 6, defective_count: 3, parts: [], ledger_refused_parts: 0,
+    });
+    const order = {
+      id: 1,
+      other_archive_ids: [],
+      lines: [{ id: 10, product_name: 'Flask', quantity: 2, archive_ids: [1] }],
+    } as unknown as Order;
+
+    render(<OrderPrints order={order} canEdit />);
+
+    expect((await screen.findByTestId('print-defects-1')).textContent).toContain('2 defective');
+    fireEvent.click(screen.getByTestId('print-menu-1'));
+    fireEvent.click(await screen.findByText('Defects…'));
+
+    const lid = (await screen.findByTestId('part-defective-11')) as HTMLInputElement;
+    fireEvent.change(lid, { target: { value: '1' } });
+    fireEvent.click(screen.getByTestId('print-defects-save'));
+
+    await waitFor(() =>
+      expect(record).toHaveBeenCalledWith(1, 1, { parts: [{ id: 11, defective: 1 }, { id: 12, defective: 2 }] }),
+    );
+    // The grid re-reads after the save.
+    await waitFor(() => expect(api.getProjectArchives).toHaveBeenCalledTimes(2));
+  });
+
+  it('records a flat count for a print without part rows', async () => {
+    vi.spyOn(api, 'getProjectArchives').mockResolvedValue([
+      { id: 2, filename: 'b.3mf', status: 'completed', project_line_id: 10, quantity: 3, defective_count: 0 },
+    ] as never);
+    vi.spyOn(api, 'getOrderPrintParts').mockResolvedValue({
+      archive_id: 2, quantity: 3, defective_count: 0, parts: [], ledger_refused_parts: 0,
+    });
+    const record = vi.spyOn(api, 'recordOrderPrintDefects').mockResolvedValue({
+      archive_id: 2, quantity: 3, defective_count: 1, parts: [], ledger_refused_parts: 0,
+    });
+    const order = {
+      id: 1, other_archive_ids: [], lines: [{ id: 10, product_name: 'Flask', quantity: 2, archive_ids: [2] }],
+    } as unknown as Order;
+
+    render(<OrderPrints order={order} canEdit />);
+    fireEvent.click(await screen.findByTestId('print-menu-2'));
+    fireEvent.click(await screen.findByText('Defects…'));
+    fireEvent.change(await screen.findByTestId('defective-count-input'), { target: { value: '1' } });
+    fireEvent.click(screen.getByTestId('print-defects-save'));
+
+    await waitFor(() => expect(record).toHaveBeenCalledWith(1, 2, { defective_count: 1 }));
+  });
+
   it('offers no menu at all without the permission', async () => {
     vi.spyOn(api, 'getProjectArchives').mockResolvedValue([
       { id: 1, filename: 'a.3mf', status: 'completed', project_line_id: 10 },
