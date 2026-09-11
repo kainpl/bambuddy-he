@@ -942,6 +942,70 @@ describe('a batch proposes a new order for itself (Decision 6)', () => {
     expect(queued.mock.calls[0][0]).toMatchObject({ project_id: 77, project_line_id: null, quantity: 2 });
   });
 
+  it('a total of one on two printers is ONE print, and one print is no batch', async () => {
+    // Decision 6 counts PRINTS, not rows. Read per printer, «1» on two
+    // printers is two prints and the offer stands; the same «1» read as a
+    // total is one print, and a one-print order is exactly what the dialog
+    // must never mint.
+    server.use(http.get('/api/v1/library/files/:id/order-candidates', () => HttpResponse.json([])));
+    const user = userEvent.setup();
+
+    render(<PrintModal mode="add-to-queue" libraryFileId={5} archiveName="lamp.gcode.3mf" onClose={() => {}} />);
+
+    await user.click(await screen.findByText('X1 Carbon'));
+    await user.click(screen.getByText('P1S'));
+    // Explicit, because the mode is remembered in this browser's storage.
+    await user.click(await screen.findByTestId('quantity-mode-perPrinter'));
+    expect(await screen.findByRole('combobox', { name: 'Order' })).toHaveValue('new');
+
+    await user.click(screen.getByTestId('quantity-mode-total'));
+    await waitFor(() => expect(screen.queryByRole('combobox', { name: 'Order' })).not.toBeInTheDocument());
+  });
+
+  it('the order created for a TOTAL batch counts prints, not printers × prints', async () => {
+    // `ensureBatchOrder`'s copies are the plate's own number in total mode: an
+    // order line counts the prints that will exist, and the deal's row sum is
+    // exactly that number however it was split across the printers.
+    const created = vi.fn();
+    const queued = vi.fn();
+    server.use(
+      http.get('/api/v1/library/files/:id/plates', () =>
+        HttpResponse.json({ is_multi_plate: false, plates: [MULTI_PLATE.plates[0]] }),
+      ),
+      http.get('/api/v1/library/files/:id/order-candidates', () => HttpResponse.json([])),
+      http.post('/api/v1/projects/from-files', async ({ request }) => {
+        created(await request.json());
+        return HttpResponse.json({ ...ORDER_STUB, id: 77 });
+      }),
+      http.post('/api/v1/queue/', async ({ request }) => {
+        queued(await request.json());
+        return HttpResponse.json({ id: 1, created_item_ids: [1] });
+      }),
+    );
+    const user = userEvent.setup();
+
+    render(<PrintModal mode="add-to-queue" libraryFileId={5} archiveName="lamp.gcode.3mf" onClose={() => {}} />);
+
+    await user.click(await screen.findByText('X1 Carbon'));
+    await user.click(screen.getByText('P1S'));
+    await user.click(await screen.findByTestId('quantity-mode-total'));
+    // Exact: the mode toggle's own group is labelled «What the quantity means».
+    fireEvent.change(screen.getByLabelText('Quantity'), { target: { value: '3' } });
+    expect(await screen.findByRole('combobox', { name: 'Order' })).toHaveValue('new');
+
+    await user.click(screen.getByRole('button', { name: /queue to 2 printers/i }));
+
+    await waitFor(() =>
+      expect(created).toHaveBeenCalledWith({
+        kind: 'plates',
+        library_file_id: 5,
+        plates: [{ plate_index: 1, copies: 3 }],
+      }),
+    );
+    await waitFor(() => expect(queued).toHaveBeenCalledTimes(2));
+    expect(queued.mock.calls.map((c) => c[0].quantity)).toEqual([2, 1]);
+  });
+
   it('does not offer a new order for a single print', async () => {
     server.use(http.get('/api/v1/library/files/:id/order-candidates', () => HttpResponse.json([])));
     render(<PrintModal mode="add-to-queue" libraryFileId={5} archiveName="lamp.gcode.3mf" onClose={() => {}} />);
@@ -974,6 +1038,7 @@ describe('a batch proposes a new order for itself (Decision 6)', () => {
       autoModeOptions: DEFAULT_AUTO_MODE_OPTIONS,
       scheduleOptions: DEFAULT_SCHEDULE_OPTIONS,
       quantity: 1,
+      quantityMode: 'perPrinter',
       printOptions: DEFAULT_PRINT_OPTIONS,
       swapMacros: DEFAULT_SWAP_MACROS_OPTIONS,
       selectedMacroIds: [],
