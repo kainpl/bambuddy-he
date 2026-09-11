@@ -103,7 +103,7 @@ class AutoQueueItem(Base):
     require_previous_success: Mapped[bool] = mapped_column(Boolean, default=False)
 
     # Lifecycle
-    # status: pending | assigned | cancelled
+    # status: pending | assigned | cancelled | failed (unavailable source; manual retry)
     #
     # ``cancelled`` only ever appears on a row that was already routed, whose
     # per-printer item outlives the cancel so the operator can retry it.

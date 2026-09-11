@@ -11,6 +11,7 @@ from backend.app.models.printer_queue import PrinterQueue
 from backend.app.services.filament_intake import routing_detail
 from backend.app.services.filament_policy import decode
 from backend.app.services.queue_counters import update_queue_counters
+from backend.app.services.source_io import SOURCE_FAILURES
 
 
 def dispatched_archive_filter():
@@ -43,17 +44,22 @@ async def defer_claim(
     item = await db.get(PrintQueueItem, item_id)
     if item is None or started_at is None:
         return False
+    source_failed = not direct and reason in SOURCE_FAILURES
     values = {
-        "status": "cancelled" if direct else "pending",
+        "status": "cancelled" if direct else "failed" if source_failed else "pending",
         "started_at": None,
-        "completed_at": datetime.now(timezone.utc) if direct else None,
-        "waiting_reason": routing_detail(reason)["message"],
-        "waiting_reason_code": None if direct else "filament_unavailable",
-        "waiting_reason_checked_at": None if direct else datetime.now(timezone.utc),
-        "error_message": None,
+        "completed_at": datetime.now(timezone.utc) if direct or source_failed else None,
+        "waiting_reason": None if source_failed else routing_detail(reason)["message"],
+        "waiting_reason_code": None if direct or source_failed else "filament_unavailable",
+        "waiting_reason_checked_at": None if direct or source_failed else datetime.now(timezone.utc),
+        "error_message": routing_detail(reason)["message"] if source_failed else None,
     }
     if restore_source:
         values.update(archive_id=source_archive_id, library_file_id=source_library_file_id)
+    if source_failed:
+        # This preparation never published a print, so there is no physical
+        # failure for the next item's require_previous_success gate.
+        values["gate_acknowledged"] = True
     routing = decode(item.filament_routing)
     if isinstance(routing, dict):
         routing["runtime"] = {"reason": reason, "blocked_revision": revision}

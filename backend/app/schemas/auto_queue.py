@@ -165,7 +165,7 @@ class AutoQueueItemResponse(BaseModel):
     swap_macro_events: list[str] | None = None
     selected_macro_ids: list[int] | None = None
 
-    status: Literal["pending", "assigned", "cancelled"]
+    status: Literal["pending", "assigned", "cancelled", "failed"]
     waiting_reason: str | None
     assigned_to_item_id: int | None
     assigned_at: UTCDatetime

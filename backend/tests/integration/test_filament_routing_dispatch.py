@@ -89,7 +89,7 @@ async def test_auto_intake_tick_and_publish_sparse_external(
     assert json.loads(item.ams_mapping) == [-1, -1, 254]
     assert deserialize_policy(item.filament_routing).mode == "auto"
     guard = await preflight_item(db_session, item, printer.id)
-    guard = final_guard(guard, printer.id)
+    guard = await final_guard(guard, printer.id)
     assert printer_manager.start_print(
         printer.id, source.filename, 15, ams_mapping=guard.plan.mapping, use_ams=guard.plan.use_ams, routing_guard=guard
     )
@@ -110,7 +110,7 @@ async def test_publish_boundary_catches_change_after_final_preflight(
     item = PrintQueueItem(queue_id=queue.id, library_file_id=source.id, plate_id=plate, filament_routing=routing)
     db_session.add(item)
     await db_session.commit()
-    guard = final_guard(await preflight_item(db_session, item, printer.id), printer.id)
+    guard = await final_guard(await preflight_item(db_session, item, printer.id), printer.id)
     mqtt._process_message({"print": {"vt_tray": {"id": 254, "tray_type": "PETG"}}})
     with pytest.raises(RoutingDeferred, match="feed_state_changed"):
         printer_manager.start_print(
@@ -200,7 +200,7 @@ async def test_dual_topology_and_real_mqtt_wire(db_session, tmp_path, printer_fa
     item = PrintQueueItem(queue_id=queue.id, library_file_id=source.id, plate_id=plate, filament_routing=routing)
     db_session.add(item)
     await db_session.commit()
-    guard = final_guard(await preflight_item(db_session, item, printer.id), printer.id)
+    guard = await final_guard(await preflight_item(db_session, item, printer.id), printer.id)
     assert guard.plan.mapping == ([0, 255] if kind == "mixed" else [254, 255])
     assert printer_manager.start_print(
         printer.id, path.name, plate, ams_mapping=guard.plan.mapping, use_ams=guard.plan.use_ams, routing_guard=guard

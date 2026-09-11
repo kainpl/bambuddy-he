@@ -38,6 +38,7 @@ from backend.app.services.printer_manager import (
 )
 from backend.app.services.queue_wait_reason import set_wait_reason
 from backend.app.services.smart_plug_manager import smart_plug_manager
+from backend.app.services.source_io import SOURCE_FAILURES, SourceUnavailable, require_source_file
 from backend.app.services.stagger_groups import GroupKey, StaggerGroupResolver, StaggerSplit
 from backend.app.utils.filament_types import canonical_filament_type
 
@@ -641,6 +642,9 @@ class PrintScheduler:
                 try:
                     guard = await preflight_item(db, item, printer_id, cache=requirements_cache)
                 except RoutingDeferred as exc:
+                    if exc.reason in SOURCE_FAILURES:
+                        await self._fail_source_item(db, item, exc.reason)
+                        continue
                     set_wait_reason(item, "filament_unavailable", routing_detail(exc.reason)["message"])
                     await db.commit()
                     continue
@@ -675,6 +679,8 @@ class PrintScheduler:
                 # the next loop iteration dispatch a different printer in
                 # parallel instead of serialising through one global await.
                 await self._start_print(db, item, requirements_cache=requirements_cache)
+                if item.status != "printing":
+                    continue
                 dispatched = True
                 busy_printers.add(printer_id)
                 # ⚠️ The one addition the narrow set DOES take: this print is
@@ -2430,6 +2436,22 @@ class PrintScheduler:
         result = await db.execute(select(Printer).where(Printer.id == printer_id))
         return result.scalar_one_or_none()
 
+    async def _fail_source_item(self, db: AsyncSession, item: PrintQueueItem, reason: str) -> None:
+        """Fail before dispatch without parking the printer's remaining queue."""
+        from backend.app.services.queue_counters import update_queue_counters
+
+        item.status = "failed"
+        item.error_message = routing_detail(reason)["message"]
+        # No physical print failed; this must not trip require_previous_success.
+        item.gate_acknowledged = True
+        item.completed_at = datetime.now(timezone.utc)
+        item.waiting_reason = None
+        item.waiting_reason_code = None
+        item.waiting_reason_checked_at = None
+        await update_queue_counters(db, item.queue_id)
+        await db.commit()
+        logger.warning("Queue item %s failed before dispatch: %s", item.id, reason)
+
     async def _fail_item(self, db: AsyncSession, item: PrintQueueItem, error_message: str) -> None:
         """Mark item as failed and set queue to error state."""
         from backend.app.services.queue_counters import set_queue_error, update_queue_counters
@@ -2531,9 +2553,8 @@ class PrintScheduler:
             result = await db.execute(select(PrintArchive).where(PrintArchive.id == item.archive_id))
             archive = result.scalar_one_or_none()
             if not archive:
-                await self._fail_item(db, item, "Archive not found")
+                await self._fail_source_item(db, item, "source_unreadable")
                 logger.error("Queue item %s: Archive %s not found", item.id, item.archive_id)
-                await self._power_off_if_needed(db, item)
                 return
 
             file_path = settings.base_dir / archive.file_path
@@ -2542,30 +2563,35 @@ class PrintScheduler:
             result = await db.execute(LibraryFile.active().where(LibraryFile.id == item.library_file_id))
             library_file = result.scalar_one_or_none()
             if not library_file:
-                await self._fail_item(db, item, "Library file not found")
+                await self._fail_source_item(db, item, "source_unreadable")
                 logger.error("Queue item %s: Library file %s not found", item.id, item.library_file_id)
-                await self._power_off_if_needed(db, item)
                 return
             lib_path = Path(library_file.file_path)
             file_path = lib_path if lib_path.is_absolute() else settings.base_dir / library_file.file_path
 
         else:
             # Neither archive nor library file specified
-            await self._fail_item(db, item, "No source file specified")
+            await self._fail_source_item(db, item, "source_unreadable")
             logger.error("Queue item %s: No archive_id or library_file_id specified", item.id)
-            await self._power_off_if_needed(db, item)
             return
 
         # Check file exists on disk (fast fail before any dispatch work).
-        if not file_path.exists():
-            await self._fail_item(db, item, "Source file not found on disk")
-            logger.error("Queue item %s: File not found: %s", item.id, file_path)
-            await self._power_off_if_needed(db, item)
+        try:
+            await require_source_file(file_path)
+        except SourceUnavailable as exc:
+            if exc.reason in SOURCE_FAILURES:
+                await self._fail_source_item(db, item, exc.reason)
+            else:
+                set_wait_reason(item, "filament_unavailable", routing_detail(exc.reason)["message"])
+                await db.commit()
             return
 
         try:
             guard = await preflight_item(db, item, printer.id, cache=requirements_cache)
         except RoutingDeferred as exc:
+            if exc.reason in SOURCE_FAILURES:
+                await self._fail_source_item(db, item, exc.reason)
+                return
             set_wait_reason(item, "filament_unavailable", routing_detail(exc.reason)["message"])
             await db.commit()
             return
@@ -2633,6 +2659,7 @@ class PrintScheduler:
             logger.info("Queue item %s: no longer pending at dispatch (cancelled or removed) — skipping", item.id)
             return
         item.status = "printing"
+        item.gate_acknowledged = False
         item.started_at = now
         await set_queue_printing(db, item.queue_id, item.id)
         await update_queue_counters(db, item.queue_id)
