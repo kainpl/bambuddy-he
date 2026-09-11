@@ -64,6 +64,8 @@ import { getBedTypeInfo } from '../utils/bedType';
 import { mapModelCode } from '../utils/printer';
 import { queueResumePayload } from '../utils/queueStatus';
 import { invalidateQueueViews } from '../utils/queryInvalidation';
+import { usePlateDefects } from '../hooks/usePlateDefects';
+import { PlateDefectsRow } from './PlateDefectsRow';
 
 interface QueueCardProps {
   queue: PrinterQueue;
@@ -199,30 +201,6 @@ export function QueueCard({ queue, onEditItem }: QueueCardProps) {
     onSuccess: () => {
       invalidateQueueViews(queryClient);
       showToast(t('queueCard.toast.statusUpdated'), 'success');
-    },
-    onError: (err: Error) => {
-      showToast(err.message, 'error');
-    },
-  });
-
-  // Clear plate mutation
-  // The other answer to a full plate — see services/plate_hold on the backend.
-  const repeatPrintMutation = useMutation({
-    mutationFn: () => api.repeatPrint(queue.printer_id),
-    onSuccess: () => {
-      invalidateQueueViews(queryClient);
-      queryClient.invalidateQueries({ queryKey: ['printerStatus', queue.printer_id] });
-      showToast(t('queue.repeatPrintSuccess'), 'success');
-    },
-    onError: (error: Error) => showToast(error.message, 'error'),
-  });
-
-  const clearPlateMutation = useMutation({
-    mutationFn: () => api.clearPlate(queue.printer_id),
-    onSuccess: () => {
-      invalidateQueueViews(queryClient);
-      queryClient.invalidateQueries({ queryKey: ['printerStatus', queue.printer_id] });
-      showToast(t('queue.clearPlateSuccess'), 'success');
     },
     onError: (err: Error) => {
       showToast(err.message, 'error');
@@ -616,6 +594,40 @@ export function QueueCard({ queue, onEditItem }: QueueCardProps) {
     !!status?.awaiting_plate_clear &&
     hasAutoDispatchItems;
 
+  // The defects counters beside this pair — the same hook the printer card and
+  // its queue widget use, so the Queue page is not the one place without them.
+  // Declared after `needsClearPlate` because the query is gated on it.
+  const queueDefects = usePlateDefects(queue.printer_id, needsClearPlate);
+
+  // The other answer to a full plate — see services/plate_hold on the backend.
+  const repeatPrintMutation = useMutation({
+    mutationFn: () => api.repeatPrint(queue.printer_id, queueDefects.body()),
+    onSuccess: (result) => {
+      invalidateQueueViews(queryClient);
+      queryClient.invalidateQueries({ queryKey: ['printerStatus', queue.printer_id] });
+      showToast(t('queue.repeatPrintSuccess'), 'success');
+      queueDefects.afterAnswer(result.ledger_refused_parts);
+    },
+    onError: (error: Error) => {
+      showToast(error.message, 'error');
+      queueDefects.afterFailedAnswer();
+    },
+  });
+
+  const clearPlateMutation = useMutation({
+    mutationFn: () => api.clearPlate(queue.printer_id, queueDefects.body()),
+    onSuccess: (result) => {
+      invalidateQueueViews(queryClient);
+      queryClient.invalidateQueries({ queryKey: ['printerStatus', queue.printer_id] });
+      showToast(t('queue.clearPlateSuccess'), 'success');
+      queueDefects.afterAnswer(result.ledger_refused_parts);
+    },
+    onError: (err: Error) => {
+      showToast(err.message, 'error');
+      queueDefects.afterFailedAnswer();
+    },
+  });
+
   // Find the current printing item (first printing-status item from pending query, or use status info)
   const currentPrintName = status?.subtask_name || status?.current_print;
   const currentThumbnail = status?.cover_url;
@@ -887,6 +899,7 @@ export function QueueCard({ queue, onEditItem }: QueueCardProps) {
         {/* Clear plate section */}
         {needsClearPlate && (
           <div>
+            <PlateDefectsRow defects={queueDefects} className="mb-2" />
             {clearPlateMutation.isSuccess ? (
               <div className="w-full py-2 px-3 rounded-lg bg-bambu-green/10 border border-bambu-green/20 text-bambu-green text-sm flex items-center justify-center gap-2">
                 <CircleCheck className="w-4 h-4" />

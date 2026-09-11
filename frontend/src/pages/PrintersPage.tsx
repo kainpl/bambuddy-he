@@ -134,6 +134,8 @@ import { MQTTDebugModal } from '../components/MQTTDebugModal';
 import { CalibrationModal } from '../components/CalibrationModal';
 import { HMSErrorModal, filterKnownHMSErrors, hmsBrief } from '../components/HMSErrorModal';
 import { PrinterQueueWidget } from '../components/PrinterQueueWidget';
+import { usePlateDefects } from '../hooks/usePlateDefects';
+import { PlateDefectsRow } from '../components/PlateDefectsRow';
 import { AMSHistoryModal } from '../components/AMSHistoryModal';
 import { HeaterHistoryModal } from '../components/HeaterHistoryModal';
 import { PlugPowerHistoryModal } from '../components/PlugPowerHistoryModal';
@@ -2216,6 +2218,13 @@ function PrinterCard({
     greenClearCtaVisible,
     viewMode,
   });
+  // The same defects counters the queue widget carries beside its green pair,
+  // here beside the yellow one — the pair the operator sees once the queue has
+  // run dry, and the only pair the compact card ever draws.
+  const plateDefects = usePlateDefects(
+    printer.id,
+    showClearPlateButton && (status?.state === 'FINISH' || status?.state === 'FAILED'),
+  );
   const plateStatus = (() => {
     if (!requirePlateClear || !status?.connected) return null;
     if (isPrintingOrPaused) {
@@ -2531,32 +2540,40 @@ function PrinterCard({
   });
 
   const clearPlateMutation = useMutation({
-    mutationFn: () => api.clearPlate(printer.id),
-    onSuccess: () => {
+    mutationFn: () => api.clearPlate(printer.id, plateDefects.body()),
+    onSuccess: (result) => {
       showToast(t('queue.clearPlateSuccess'));
       queryClient.setQueryData(['printerStatus', printer.id], (old: PrinterStatus | undefined) =>
         old ? { ...old, awaiting_plate_clear: false } : old
       );
       queryClient.invalidateQueries({ queryKey: ['printerStatus', printer.id] });
       invalidateQueueViews(queryClient);
+      plateDefects.afterAnswer(result.ledger_refused_parts);
     },
-    onError: (error: Error) => showToast(error.message || t('printers.toast.failedToSendCommand'), 'error'),
+    onError: (error: Error) => {
+      showToast(error.message || t('printers.toast.failedToSendCommand'), 'error');
+      plateDefects.afterFailedAnswer();
+    },
   });
 
   // The other answer to a full plate. Drops the gate optimistically exactly as
   // clearPlate does — the backend releases it too, and leaving it set would keep
   // the pair on screen after the job has already gone back into the queue.
   const repeatPrintMutation = useMutation({
-    mutationFn: () => api.repeatPrint(printer.id),
-    onSuccess: () => {
+    mutationFn: () => api.repeatPrint(printer.id, plateDefects.body()),
+    onSuccess: (result) => {
       showToast(t('queue.repeatPrintSuccess'));
       queryClient.setQueryData(['printerStatus', printer.id], (old: PrinterStatus | undefined) =>
         old ? { ...old, awaiting_plate_clear: false } : old
       );
       queryClient.invalidateQueries({ queryKey: ['printerStatus', printer.id] });
       invalidateQueueViews(queryClient);
+      plateDefects.afterAnswer(result.ledger_refused_parts);
     },
-    onError: (error: Error) => showToast(error.message || t('printers.toast.failedToSendCommand'), 'error'),
+    onError: (error: Error) => {
+      showToast(error.message || t('printers.toast.failedToSendCommand'), 'error');
+      plateDefects.afterFailedAnswer();
+    },
   });
 
   // Chamber light mutation with optimistic update
@@ -3038,7 +3055,9 @@ function PrinterCard({
   // ⚠️ The `mt-2` lives on the row rather than each button — on both it
   // doubles the gap.
   const plateClearButtons = showClearPlateButton ? (
-    <div className="mt-2 flex gap-2">
+    <>
+      <PlateDefectsRow defects={plateDefects} className="mt-2" />
+      <div className="mt-2 flex gap-2">
       {repeatAvailable && (
         <button
           type="button"
@@ -3069,7 +3088,8 @@ function PrinterCard({
         )}
         {t('queue.clearPlateShort')}
       </button>
-    </div>
+      </div>
+    </>
   ) : null;
 
   return (
