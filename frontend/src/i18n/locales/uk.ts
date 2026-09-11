@@ -1799,6 +1799,7 @@ export default {
     noPrinterData: 'Немає даних про принтери',
     defectsByPrinter: 'Брак по принтерах',
     noDefectData: 'Немає завершених друків за цей період',
+    defectsPrinter: 'Принтер',
     defectsPrinted: 'Надруковано',
     defectsCount: 'Брак',
     defectsRate: 'Частка',

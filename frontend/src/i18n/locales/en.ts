@@ -1784,6 +1784,7 @@ export default {
     noPrinterData: 'No printer data available',
     defectsByPrinter: 'Defects by Printer',
     noDefectData: 'No completed prints in this period',
+    defectsPrinter: 'Printer',
     defectsPrinted: 'Printed',
     defectsCount: 'Defective',
     defectsRate: 'Rate',

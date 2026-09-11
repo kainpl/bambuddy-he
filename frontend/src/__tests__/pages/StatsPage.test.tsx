@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import { render } from '../utils';
 import { StatsPage } from '../../pages/StatsPage';
 import { http, HttpResponse } from 'msw';
@@ -362,6 +362,29 @@ describe('StatsPage', () => {
       await waitFor(() => {
         expect(screen.getByText('Print Time of Day')).toBeInTheDocument();
       });
+    });
+  });
+
+  describe('defects by printer', () => {
+    it('lists defects by printer, worst rate first', async () => {
+      server.use(
+        http.get('/api/v1/archives/stats', () =>
+          HttpResponse.json({
+            total_prints: 3, successful_prints: 3, failed_prints: 0, cancelled_prints: 0,
+            total_print_time_hours: 1, total_filament_grams: 10, total_cost: 1,
+            prints_by_filament_type: {}, prints_by_printer: { '1': 2, '2': 1 },
+            average_time_accuracy: null, time_accuracy_by_printer: null,
+            print_energy_kwh: 0, print_energy_cost: 0, total_energy_kwh: 0, total_energy_cost: 0,
+            defects_by_printer: { '1': { printed: 10, defective: 1 }, '2': { printed: 4, defective: 2 } },
+          }),
+        ),
+      );
+      render(<StatsPage />);
+
+      const table = await screen.findByTestId('defects-by-printer');
+      const rows = within(table).getAllByRole('row').slice(1); // header first
+      expect(rows[0].textContent).toContain('50.0%');
+      expect(rows[1].textContent).toContain('10.0%');
     });
   });
 

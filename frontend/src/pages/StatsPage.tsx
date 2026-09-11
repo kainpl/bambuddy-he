@@ -35,7 +35,7 @@ import { Button } from '../components/Button';
 import { LoadingBlock } from '../components/LoadingBlock';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
-import { api, type AggregateBucket, type ArchiveAggregate, type Printer } from '../api/client';
+import { api, type AggregateBucket, type ArchiveAggregate, type Printer, type DefectsByPrinter } from '../api/client';
 import { printerLabel, comparePrinterByLabel } from '../utils/printerLabel';
 import { PrintCalendar } from '../components/PrintCalendar';
 import { FilamentTrends } from '../components/FilamentTrends';
@@ -608,13 +608,27 @@ function PrinterStatsWidget({
   aggregate,
   printerById,
 }: {
-  stats: { prints_by_printer: Record<string, number> } | undefined;
+  stats: { prints_by_printer: Record<string, number>; defects_by_printer?: Record<string, DefectsByPrinter> } | undefined;
   aggregate: ArchiveAggregate | undefined;
   printerById: Map<string, Printer>;
 }) {
   const { t } = useTranslation();
   const [printerMetric, setPrinterMetric] = useState<Metric>('weight');
   const [habitsMetric, setHabitsMetric] = useState<Metric>('weight');
+
+  // Defects by printer — completed prints only; worst rate first.
+  const defectRows = useMemo(() => {
+    const entries = Object.entries(stats?.defects_by_printer ?? {});
+    return entries
+      .map(([id, d]) => ({
+        id,
+        name: printerLabel(printerById.get(id), id, t),
+        printed: d.printed,
+        defective: d.defective,
+        rate: d.printed > 0 ? (d.defective / d.printed) * 100 : 0,
+      }))
+      .sort((a, b) => b.rate - a.rate || comparePrinterByLabel(a.id, b.id, printerById, t));
+  }, [stats, printerById, t]);
 
   // Per-printer data
   const printerData = useMemo(() => {
@@ -786,6 +800,37 @@ function PrinterStatsWidget({
             <p className="text-bambu-gray text-center py-4">{t('stats.noArchiveData')}</p>
           )}
         </div>
+      </div>
+
+      {/* Defects by printer — the "where" of the scrap (spec 2026-09-11 §6). */}
+      <div className="bg-bambu-dark rounded-lg p-4">
+        <h4 className="text-sm font-medium text-bambu-gray mb-3">{t('stats.defectsByPrinter')}</h4>
+        {defectRows.length > 0 ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm" data-testid="defects-by-printer">
+              <thead>
+                <tr className="text-xs text-bambu-gray border-b border-bambu-dark-tertiary">
+                  <th scope="col" className="px-2 py-1.5 text-left font-medium">{t('stats.defectsPrinter')}</th>
+                  <th scope="col" className="px-2 py-1.5 text-right font-medium">{t('stats.defectsPrinted')}</th>
+                  <th scope="col" className="px-2 py-1.5 text-right font-medium">{t('stats.defectsCount')}</th>
+                  <th scope="col" className="px-2 py-1.5 text-right font-medium">{t('stats.defectsRate')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {defectRows.map((row) => (
+                  <tr key={row.id} className="border-b border-bambu-dark-tertiary/50">
+                    <td className="px-2 py-1.5 text-white">{row.name}</td>
+                    <td className="px-2 py-1.5 text-right text-white tabular-nums">{row.printed}</td>
+                    <td className="px-2 py-1.5 text-right text-white tabular-nums">{row.defective}</td>
+                    <td className="px-2 py-1.5 text-right text-white tabular-nums">{row.rate.toFixed(1)}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="text-bambu-gray text-center py-4">{t('stats.noDefectData')}</p>
+        )}
       </div>
     </div>
   );
