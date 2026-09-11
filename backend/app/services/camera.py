@@ -12,11 +12,13 @@ import shutil
 import ssl
 import struct
 import subprocess
+import time
+import traceback
 import uuid
 from datetime import datetime
 from pathlib import Path
 
-from backend.app.core.logging_filters import redact_url_credentials
+from backend.app.utils.ffmpeg_output import NO_FFMPEG_OUTPUT, summarize_ffmpeg_stderr
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +61,9 @@ def _discard_inflight_capture(ip_address: str, task: "asyncio.Task") -> None:
     if _inflight_captures.get(ip_address) is task:
         del _inflight_captures[ip_address]
     if not task.cancelled() and task.exception() is not None:
-        logger.debug("In-flight camera capture for %s ended in an exception", ip_address)
+        logger.debug(
+            "In-flight camera capture for %s ended in an exception [capture_id=%s]", ip_address, task.get_name()
+        )
 
 
 # JPEG markers
@@ -632,32 +636,54 @@ async def capture_camera_frame_bytes(
         leader = _inflight_captures.get(ip_address)
         if leader is None or leader.done():
             break
+        wait_started = time.monotonic()
+        logger.debug("Waiting on in-flight camera capture for %s [capture_id=%s]", ip_address, leader.get_name())
         try:
             frame = await asyncio.wait_for(asyncio.shield(leader), timeout=timeout)
         except TimeoutError:
             # shield() keeps the capture running for whoever else is still
             # waiting on it — giving up is this caller's decision alone.
-            logger.warning("Gave up waiting %ss on the in-flight camera capture for %s", timeout, ip_address)
+            logger.warning(
+                "Gave up waiting %ss on the in-flight camera capture for %s [capture_id=%s elapsed=%.3fs]",
+                timeout,
+                ip_address,
+                leader.get_name(),
+                time.monotonic() - wait_started,
+            )
             return None
         except asyncio.CancelledError:
             # Distinguish "the capture I joined was cancelled" from "I was
             # cancelled". Only the former is ours to recover from.
             if not leader.cancelled():
                 raise
-            logger.info("In-flight camera capture for %s was cancelled; capturing our own", ip_address)
+            logger.info(
+                "In-flight camera capture for %s was cancelled; capturing our own [capture_id=%s]",
+                ip_address,
+                leader.get_name(),
+            )
             continue
         if frame is not None:
             logger.info(
-                "Reusing in-flight camera capture for %s: %s bytes (no second connection opened)",
+                "Reusing in-flight camera capture for %s: %s bytes "
+                "(no second connection opened) [capture_id=%s elapsed=%.3fs]",
                 ip_address,
                 len(frame),
+                leader.get_name(),
+                time.monotonic() - wait_started,
             )
             return frame
-        logger.info("In-flight camera capture for %s failed; capturing our own", ip_address)
+        logger.info(
+            "In-flight camera capture for %s failed; capturing our own [capture_id=%s]", ip_address, leader.get_name()
+        )
     else:
         return None
 
-    task = asyncio.create_task(_capture_camera_frame_bytes_uncoalesced(ip_address, access_code, model, timeout))
+    # The name is the attempt ID: followers already hold the task, so they can
+    # log the same ID without a second registry or changing the capture API.
+    task = asyncio.create_task(
+        _capture_camera_frame_bytes_uncoalesced(ip_address, access_code, model, timeout),
+        name=f"camera-capture-{uuid.uuid4().hex[:12]}",
+    )
     _inflight_captures[ip_address] = task
     task.add_done_callback(functools.partial(_discard_inflight_capture, ip_address))
     # No wait_for here: this caller IS the capture, and the implementation
@@ -680,14 +706,29 @@ async def _capture_camera_frame_bytes_uncoalesced(
     Callers want that wrapper, not this: this opens a socket unconditionally,
     which is the collision #2705 is about.
     """
+    started = time.monotonic()
+    task = asyncio.current_task()
+    capture_id = task.get_name() if task else "unknown"
+    port = get_camera_port(model)
+    protocol = "chamber" if is_chamber_image_model(model) else "rtsp"
+    context = f"capture_id={capture_id} target={ip_address}:{port} model={model} protocol={protocol}"
+    logger.info("Capturing camera frame bytes [%s timeout=%ss]", context, timeout)
+
     # Chamber image models: A1/P1 - returns bytes directly
     if is_chamber_image_model(model):
-        logger.info("Capturing camera frame bytes from %s using chamber image protocol (model: %s)", ip_address, model)
-        return await read_chamber_image_frame(ip_address, access_code, timeout=float(timeout))
+        frame = await read_chamber_image_frame(ip_address, access_code, timeout=float(timeout))
+        logger.log(
+            logging.INFO if frame else logging.WARNING,
+            "Chamber camera frame capture %s [%s elapsed=%.3fs bytes=%s]",
+            "succeeded" if frame else "failed",
+            context,
+            time.monotonic() - started,
+            len(frame) if frame else 0,
+        )
+        return frame
 
     # RTSP models: X1/H2/P2 - use ffmpeg piping to stdout
     # TLS proxy avoids GnuTLS compatibility issues with some printer firmwares
-    port = get_camera_port(model)
     proxy_port, proxy_server = await create_tls_proxy(ip_address, port)
     camera_url = f"rtsp://bblp:{access_code}@127.0.0.1:{proxy_port}/streaming/live/1"
 
@@ -695,7 +736,9 @@ async def _capture_camera_frame_bytes_uncoalesced(
     if not ffmpeg:
         proxy_server.close()
         await proxy_server.wait_closed()
-        logger.error("ffmpeg not found for camera frame capture")
+        logger.error(
+            "ffmpeg not found for camera frame capture [%s elapsed=%.3fs]", context, time.monotonic() - started
+        )
         return None
 
     cmd = [
@@ -718,8 +761,6 @@ async def _capture_camera_frame_bytes_uncoalesced(
         "-",
     ]
 
-    logger.info("Capturing camera frame bytes from %s using RTSP (model: %s)", ip_address, model)
-
     process: asyncio.subprocess.Process | None = None
     try:
         process = await asyncio.create_subprocess_exec(
@@ -736,25 +777,52 @@ async def _capture_camera_frame_bytes_uncoalesced(
         except TimeoutError:
             process.kill()
             await process.wait()
-            logger.error("Camera frame bytes capture timed out after %ss", timeout)
+            logger.error(
+                "Camera frame bytes capture timed out after %ss [%s pid=%s elapsed=%.3fs]",
+                timeout,
+                context,
+                process.pid,
+                time.monotonic() - started,
+            )
             return None
 
         if process.returncode == 0 and stdout and len(stdout) >= 100:
-            logger.info("Successfully captured camera frame bytes: %s bytes", len(stdout))
+            logger.info(
+                "Successfully captured camera frame bytes: %s bytes [%s pid=%s elapsed=%.3fs]",
+                len(stdout),
+                context,
+                process.pid,
+                time.monotonic() - started,
+            )
             return stdout
         else:
-            # ffmpeg echoes the RTSP input URL, which carries the access code.
-            # Redact before the slice — truncating first can cut the string short
-            # of the ``@`` the pattern anchors on and leave the code in the log.
-            stderr_text = redact_url_credentials(stderr.decode()) if stderr else "Unknown error"
-            logger.error("ffmpeg frame bytes capture failed (code %s): %s", process.returncode, stderr_text[:200])
+            stderr_text = summarize_ffmpeg_stderr(stderr) or NO_FFMPEG_OUTPUT
+            logger.error(
+                "ffmpeg frame bytes capture failed (code %s) [%s pid=%s elapsed=%.3fs bytes=%s]: %s",
+                process.returncode,
+                context,
+                process.pid,
+                time.monotonic() - started,
+                len(stdout) if stdout else 0,
+                stderr_text,
+            )
             return None
 
     except FileNotFoundError:
-        logger.error("ffmpeg not found for camera frame capture")
+        logger.error(
+            "ffmpeg not found for camera frame capture [%s elapsed=%.3fs]", context, time.monotonic() - started
+        )
         return None
     except Exception as e:
-        logger.exception("Camera frame bytes capture failed: %s", e)
+        # logger.exception would append the original, unredacted exception even
+        # if its message was masked. Subprocess errors can quote the whole argv.
+        logger.error(
+            "Camera frame bytes capture failed [%s elapsed=%.3fs exception=%s]: %s",
+            context,
+            time.monotonic() - started,
+            type(e).__name__,
+            summarize_ffmpeg_stderr(traceback.format_exc()) or NO_FFMPEG_OUTPUT,
+        )
         return None
     finally:
         if process is not None:

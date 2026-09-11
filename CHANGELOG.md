@@ -119,6 +119,8 @@
 
 ### Fixed
 
+- **Camera failures now identify the capture and keep ffmpeg's diagnosis.** One-shot printer snapshots log the target address, model, a shared capture ID, elapsed time and the ffmpeg process/exit code where available. A caller waiting for the same frame logs that capture ID too, so failures from a busy farm can be followed without guessing from adjacent lines. Built-in and external camera ffmpeg logs now keep a bounded tail of meaningful output instead of the build banner, tolerate non-UTF-8 diagnostics and mask URL passwords before truncating them. Capture timeouts, connection sharing and stream settings are unchanged.
+
 - **Filament requirements retain small used channels and their nozzle assignments.** A positive slicer estimate below the displayed precision could disappear from auto-extracted requirements, and dual-nozzle files lost the plate's physical nozzle binding. Both now survive extraction, including mixed AMS/external files and H2C group tables. Explicitly unused channels no longer erase the nozzle bindings of the channels that actually print.
 
 - **Upgrading on PostgreSQL no longer stops at the notifications migration.** Four migrations wrote a JSON column with a cast SQLite tolerates and PostgreSQL refuses (`VARCHAR → JSON`); on PostgreSQL the server restarted every few seconds at migration 157 without ever coming up. The writes are now spelled per database. Installing the new build over is enough — the migration resumes where it stopped.

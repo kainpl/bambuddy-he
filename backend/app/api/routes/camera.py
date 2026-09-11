@@ -20,7 +20,6 @@ from backend.app.core.auth import (
     create_camera_stream_token,
 )
 from backend.app.core.database import get_db
-from backend.app.core.logging_filters import redact_url_credentials
 from backend.app.core.permissions import Permission
 from backend.app.models.printer import Printer
 from backend.app.models.user import User
@@ -44,6 +43,7 @@ from backend.app.services.camera_fanout import (
 )
 from backend.app.services.camera_profiles import get_camera_profile
 from backend.app.services.ffmpeg_stderr import FfmpegStderrDrain
+from backend.app.utils.ffmpeg_output import summarize_ffmpeg_stderr as _summarize_ffmpeg_stderr
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/printers", tags=["camera"])
@@ -383,43 +383,6 @@ async def _terminate_ffmpeg(process: asyncio.subprocess.Process, stream_id: str 
     except OSError as e:
         logger.warning("Error terminating ffmpeg: %s", e)
     _spawned_ffmpeg_pids.pop(process.pid, None)
-
-
-def _summarize_ffmpeg_stderr(text: str | None) -> str:
-    """Strip ffmpeg's boilerplate banner and keep only actionable lines.
-
-    ffmpeg prints ~20 lines of version/build/configuration/lib headers before
-    any actual error message. Logging the full banner on every retry floods
-    the log (hundreds of lines per failed stream). This filter drops the
-    banner and caps output at the last 10 meaningful lines (upstream #925).
-
-    Credentials are masked **here** rather than at each ``logger`` call because
-    this is the one funnel every stderr log in this module passes through.
-    ffmpeg echoes the RTSP input URL back in its ``Input #0`` line, and that URL
-    carries the printer access code — we already redact it out of the *command*
-    before logging it (see ``_redacted_cmd``), and this closes the other way it
-    reached the file.
-    """
-    if not text:
-        return ""
-    # Before the truncation below, never after: slicing first can cut the string
-    # short of the ``@`` the pattern anchors on and leave the password in.
-    text = redact_url_credentials(text) or ""
-    banner_prefixes = (
-        "ffmpeg version ",
-        "  built with ",
-        "  configuration:",
-        "  libavutil ",
-        "  libavcodec ",
-        "  libavformat ",
-        "  libavdevice ",
-        "  libavfilter ",
-        "  libswscale ",
-        "  libswresample ",
-        "  libpostproc ",
-    )
-    meaningful = [ln for ln in text.splitlines() if ln.strip() and not ln.startswith(banner_prefixes)]
-    return "\n".join(meaningful[-10:])
 
 
 async def _read_ffmpeg_stderr(
