@@ -18,6 +18,12 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
+from backend.app.services.camera_cleanup import CameraAttempt
+from backend.app.services.camera_tls import (
+    close_tls_proxy as close_tls_proxy,
+    create_tls_proxy as create_tls_proxy,
+    rewrite_rtsp_request_url as rewrite_rtsp_request_url,
+)
 from backend.app.utils.ffmpeg_output import NO_FFMPEG_OUTPUT, summarize_ffmpeg_stderr
 
 logger = logging.getLogger(__name__)
@@ -235,129 +241,6 @@ def get_camera_port(model: str | None) -> int:
     if supports_rtsp(model):
         return 322
     return 6000
-
-
-def rewrite_rtsp_request_url(data: bytes, proxy_url: bytes, real_url: bytes) -> bytes:
-    """Rewrite RTSP request-line URLs, leaving other lines (e.g. Authorization) intact.
-
-    RTSP request lines have the form ``METHOD <url> RTSP/1.0\\r\\n``.
-    Only those lines are modified so that Digest auth headers (which embed
-    the original URL and a cryptographic hash) are not broken.
-    """
-    rtsp_marker = b" RTSP/1.0"
-    if rtsp_marker not in data:
-        return data
-    lines = data.split(b"\r\n")
-    for i, line in enumerate(lines):
-        if line.endswith(rtsp_marker):
-            lines[i] = line.replace(proxy_url, real_url)
-            break
-    return b"\r\n".join(lines)
-
-
-async def create_tls_proxy(target_host: str, target_port: int) -> tuple[int, "asyncio.Server"]:
-    """Create a local TCP→TLS proxy for RTSP streams.
-
-    Bambu printers use RTSPS (RTSP over TLS) with self-signed certificates.
-    The Debian ffmpeg package uses GnuTLS, whose hardened defaults reject
-    certain TLS behaviors (renegotiation, legacy ciphers) that some printer
-    firmwares (notably P2S) rely on.  This causes streams to drop after a
-    few seconds.
-
-    This proxy terminates TLS using Python's ssl module (OpenSSL), which is
-    more permissive, and exposes a plain TCP port that ffmpeg connects to
-    with ``rtsp://`` instead of ``rtsps://``.
-
-    RTSP embeds URLs in protocol messages (DESCRIBE, SETUP, PLAY).  The proxy
-    rewrites ``127.0.0.1:<proxy_port>`` → ``<target_host>:<target_port>`` in
-    client→server data so the printer recognises the stream path.
-
-    Returns ``(local_port, server)``.  Caller must close the server when done.
-    """
-    ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    ssl_ctx.check_hostname = False
-    ssl_ctx.verify_mode = ssl.CERT_NONE
-
-    # Filled in after the server socket is created (handler only runs after).
-    _local_port: list[int] = [0]
-
-    async def _handle(client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter):
-        tls_writer = None
-        try:
-            tls_reader, tls_writer = await asyncio.wait_for(
-                asyncio.open_connection(target_host, target_port, ssl=ssl_ctx),
-                timeout=10.0,
-            )
-
-            # URL patterns for RTSP request-line rewriting.
-            proxy_url = f"rtsp://127.0.0.1:{_local_port[0]}".encode()
-            real_url = f"rtsps://{target_host}:{target_port}".encode()
-
-            # Note on the broad except below: dst.write() raises RuntimeError
-            # under uvloop when the underlying handle has already been torn
-            # down (uvloop.loop.UVHandle._ensure_alive). asyncio's default
-            # selector loop reports the same situation as ConnectionResetError
-            # / OSError, so a tuple that doesn't include RuntimeError leaks
-            # the uvloop variant up to asyncio's unhandled-exception logger
-            # ("Unhandled exception in client_connected_cb"). The forwarders
-            # are intentionally fire-and-forget on tear-down — once either
-            # peer drops, both halves of the proxy should exit quietly.
-
-            async def _fwd_to_server(src: asyncio.StreamReader, dst: asyncio.StreamWriter):
-                """Forward client→server, rewriting RTSP request-line URLs only."""
-                try:
-                    while True:
-                        data = await src.read(65536)
-                        if not data:
-                            break
-                        data = rewrite_rtsp_request_url(data, proxy_url, real_url)
-                        dst.write(data)
-                        await dst.drain()
-                except (ConnectionError, OSError, asyncio.CancelledError, RuntimeError):
-                    pass
-                finally:
-                    if not dst.is_closing():
-                        try:
-                            dst.close()
-                        except OSError:
-                            pass
-
-            async def _fwd_to_client(src: asyncio.StreamReader, dst: asyncio.StreamWriter):
-                """Forward server→client unchanged."""
-                try:
-                    while True:
-                        data = await src.read(65536)
-                        if not data:
-                            break
-                        dst.write(data)
-                        await dst.drain()
-                except (ConnectionError, OSError, asyncio.CancelledError, RuntimeError):
-                    pass
-                finally:
-                    if not dst.is_closing():
-                        try:
-                            dst.close()
-                        except OSError:
-                            pass
-
-            await asyncio.gather(
-                _fwd_to_server(client_reader, tls_writer),
-                _fwd_to_client(tls_reader, client_writer),
-            )
-        except (ConnectionError, OSError, TimeoutError) as e:
-            logger.debug("TLS proxy connection to %s:%s failed: %s", target_host, target_port, e)
-        finally:
-            for w in (client_writer, tls_writer):
-                if w and not w.is_closing():
-                    try:
-                        w.close()
-                    except OSError:
-                        pass
-
-    server = await asyncio.start_server(_handle, "127.0.0.1", 0)
-    _local_port[0] = server.sockets[0].getsockname()[1]
-    logger.debug("TLS proxy for %s:%s listening on 127.0.0.1:%s", target_host, target_port, _local_port[0])
-    return _local_port[0], server
 
 
 def is_chamber_image_model(model: str | None) -> bool:
@@ -727,86 +610,85 @@ async def _capture_camera_frame_bytes_uncoalesced(
         )
         return frame
 
-    # RTSP models: X1/H2/P2 - use ffmpeg piping to stdout
-    # TLS proxy avoids GnuTLS compatibility issues with some printer firmwares
-    proxy_port, proxy_server = await create_tls_proxy(ip_address, port)
-    camera_url = f"rtsp://bblp:{access_code}@127.0.0.1:{proxy_port}/streaming/live/1"
-
-    ffmpeg = get_ffmpeg_path()
-    if not ffmpeg:
-        proxy_server.close()
-        await proxy_server.wait_closed()
-        logger.error(
-            "ffmpeg not found for camera frame capture [%s elapsed=%.3fs]", context, time.monotonic() - started
-        )
-        return None
-
-    cmd = [
-        ffmpeg,
-        "-y",
-        "-rtsp_transport",
-        "tcp",
-        "-rtsp_flags",
-        "prefer_tcp",
-        "-i",
-        camera_url,
-        "-frames:v",
-        "1",
-        "-f",
-        "image2pipe",
-        "-vcodec",
-        "mjpeg",
-        "-q:v",
-        "2",
-        "-",
-    ]
-
-    process: asyncio.subprocess.Process | None = None
+    process = None
     try:
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        # Protect this short-lived capture from the orphan-ffmpeg cleanup sweep —
-        # the /proc scan can otherwise SIGKILL us mid-snapshot (#979).
-        _active_capture_pids.add(process.pid)
+        async with CameraAttempt(context) as attempt:
+            # RTSP models: X1/H2/P2 - use ffmpeg piping to stdout
+            # TLS proxy avoids GnuTLS compatibility issues with some printer firmwares
+            proxy_port, attempt.proxy = await create_tls_proxy(ip_address, port)
+            context += f" proxy_port={proxy_port}"
+            attempt.context = context
+            camera_url = f"rtsp://bblp:{access_code}@127.0.0.1:{proxy_port}/streaming/live/1"
 
-        try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
-        except TimeoutError:
-            process.kill()
-            await process.wait()
-            logger.error(
-                "Camera frame bytes capture timed out after %ss [%s pid=%s elapsed=%.3fs]",
-                timeout,
-                context,
-                process.pid,
-                time.monotonic() - started,
-            )
-            return None
+            ffmpeg = get_ffmpeg_path()
+            if not ffmpeg:
+                logger.error(
+                    "ffmpeg not found for camera frame capture [%s elapsed=%.3fs]", context, time.monotonic() - started
+                )
+                return None
 
-        if process.returncode == 0 and stdout and len(stdout) >= 100:
-            logger.info(
-                "Successfully captured camera frame bytes: %s bytes [%s pid=%s elapsed=%.3fs]",
-                len(stdout),
-                context,
-                process.pid,
-                time.monotonic() - started,
+            cmd = [
+                ffmpeg,
+                "-y",
+                "-rtsp_transport",
+                "tcp",
+                "-rtsp_flags",
+                "prefer_tcp",
+                "-i",
+                camera_url,
+                "-frames:v",
+                "1",
+                "-f",
+                "image2pipe",
+                "-vcodec",
+                "mjpeg",
+                "-q:v",
+                "2",
+                "-",
+            ]
+
+            process = attempt.process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
-            return stdout
-        else:
-            stderr_text = summarize_ffmpeg_stderr(stderr) or NO_FFMPEG_OUTPUT
-            logger.error(
-                "ffmpeg frame bytes capture failed (code %s) [%s pid=%s elapsed=%.3fs bytes=%s]: %s",
-                process.returncode,
-                context,
-                process.pid,
-                time.monotonic() - started,
-                len(stdout) if stdout else 0,
-                stderr_text,
-            )
-            return None
+            # Protect this short-lived capture from the orphan-ffmpeg cleanup sweep —
+            # the /proc scan can otherwise SIGKILL us mid-snapshot (#979).
+            _active_capture_pids.add(process.pid)
+
+            try:
+                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+            except TimeoutError:
+                logger.error(
+                    "Camera frame bytes capture timed out after %ss [%s pid=%s elapsed=%.3fs]",
+                    timeout,
+                    context,
+                    process.pid,
+                    time.monotonic() - started,
+                )
+                return None
+
+            if process.returncode == 0 and stdout and len(stdout) >= 100:
+                logger.info(
+                    "Successfully captured camera frame bytes: %s bytes [%s pid=%s elapsed=%.3fs]",
+                    len(stdout),
+                    context,
+                    process.pid,
+                    time.monotonic() - started,
+                )
+                return stdout
+            else:
+                stderr_text = summarize_ffmpeg_stderr(stderr) or NO_FFMPEG_OUTPUT
+                logger.error(
+                    "ffmpeg frame bytes capture failed (code %s) [%s pid=%s elapsed=%.3fs bytes=%s]: %s",
+                    process.returncode,
+                    context,
+                    process.pid,
+                    time.monotonic() - started,
+                    len(stdout) if stdout else 0,
+                    stderr_text,
+                )
+                return None
 
     except FileNotFoundError:
         logger.error(
@@ -827,8 +709,6 @@ async def _capture_camera_frame_bytes_uncoalesced(
     finally:
         if process is not None:
             _active_capture_pids.discard(process.pid)
-        proxy_server.close()
-        await proxy_server.wait_closed()
 
 
 async def capture_finish_photo(

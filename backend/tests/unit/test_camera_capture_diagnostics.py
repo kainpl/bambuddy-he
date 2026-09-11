@@ -56,6 +56,12 @@ def capture_process(monkeypatch, caplog):
     proxy = Mock()
     proxy.wait_closed = AsyncMock()
     monkeypatch.setattr(camera, "create_tls_proxy", AsyncMock(return_value=(43210, proxy)))
+
+    async def close_proxy(server):
+        server.close()
+        await server.wait_closed()
+
+    monkeypatch.setattr("backend.app.services.camera_tls.close_tls_proxy", close_proxy)
     monkeypatch.setattr(camera, "get_ffmpeg_path", lambda: "ffmpeg")
     monkeypatch.setattr(camera, "read_chamber_image_frame", AsyncMock(return_value=_FRAME))
     process = Mock(pid=4321, returncode=3199971767)
@@ -138,12 +144,18 @@ async def test_follower_timeout_names_capture_that_keeps_running(capture_process
 
 async def test_process_timeout_logs_context_and_still_reaps_process(capture_process, caplog):
     capture_process.communicate.side_effect = TimeoutError
+    capture_process.returncode = None
+
+    async def reaped():
+        capture_process.returncode = -15
+
+    capture_process.wait.side_effect = reaped
     assert await camera.capture_camera_frame_bytes("192.0.2.5", "code", "X1C") is None
     failure = next(msg for msg in _messages(caplog) if "timed out" in msg)
     assert "target=192.0.2.5:322" in failure
     assert "pid=4321" in failure and "elapsed=" in failure
     _capture_id(failure)
-    capture_process.kill.assert_called_once()
+    capture_process.terminate.assert_called_once()
     capture_process.wait.assert_awaited_once()
     assert camera._active_capture_pids == set()
 

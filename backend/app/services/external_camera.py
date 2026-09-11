@@ -19,6 +19,7 @@ from urllib.parse import urlparse
 import aiohttp
 
 from backend.app.core.logging_filters import redact_url_credentials
+from backend.app.services.camera_cleanup import CameraAttempt, CameraCleanupError
 from backend.app.services.ffmpeg_stderr import FfmpegStderrDrain
 from backend.app.utils.ffmpeg_output import NO_FFMPEG_OUTPUT, summarize_ffmpeg_stderr
 
@@ -478,86 +479,84 @@ async def _capture_rtsp_frame(url: str, timeout: int) -> bytes | None:
         logger.error("ffmpeg not found - required for RTSP capture")
         return None
 
-    # If rtsps://, use TLS proxy
-    proxy_server = None
-    effective_url = url
-    if url.lower().startswith("rtsps://"):
-        try:
-            from urllib.parse import urlparse
-
-            from backend.app.services.camera import create_tls_proxy
-
-            parsed = urlparse(url)
-            target_port = parsed.port or 322
-            proxy_port, proxy_server = await create_tls_proxy(parsed.hostname, target_port)
-            userinfo = ""
-            if parsed.username:
-                userinfo = parsed.username
-                if parsed.password:
-                    userinfo += f":{parsed.password}"
-                userinfo += "@"
-            effective_url = f"rtsp://{userinfo}127.0.0.1:{proxy_port}{parsed.path}"
-            if parsed.query:
-                effective_url += f"?{parsed.query}"
-        except Exception as e:
-            logger.warning("Failed to create TLS proxy for RTSP capture, falling back: %s", e)
-            effective_url = url
-
-    cmd = [
-        ffmpeg,
-        "-rtsp_transport",
-        "tcp",
-        "-i",
-        effective_url,
-        "-frames:v",
-        "1",
-        "-f",
-        "image2pipe",
-        "-vcodec",
-        "mjpeg",
-        "-q:v",
-        "2",
-        "-",
-    ]
-
     try:
-        logger.debug("Running ffmpeg RTSP capture...")
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
+        async with CameraAttempt("external-rtsp") as attempt:
+            # If rtsps://, use TLS proxy
+            effective_url = url
+            if url.lower().startswith("rtsps://"):
+                try:
+                    from urllib.parse import urlparse
 
-        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
-        logger.debug(
-            "ffmpeg returned: code=%s, stdout=%s bytes, stderr=%s bytes",
-            process.returncode,
-            len(stdout),
-            len(stderr),
-        )
+                    from backend.app.services.camera import create_tls_proxy
 
-        if process.returncode != 0:
-            logger.error("ffmpeg RTSP capture failed: %s", summarize_ffmpeg_stderr(stderr) or NO_FFMPEG_OUTPUT)
-            return None
+                    parsed = urlparse(url)
+                    target_port = parsed.port or 322
+                    proxy_port, attempt.proxy = await create_tls_proxy(parsed.hostname, target_port)
+                    attempt.context = f"external-rtsp target={parsed.hostname}:{target_port} proxy_port={proxy_port}"
+                    logger.debug("External camera attempt [%s]", attempt.context)
+                    userinfo = ""
+                    if parsed.username:
+                        userinfo = parsed.username
+                        if parsed.password:
+                            userinfo += f":{parsed.password}"
+                        userinfo += "@"
+                    effective_url = f"rtsp://{userinfo}127.0.0.1:{proxy_port}{parsed.path}"
+                    if parsed.query:
+                        effective_url += f"?{parsed.query}"
+                except Exception as e:
+                    logger.warning(
+                        "Failed to create TLS proxy for RTSP capture, falling back: %s", summarize_ffmpeg_stderr(str(e))
+                    )
+                    effective_url = url
 
-        if not stdout or len(stdout) < 100:
-            logger.error("ffmpeg returned empty or too small frame")
-            return None
+            cmd = [
+                ffmpeg,
+                "-rtsp_transport",
+                "tcp",
+                "-i",
+                effective_url,
+                "-frames:v",
+                "1",
+                "-f",
+                "image2pipe",
+                "-vcodec",
+                "mjpeg",
+                "-q:v",
+                "2",
+                "-",
+            ]
 
-        return stdout
+            logger.debug("Running ffmpeg RTSP capture...")
+            process = attempt.process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+            logger.debug(
+                "ffmpeg returned: code=%s, stdout=%s bytes, stderr=%s bytes",
+                process.returncode,
+                len(stdout),
+                len(stderr),
+            )
+
+            if process.returncode != 0:
+                logger.error("ffmpeg RTSP capture failed: %s", summarize_ffmpeg_stderr(stderr) or NO_FFMPEG_OUTPUT)
+                return None
+
+            if not stdout or len(stdout) < 100:
+                logger.error("ffmpeg returned empty or too small frame")
+                return None
+
+            return stdout
 
     except TimeoutError:
         logger.warning("RTSP frame capture timed out after %ss", timeout)
-        if process:
-            process.kill()
         return None
-    except OSError as e:
-        logger.error("RTSP frame capture failed: %s", e)
+    except (OSError, CameraCleanupError) as e:
+        logger.error("RTSP frame capture failed: %s", summarize_ffmpeg_stderr(str(e)))
         return None
-    finally:
-        if proxy_server:
-            proxy_server.close()
-            await proxy_server.wait_closed()
 
 
 def _transcode_to_jpeg(data: bytes) -> bytes | None:
@@ -879,148 +878,134 @@ async def _stream_rtsp(
 
     from backend.app.services.camera import rtsp_socket_timeout_flag
 
-    # If the URL uses rtsps://, set up a TLS proxy so ffmpeg uses plain rtsp://
-    proxy_server = None
-    effective_url = url
-    if url.lower().startswith("rtsps://"):
-        try:
-            from urllib.parse import urlparse
-
-            from backend.app.services.camera import create_tls_proxy
-
-            parsed = urlparse(url)
-            target_port = parsed.port or 322
-            proxy_port, proxy_server = await create_tls_proxy(parsed.hostname, target_port)
-            # Rewrite URL: rtsps://user:pass@host:port/path → rtsp://user:pass@127.0.0.1:proxy/path
-            userinfo = ""
-            if parsed.username:
-                userinfo = parsed.username
-                if parsed.password:
-                    userinfo += f":{parsed.password}"
-                userinfo += "@"
-            effective_url = f"rtsp://{userinfo}127.0.0.1:{proxy_port}{parsed.path}"
-            if parsed.query:
-                effective_url += f"?{parsed.query}"
-        except Exception as e:
-            logger.warning("Failed to create TLS proxy for RTSP, falling back to direct: %s", e)
-            effective_url = url
-
-    cmd = [
-        ffmpeg,
-        "-nostats",  # see routes/camera.py — no continuous writer on stderr
-        "-rtsp_transport",
-        "tcp",
-        "-rtsp_flags",
-        "prefer_tcp",
-        # Socket I/O timeout name varies by ffmpeg version (#1504); see
-        # `rtsp_socket_timeout_flag()` in services.camera.
-        f"-{rtsp_socket_timeout_flag()}",
-        "30000000",
-        "-buffer_size",
-        "1024000",
-        "-max_delay",
-        "500000",
-        "-probesize",
-        "32",
-        "-analyzeduration",
-        "0",
-        "-fflags",
-        "nobuffer",
-        "-flags",
-        "low_delay",
-        "-i",
-        effective_url,
-        "-f",
-        "mjpeg",
-        "-q:v",
-        "5",
-        "-r",
-        str(fps),
-        "-an",
-        "-",
-    ]
-
-    process = None
-    stderr_drain: FfmpegStderrDrain | None = None
     try:
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        # Register BEFORE the startup probe below, not after: a process that
-        # hangs on connect never reaches the probe, and that is precisely the
-        # one worth being able to reap (#2675).
-        if on_process is not None:
-            on_process(process)
+        async with CameraAttempt("external-rtsp") as attempt:
+            # If the URL uses rtsps://, set up a TLS proxy so ffmpeg uses plain rtsp://
+            effective_url = url
+            if url.lower().startswith("rtsps://"):
+                try:
+                    from urllib.parse import urlparse
 
-        # Brief check for immediate startup failures. The pipe is read directly
-        # here — the drain starts only once this ffmpeg is going to live.
-        await asyncio.sleep(0.1)
-        if process.returncode is not None:
-            stderr = await process.stderr.read()
-            logger.error(
-                "ffmpeg RTSP stream failed immediately: %s", summarize_ffmpeg_stderr(stderr) or NO_FFMPEG_OUTPUT
+                    from backend.app.services.camera import create_tls_proxy
+
+                    parsed = urlparse(url)
+                    target_port = parsed.port or 322
+                    proxy_port, attempt.proxy = await create_tls_proxy(parsed.hostname, target_port)
+                    attempt.context = f"external-rtsp target={parsed.hostname}:{target_port} proxy_port={proxy_port}"
+                    logger.debug("External camera attempt [%s]", attempt.context)
+                    # Rewrite URL: rtsps://user:pass@host:port/path → rtsp://user:pass@127.0.0.1:proxy/path
+                    userinfo = ""
+                    if parsed.username:
+                        userinfo = parsed.username
+                        if parsed.password:
+                            userinfo += f":{parsed.password}"
+                        userinfo += "@"
+                    effective_url = f"rtsp://{userinfo}127.0.0.1:{proxy_port}{parsed.path}"
+                    if parsed.query:
+                        effective_url += f"?{parsed.query}"
+                except Exception as e:
+                    logger.warning(
+                        "Failed to create TLS proxy for RTSP, falling back to direct: %s",
+                        summarize_ffmpeg_stderr(str(e)),
+                    )
+                    effective_url = url
+
+            cmd = [
+                ffmpeg,
+                "-nostats",  # see routes/camera.py — no continuous writer on stderr
+                "-rtsp_transport",
+                "tcp",
+                "-rtsp_flags",
+                "prefer_tcp",
+                # Socket I/O timeout name varies by ffmpeg version (#1504); see
+                # `rtsp_socket_timeout_flag()` in services.camera.
+                f"-{rtsp_socket_timeout_flag()}",
+                "30000000",
+                "-buffer_size",
+                "1024000",
+                "-max_delay",
+                "500000",
+                "-probesize",
+                "32",
+                "-analyzeduration",
+                "0",
+                "-fflags",
+                "nobuffer",
+                "-flags",
+                "low_delay",
+                "-i",
+                effective_url,
+                "-f",
+                "mjpeg",
+                "-q:v",
+                "5",
+                "-r",
+                str(fps),
+                "-an",
+                "-",
+            ]
+
+            process = attempt.process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
-            return
+            stderr_drain = attempt.stderr = FfmpegStderrDrain(process, name=f"ext-rtsp-{process.pid}").start()
+            # Register BEFORE the startup probe below, not after: a process that
+            # hangs on connect never reaches the probe, and that is precisely the
+            # one worth being able to reap (#2675).
+            if on_process is not None:
+                on_process(process)
 
-        # From here it runs for as long as the viewer watches, and nothing was
-        # reading its stderr — see services/ffmpeg_stderr for why that stalls a
-        # stream that still looks alive.
-        stderr_drain = FfmpegStderrDrain(process, name=f"ext-rtsp-{process.pid}").start()
+            # The drain also covers immediate startup failures.
+            await asyncio.sleep(0.1)
+            if process.returncode is not None:
+                stderr = stderr_drain.text()
+                logger.error(
+                    "ffmpeg RTSP stream failed immediately: %s", summarize_ffmpeg_stderr(stderr) or NO_FFMPEG_OUTPUT
+                )
+                return
 
-        buffer = b""
-        jpeg_start = b"\xff\xd8"
-        jpeg_end = b"\xff\xd9"
+            buffer = b""
+            jpeg_start = b"\xff\xd8"
+            jpeg_end = b"\xff\xd9"
 
-        while True:
-            try:
-                chunk = await asyncio.wait_for(process.stdout.read(8192), timeout=30.0)
+            while True:
+                try:
+                    chunk = await asyncio.wait_for(process.stdout.read(8192), timeout=30.0)
 
-                if not chunk:
+                    if not chunk:
+                        break
+
+                    buffer += chunk
+
+                    # Extract complete frames
+                    while True:
+                        start_idx = buffer.find(jpeg_start)
+                        if start_idx == -1:
+                            buffer = buffer[-2:] if len(buffer) > 2 else buffer
+                            break
+
+                        if start_idx > 0:
+                            buffer = buffer[start_idx:]
+
+                        end_idx = buffer.find(jpeg_end, 2)
+                        if end_idx == -1:
+                            break
+
+                        frame = buffer[: end_idx + 2]
+                        buffer = buffer[end_idx + 2 :]
+                        yield frame
+
+                except TimeoutError:
+                    logger.warning("RTSP stream read timeout")
                     break
 
-                buffer += chunk
-
-                # Extract complete frames
-                while True:
-                    start_idx = buffer.find(jpeg_start)
-                    if start_idx == -1:
-                        buffer = buffer[-2:] if len(buffer) > 2 else buffer
-                        break
-
-                    if start_idx > 0:
-                        buffer = buffer[start_idx:]
-
-                    end_idx = buffer.find(jpeg_end, 2)
-                    if end_idx == -1:
-                        break
-
-                    frame = buffer[: end_idx + 2]
-                    buffer = buffer[end_idx + 2 :]
-                    yield frame
-
-            except TimeoutError:
-                logger.warning("RTSP stream read timeout")
-                break
-
     except asyncio.CancelledError:
-        logger.info("RTSP stream cancelled")
-    except OSError as e:
-        logger.error("RTSP stream error: %s", e)
-    finally:
-        if stderr_drain is not None:
-            await stderr_drain.aclose()
-        if process and process.returncode is None:
-            process.terminate()
-            try:
-                await asyncio.wait_for(process.wait(), timeout=2.0)
-            except TimeoutError:
-                process.kill()
-                await process.wait()
-        if proxy_server:
-            proxy_server.close()
-            await proxy_server.wait_closed()
+        logger.debug("RTSP stream cancelled")
+        raise
+    except (OSError, CameraCleanupError) as e:
+        logger.error("RTSP stream error: %s", summarize_ffmpeg_stderr(str(e)))
 
 
 async def _stream_usb(
