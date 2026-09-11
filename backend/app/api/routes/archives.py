@@ -31,6 +31,7 @@ from backend.app.schemas.archive import (
     ArchiveResponse,
     ArchiveStats,
     ArchiveUpdate,
+    DefectsByPrinter,
     PaginatedArchiveResponse,
     PaginationMeta,
     ReprintRequest,
@@ -1041,6 +1042,23 @@ async def get_archive_stats(
     )
     prints_by_printer = {str(k): v for k, v in printer_result.all()}
 
+    # Defects by printer — completed prints only: what came off the plate
+    # against what the operator (or a skip) marked bad (spec 2026-09-11 §6).
+    defects_result = await db.execute(
+        select(
+            PrintArchive.printer_id,
+            func.coalesce(func.sum(PrintArchive.quantity), 0),
+            func.coalesce(func.sum(PrintArchive.defective_count), 0),
+        )
+        .where(PrintArchive.status == "completed", *base_conditions)
+        .group_by(PrintArchive.printer_id)
+    )
+    defects_by_printer = {
+        str(printer_id): DefectsByPrinter(printed=int(printed), defective=int(defective))
+        for printer_id, printed, defective in defects_result.all()
+        if printer_id is not None and int(printed) > 0
+    }
+
     # Time accuracy statistics
     # Completed prints that carry both an estimate and a measured time.
     #
@@ -1144,6 +1162,7 @@ async def get_archive_stats(
         total_cost=round(total_cost, 2),
         prints_by_filament_type=prints_by_filament,
         prints_by_printer=prints_by_printer,
+        defects_by_printer=defects_by_printer,
         average_time_accuracy=average_accuracy,
         time_accuracy_by_printer=accuracy_by_printer if accuracy_by_printer else None,
         print_energy_kwh=round(print_energy_kwh, 3),

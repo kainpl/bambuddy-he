@@ -203,6 +203,13 @@ class ArchiveResponse(BaseModel):
         from_attributes = True
 
 
+class DefectsByPrinter(BaseModel):
+    """What came off one printer's plates in the period, and how much of it went in the bin."""
+
+    printed: int
+    defective: int
+
+
 class ArchiveStats(BaseModel):
     total_prints: int
     successful_prints: int
@@ -219,6 +226,9 @@ class ArchiveStats(BaseModel):
     # Average across all prints with data
     average_time_accuracy: float | None = None
     time_accuracy_by_printer: dict | None = None  # Per-printer accuracy
+    # Completed prints only, keyed by printer id as a string like the other
+    # per-printer maps; printers with nothing printed in the period are omitted.
+    defects_by_printer: dict[str, DefectsByPrinter] = {}
     # ── Energy, answered twice ───────────────────────────────────────────
     # These used to be one pair whose meaning depended on a setting, so the
     # number on the page could not be read without opening Settings to find out

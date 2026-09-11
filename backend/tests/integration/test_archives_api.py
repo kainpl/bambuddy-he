@@ -347,6 +347,28 @@ class TestArchivesAPI:
         assert result["average_time_accuracy"] == 50.0
         assert result["time_accuracy_by_printer"] == {str(printer.id): 50.0}
 
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_stats_report_defects_by_printer_over_completed_prints(
+        self, async_client: AsyncClient, archive_factory, printer_factory, db_session
+    ):
+        """defects_by_printer sums printed vs. defective over COMPLETED prints
+        only, keyed by printer id like the other per-printer maps (spec
+        2026-09-11 §6). A failed print's defects don't count, and a printer
+        with nothing printed in the period is omitted entirely.
+        """
+        printer_a = await printer_factory(name="A")
+        printer_b = await printer_factory(name="B")
+        await archive_factory(printer_a.id, status="completed", quantity=6, defective_count=2)
+        await archive_factory(printer_a.id, status="completed", quantity=4, defective_count=0)
+        await archive_factory(printer_a.id, status="failed", quantity=5, defective_count=5)
+        await archive_factory(printer_b.id, status="completed", quantity=0, defective_count=0)
+
+        response = await async_client.get("/api/v1/archives/stats")
+
+        assert response.status_code == 200, response.text
+        assert response.json()["defects_by_printer"] == {str(printer_a.id): {"printed": 10, "defective": 2}}
+
 
 class TestArchiveDataIntegrity:
     """Tests for archive data integrity."""
