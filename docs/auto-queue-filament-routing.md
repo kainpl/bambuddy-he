@@ -21,6 +21,10 @@ The server checks routing again before preparing a print and immediately before 
 
 ## Editing, copying, and existing queues
 
+If a queued source disappears, cannot be read, or times out, that job is marked **File error** and skipped. Other jobs continue; the printer queue is not paused and this does not count as a failed physical print. AutoQueue keeps the failed row visible, and a printer's queue shows it under Issues. Restore access, then use **Retry**. AutoQueue checks the file before returning the same job to pending; restoring the share alone does not restart a failed job. Busy printers and unavailable filament still wait normally.
+
+Files indexed from an external folder remain at their original paths: queueing does not make independent copies. Keep the source available until the pending jobs have been sent. When moving laptop/SMB files to local NAS storage, preserve the path and folder structure inside the container for existing jobs.
+
 Routing choices are stored with each printer-queue job. Removing its original AutoQueue row does not remove its rules. Editing only its schedule, cloning, retrying, and repeating preserve those choices. Explicit physical slot selections remain pinned; moving them to a different printer or plate requires a new mapping answer. File-specific color pins cause each following file in a grouped add to be shown for review.
 
 Existing rows are migrated using their stored data only. Old automatic jobs that explicitly disabled AMS keep the external-only restriction. A physical AMS mapping with an inconsistent old `use_ams` flag remains physical intent. Missing or unrecognized policy evidence requires review instead of silently relaxing the rules.

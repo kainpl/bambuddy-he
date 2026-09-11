@@ -201,3 +201,36 @@ describe('AutoQueuePanel — rebalancing across models', () => {
     expect(await screen.findByText('No other model would finish it sooner')).toBeInTheDocument();
   });
 });
+
+describe('AutoQueuePanel — unavailable source', () => {
+  it('shows the failed job and retries it without assigning or duplicating it', async () => {
+    const failed = routerRow({ id: 71, status: 'failed', waiting_reason: 'Restore access to the file', batch_id: null });
+    vi.mocked(api.getAutoQueue).mockResolvedValue([failed]);
+    const retry = vi.spyOn(api, 'retryAutoQueue').mockImplementation(async () => {
+      const pending = { ...failed, status: 'pending' as const, waiting_reason: null };
+      vi.mocked(api.getAutoQueue).mockResolvedValue([pending]);
+      return pending;
+    });
+    const assign = vi.spyOn(api, 'assignAutoQueueNow');
+    const user = userEvent.setup();
+    render(<AutoQueuePanel />);
+    expect(await screen.findByText('File error')).toBeInTheDocument();
+    expect(screen.getByText(/Restore access to the file/)).toBeInTheDocument();
+    await user.click(screen.getByTitle('Retry'));
+    await waitFor(() => expect(retry).toHaveBeenCalledWith(71));
+    expect(assign).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByText('File error')).not.toBeInTheDocument());
+  });
+
+  it('keeps a failed copy visible beside a pending copy of the same batch', async () => {
+    vi.mocked(api.getAutoQueue).mockResolvedValue([
+      routerRow({ id: 1, batch_id: 'mixed', status: 'pending' }),
+      routerRow({ id: 2, batch_id: 'mixed', status: 'failed', waiting_reason: 'File unavailable' }),
+    ]);
+    render(<AutoQueuePanel />);
+    expect(await screen.findByText('File error')).toBeInTheDocument();
+    expect(screen.getByTitle('Retry')).toBeInTheDocument();
+    expect(screen.getByTitle('Assign now')).toBeInTheDocument();
+    expect(screen.queryByText('×2')).not.toBeInTheDocument();
+  });
+});

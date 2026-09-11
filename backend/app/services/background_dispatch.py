@@ -45,6 +45,7 @@ from backend.app.services.gcode_patcher import GcodeInjectionSpec
 from backend.app.services.printer_files.factory import transport_for
 from backend.app.services.printer_manager import printer_manager
 from backend.app.services.product_sync import purge_file_product_links
+from backend.app.services.source_io import SourceUnavailable, require_source_file, source_probe
 from backend.app.utils.filename import derive_remote_filename
 
 logger = logging.getLogger(__name__)
@@ -892,7 +893,7 @@ class BackgroundDispatchService:
 
         try:
             await self._process_job(job)
-        except RoutingDeferred as exc:
+        except (RoutingDeferred, SourceUnavailable) as exc:
             await self._handle_routing_deferred(job, exc)
         except DispatchJobCancelled:
             pass  # outcome.cancelled already set by the runner
@@ -1235,7 +1236,7 @@ class BackgroundDispatchService:
             # so for them this reads exactly as the bare call did.
             if (job.outcome or {}).get("success"):
                 await self._mark_job_finished(job, failed=False, message="Background dispatch complete")
-        except RoutingDeferred as exc:
+        except (RoutingDeferred, SourceUnavailable) as exc:
             await self._handle_routing_deferred(job, exc)
         except DispatchJobCancelled:
             await self._release_direct_claim(job, status="cancelled")
@@ -1625,9 +1626,12 @@ class BackgroundDispatchService:
 
         async with async_session() as db:
             service = ArchiveService(db)
+            # Capture the dispatch claim and original refs before any source
+            # probe can fail; the failure path must be able to release it.
+            await self._prepare_filament_routing(db, job)
             source_archive = await service.get_archive(job.source_id)
             if not source_archive:
-                raise RuntimeError("Archive not found")
+                raise SourceUnavailable()
 
             printer = await db.scalar(select(Printer).where(Printer.id == job.printer_id))
             if not printer:
@@ -1647,10 +1651,7 @@ class BackgroundDispatchService:
                 raise RuntimeError("Can`t re-connect printer MQTT")
 
             file_path = settings.base_dir / source_archive.file_path
-            if not file_path.exists():
-                raise RuntimeError("Archive file not found")
-
-            await self._prepare_filament_routing(db, job)
+            await require_source_file(file_path)
 
             # Unified 3MF post-processing: M970 commenting (mesh-mode-fast-check
             # off) and per-plate G-code injection (#422) share a single
@@ -1935,7 +1936,7 @@ class BackgroundDispatchService:
                 # empty. Whatever the firmware does with it, a slicer in the
                 # field supplies it, and matching costs one hash of bytes
                 # already on disk.
-                file_md5 = _file_digest(upload_file_path)
+                file_md5 = await source_probe(("digest", str(upload_file_path)), _file_digest, upload_file_path)
 
                 # Preheat / heat-soak (#1468) — bring the bed (and chamber, on supported
                 # models) up to temperature on the now-idle printer before start_print.
@@ -1964,7 +1965,12 @@ class BackgroundDispatchService:
                 # into this archive for the next two hours.
                 _unconfirmed_expected_print = (job.printer_id, remote_filename)
 
-                plate_id = self._resolve_plate_id(file_path, job.options.get("plate_id"))
+                plate_id = await source_probe(
+                    ("plate", str(file_path), job.options.get("plate_id")),
+                    self._resolve_plate_id,
+                    file_path,
+                    job.options.get("plate_id"),
+                )
 
                 self._raise_if_cancel_requested(job)
 
@@ -2001,8 +2007,22 @@ class BackgroundDispatchService:
                 effective_timelapse = _timelapse_or_off(
                     job.printer_id, printer, bool(job.options.get("timelapse", False))
                 )
+                rack_extruders = await source_probe(
+                    (
+                        "rack",
+                        printer.model,
+                        str(upload_file_path),
+                        plate_id,
+                        json.dumps(job.options.get("nozzle_mapping")),
+                    ),
+                    _rack_slot_extruders,
+                    printer,
+                    upload_file_path,
+                    plate_id,
+                    job.options.get("nozzle_mapping"),
+                )
+                job.routing_guard = await final_guard(job.routing_guard, job.printer_id)
                 await self._verify_routing_claim(db, job)
-                job.routing_guard = final_guard(job.routing_guard, job.printer_id)
                 started = printer_manager.start_print(
                     job.printer_id,
                     remote_filename,
@@ -2018,9 +2038,7 @@ class BackgroundDispatchService:
                     nozzle_mapping=job.options.get("nozzle_mapping"),
                     # H2C only: the physical rack position is resolved in the
                     # MQTT layer, where the live mounted hotend is known.
-                    nozzle_slot_extruders=_rack_slot_extruders(
-                        printer, upload_file_path, plate_id, job.options.get("nozzle_mapping")
-                    ),
+                    nozzle_slot_extruders=rack_extruders,
                     # The medium and the URL scheme are one decision, carried
                     # here from where it was made rather than re-derived.
                     storage=storage,
@@ -2125,7 +2143,7 @@ class BackgroundDispatchService:
                     "cancelled": False,
                     "deferred": False,
                 }
-            except RoutingDeferred as exc:
+            except (RoutingDeferred, SourceUnavailable) as exc:
                 job.outcome = {
                     "success": False,
                     "archive_id": None,
@@ -2234,16 +2252,16 @@ class BackgroundDispatchService:
         job.outcome = {"success": False, "archive_id": None, "error": None, "cancelled": False, "deferred": False}
 
         async with async_session() as db:
+            await self._prepare_filament_routing(db, job)
             lib_file = await db.scalar(LibraryFile.active().where(LibraryFile.id == job.source_id))
             if not lib_file:
-                raise RuntimeError("File not found")
+                raise SourceUnavailable()
 
             if not self._is_sliced_file(lib_file.filename):
                 raise RuntimeError("Not a sliced file. Only .gcode or .gcode.3mf files can be printed.")
 
             file_path = Path(settings.base_dir) / lib_file.file_path
-            if not file_path.exists():
-                raise RuntimeError("File not found on disk")
+            await require_source_file(file_path)
 
             printer = await db.scalar(select(Printer).where(Printer.id == job.printer_id))
             if not printer:
@@ -2261,8 +2279,6 @@ class BackgroundDispatchService:
             # re-Connect MQTT if stalled
             if not await printer_manager.ensure_fresh_connection_for_printer(printer):
                 raise RuntimeError("Can`t re-connect printer MQTT")
-
-            await self._prepare_filament_routing(db, job)
 
             # Unified 3MF post-processing — same single-pass pipeline as the
             # archive path above. See _maybe_inject_gcode → _build_injection_spec.
@@ -2565,7 +2581,7 @@ class BackgroundDispatchService:
                 # empty. Whatever the firmware does with it, a slicer in the
                 # field supplies it, and matching costs one hash of bytes
                 # already on disk.
-                file_md5 = _file_digest(upload_file_path)
+                file_md5 = await source_probe(("digest", str(upload_file_path)), _file_digest, upload_file_path)
 
                 # Preheat / heat-soak (#1468) — same idle-window stage as the reprint
                 # path: bed (and chamber, on supported models) up to temperature before
@@ -2593,7 +2609,12 @@ class BackgroundDispatchService:
                 # into this archive for the next two hours.
                 _unconfirmed_expected_print = (job.printer_id, remote_filename)
 
-                plate_id = self._resolve_plate_id(file_path, job.options.get("plate_id"))
+                plate_id = await source_probe(
+                    ("plate", str(file_path), job.options.get("plate_id")),
+                    self._resolve_plate_id,
+                    file_path,
+                    job.options.get("plate_id"),
+                )
 
                 self._raise_if_cancel_requested(job)
 
@@ -2630,8 +2651,22 @@ class BackgroundDispatchService:
                 effective_timelapse = _timelapse_or_off(
                     job.printer_id, printer, bool(job.options.get("timelapse", False))
                 )
+                rack_extruders = await source_probe(
+                    (
+                        "rack",
+                        printer.model,
+                        str(upload_file_path),
+                        plate_id,
+                        json.dumps(job.options.get("nozzle_mapping")),
+                    ),
+                    _rack_slot_extruders,
+                    printer,
+                    upload_file_path,
+                    plate_id,
+                    job.options.get("nozzle_mapping"),
+                )
+                job.routing_guard = await final_guard(job.routing_guard, job.printer_id)
                 await self._verify_routing_claim(db, job)
-                job.routing_guard = final_guard(job.routing_guard, job.printer_id)
                 started = printer_manager.start_print(
                     job.printer_id,
                     remote_filename,
@@ -2647,9 +2682,7 @@ class BackgroundDispatchService:
                     nozzle_mapping=job.options.get("nozzle_mapping"),
                     # H2C only: the physical rack position is resolved in the
                     # MQTT layer, where the live mounted hotend is known.
-                    nozzle_slot_extruders=_rack_slot_extruders(
-                        printer, upload_file_path, plate_id, job.options.get("nozzle_mapping")
-                    ),
+                    nozzle_slot_extruders=rack_extruders,
                     # The medium and the URL scheme are one decision, carried
                     # here from where it was made rather than re-derived.
                     storage=storage,
@@ -2814,7 +2847,7 @@ class BackgroundDispatchService:
                     "cancelled": False,
                     "deferred": False,
                 }
-            except RoutingDeferred as exc:
+            except (RoutingDeferred, SourceUnavailable) as exc:
                 job.outcome = {
                     "success": False,
                     "archive_id": None,

@@ -3,12 +3,23 @@
 from pathlib import Path
 
 from fastapi import HTTPException
+from sqlalchemy import update
 
 from backend.app.core.config import settings
 from backend.app.i18n import current_language, t
 from backend.app.models.archive import PrintArchive
+from backend.app.models.auto_queue import AutoQueueItem
 from backend.app.models.library import LibraryFile
 from backend.app.services.filament_requirements import PrintRequirements, PrintRequirementsCache
+
+
+async def fail_auto_source(db, item, reason):
+    """Only fail an unclaimed item; a concurrent assignment/cancel stays authoritative."""
+    await db.execute(
+        update(AutoQueueItem)
+        .where(AutoQueueItem.id == item.id, AutoQueueItem.status == "pending", AutoQueueItem.cancelled_at.is_(None))
+        .values(status="failed", waiting_reason=routing_detail(reason)["message"])
+    )
 
 
 def resolve_source_path(archive=None, library_file=None) -> Path | None:

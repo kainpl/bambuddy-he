@@ -56,8 +56,8 @@ export function AutoQueuePanel() {
   const dragCounterRef = useRef(0);
 
   const { data: items } = useQuery({
-    queryKey: ['auto-queue', 'pending'],
-    queryFn: () => api.getAutoQueue('pending'),
+    queryKey: ['auto-queue', 'pending,failed'],
+    queryFn: () => api.getAutoQueue('pending,failed'),
     refetchInterval: 15000,
   });
 
@@ -87,13 +87,17 @@ export function AutoQueuePanel() {
   });
 
   const assignNowMutation = useMutation({
-    mutationFn: (id: number) => api.assignAutoQueueNow(id),
-    onSuccess: () => {
+    mutationFn: (id: number) => items?.find((item) => item.id === id)?.status === 'failed'
+      ? api.retryAutoQueue(id) : api.assignAutoQueueNow(id),
+    onSuccess: (item) => {
       queryClient.invalidateQueries({ queryKey: ['auto-queue'] });
       invalidateQueueViews(queryClient);
-      showToast(t('autoQueue.assigned'));
+      showToast(t(item.status === 'pending' ? 'autoQueue.retryQueued' : 'autoQueue.assigned'));
     },
-    onError: (err: Error) => showToast(err.message, 'error'),
+    onError: (err: Error) => {
+      queryClient.invalidateQueries({ queryKey: ['auto-queue'] });
+      showToast(err.message, 'error');
+    },
   });
 
   // Rebalance across printer models (spec 2026-09-10): a row or a whole block,
@@ -144,7 +148,8 @@ export function AutoQueuePanel() {
     const out: Array<{ key: string; batchId: string | null; items: AutoQueueItem[] }> = [];
     for (const it of sortedItems) {
       const last = out[out.length - 1];
-      if (last && last.batchId !== null && last.batchId === it.batch_id) last.items.push(it);
+      if (last && last.batchId !== null && last.batchId === it.batch_id
+        && last.items[0].status === it.status && last.items[0].waiting_reason === it.waiting_reason) last.items.push(it);
       else out.push({ key: `run-${it.id}`, batchId: it.batch_id, items: [it] });
     }
     return out;
@@ -154,7 +159,7 @@ export function AutoQueuePanel() {
   const batchTotals = useMemo(() => {
     const m = new Map<string, number>();
     for (const it of sortedItems) {
-      if (it.batch_id) m.set(it.batch_id, (m.get(it.batch_id) ?? 0) + 1);
+      if (it.batch_id && it.status === 'pending') m.set(it.batch_id, (m.get(it.batch_id) ?? 0) + 1);
     }
     return m;
   }, [sortedItems]);
@@ -507,9 +512,10 @@ function AutoQueueRow({
     <div
       ref={setNodeRef}
       style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : undefined }}
-      className="flex items-center gap-2 p-2.5 bg-bambu-dark rounded border border-bambu-dark-tertiary hover:border-bambu-green/50 transition-colors"
+      className={`flex items-center gap-2 p-2.5 rounded border transition-colors ${item.status === 'failed'
+        ? 'bg-red-500/10 border-red-500/50' : 'bg-bambu-dark border-bambu-dark-tertiary hover:border-bambu-green/50'}`}
     >
-      {draggable && (
+      {draggable && item.status !== 'failed' && (
         <button
           type="button"
           {...attributes}
@@ -524,6 +530,7 @@ function AutoQueueRow({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2 text-sm text-white truncate">
           <span className="truncate">{label}</span>
+          {item.status === 'failed' && <span className="text-red-700 dark:text-red-400">{t('autoQueue.sourceFailed')}</span>}
           {countBadge != null && countBadge > 1 && (
             <button
               type="button"
@@ -570,12 +577,12 @@ function AutoQueueRow({
           {targetLocation && <span>· {targetLocation}</span>}
           {item.force_color_match && <span>· {t('autoQueue.exactColor')}</span>}
           {item.waiting_reason && (
-            <span className="text-yellow-700 dark:text-yellow-400">· {item.waiting_reason}</span>
+            <span className={item.status === 'failed' ? 'text-red-700 dark:text-red-400' : 'text-yellow-700 dark:text-yellow-400'}>· {item.waiting_reason}</span>
           )}
         </div>
       </div>
 
-      {onEdit && (
+      {onEdit && item.status !== 'failed' && (
         <button
           type="button"
           onClick={onEdit}
@@ -591,13 +598,13 @@ function AutoQueueRow({
           onClick={onAssignNow}
           disabled={busy}
           className="px-2 py-1 text-xs text-bambu-green hover:bg-bambu-green/10 rounded inline-flex items-center gap-1 disabled:opacity-40 shrink-0"
-          title={t('autoQueue.assignNow')}
+          title={t(item.status === 'failed' ? 'autoQueue.retry' : 'autoQueue.assignNow')}
         >
           <Zap className="w-3.5 h-3.5" />
-          <span className="hidden sm:inline">{t('autoQueue.assignNow')}</span>
+          <span className="hidden sm:inline">{t(item.status === 'failed' ? 'autoQueue.retry' : 'autoQueue.assignNow')}</span>
         </button>
       )}
-      {onRebalance && (
+      {onRebalance && item.status !== 'failed' && (
         <button
           type="button"
           onClick={onRebalance}

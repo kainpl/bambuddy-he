@@ -33,7 +33,6 @@ result. Queue/dispatch callers must explicitly adopt that contract.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import math
@@ -48,6 +47,7 @@ from defusedxml import ElementTree as ET
 from defusedxml.common import DefusedXmlException
 
 from backend.app.services.archive import ThreeMFParser
+from backend.app.services.source_io import SOURCE_FAILURES, SourceUnavailable, source_probe
 from backend.app.utils.printer_models import is_dual_nozzle_model, normalize_model_name
 from backend.app.utils.threemf_tools import extract_nozzle_mapping_from_3mf
 
@@ -250,6 +250,7 @@ class PrintRequirementsCache:
 
     def __init__(self):
         self._results: dict[tuple[SourceIdentity, int | None, int | None], PrintRequirements] = {}
+        self._unavailable: dict[str, PrintRequirements] = {}
 
     async def read(
         self, file_path: Path | str | None, plate_id: int | None = None, *, archive_plate_id: int | None = None
@@ -265,13 +266,32 @@ class PrintRequirementsCache:
         if file_path is None:
             return PrintRequirements(status="unavailable", reason="source_unreadable")
         path = Path(file_path)
+        if str(path) in self._unavailable:
+            return self._unavailable[str(path)]
         try:
-            identity = await asyncio.to_thread(SourceIdentity.of, path)
-        except OSError:
-            return PrintRequirements(status="unavailable", reason="source_unreadable")
+            identity = await source_probe(("identity", str(path)), SourceIdentity.of, path)
+        except SourceUnavailable as exc:
+            result = PrintRequirements(status="unavailable", reason=exc.reason)
+            if exc.reason in SOURCE_FAILURES:
+                self._unavailable[str(path)] = result
+            return result
         key = (identity, plate_id or None, archive_plate_id if plate_id is None else None)
         if key not in self._results:
-            result = await asyncio.to_thread(read_print_requirements, path, plate_id, archive_plate_id=archive_plate_id)
+            try:
+                result = await source_probe(
+                    ("requirements", str(path), plate_id, archive_plate_id),
+                    read_print_requirements,
+                    path,
+                    plate_id,
+                    archive_plate_id=archive_plate_id,
+                )
+            except SourceUnavailable as exc:
+                result = PrintRequirements(status="unavailable", reason=exc.reason)
+            if result.reason in SOURCE_FAILURES:
+                self._unavailable[str(path)] = result
+                return result
+            if result.reason == "source_check_busy":
+                return result
             if result.source_identity != identity:
                 return PrintRequirements(status="unavailable", reason="source_changed", source_identity=identity)
             self._results[key] = result

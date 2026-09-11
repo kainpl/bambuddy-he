@@ -8,6 +8,7 @@ from backend.app.services.filament_policy import decode, queue_policy, source_sc
 from backend.app.services.filament_requirements import SourceIdentity
 from backend.app.services.filament_routing import RoutingDeferred, fingerprint, resolve_filament_routing
 from backend.app.services.printer_manager import printer_manager
+from backend.app.services.source_io import SourceUnavailable, source_probe
 
 
 @dataclass(frozen=True)
@@ -20,13 +21,8 @@ class DispatchRoutingGuard:
 
     def validate(self, snapshot, *, mapping, use_ams, plate_id):
         """Must run under the client's routing lock, without an await before publish."""
-        identity = self.requirements.source_identity
-        try:
-            unchanged = SourceIdentity.of(Path(identity.path)) == identity
-        except OSError:
-            unchanged = False
-        if not unchanged:
-            raise RoutingDeferred("source_changed", revision=revision_for(self.requirements, self.policy, snapshot))
+        # Source I/O is checked by final_guard before this synchronous handoff.
+        # Never stat a network mount while holding the MQTT telemetry lock.
         if not snapshot.connected or snapshot.marker != self.plan.snapshot_marker:
             raise RoutingDeferred("feed_state_changed", revision=revision_for(self.requirements, self.policy, snapshot))
         if mapping != self.plan.mapping or use_ams != self.plan.use_ams or plate_id != self.plan.resolved_plate_id:
@@ -53,6 +49,8 @@ async def preflight_item(db, item, printer_id, *, cache=None, prefer_lowest=None
     if path and path.suffix.lower() == ".gcode" and item.source_auto_item_id is None:
         return None
     req = await read_item_requirements(db, item, cache)
+    if req.status != "ok":
+        raise RoutingDeferred(req.reason or "source_unreadable")
     policy = queue_policy(item)
     saved = decode(item.filament_routing, {})
     if not isinstance(saved, dict):
@@ -107,10 +105,17 @@ async def preflight_item(db, item, printer_id, *, cache=None, prefer_lowest=None
     return DispatchRoutingGuard(req, policy, result.plan, exact_model, revision)
 
 
-def final_guard(guard, printer_id):
+async def final_guard(guard, printer_id):
     """Refresh after all preparatory awaits. A different complete plan needs a new attempt."""
     if guard is None:
         return None
+    identity = guard.requirements.source_identity
+    try:
+        current = await source_probe(("identity", identity.path), SourceIdentity.of, Path(identity.path))
+    except SourceUnavailable as exc:
+        raise RoutingDeferred(exc.reason) from exc
+    if current != identity:
+        raise RoutingDeferred("source_changed")
     snapshot = printer_manager.get_feed_snapshot(printer_id)
     revision = revision_for(guard.requirements, guard.policy, snapshot)
     result = resolve_filament_routing(guard.requirements, guard.policy, snapshot, exact_model=guard.exact_model)

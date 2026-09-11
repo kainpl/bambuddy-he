@@ -49,12 +49,13 @@ from backend.app.models.printer_queue import PrinterQueue
 from backend.app.models.settings import Settings
 from backend.app.services import queue_rebalance
 from backend.app.services.auto_queue_eligibility import busy_printer_ids, find_eligible_printer, offline_candidates_for
-from backend.app.services.filament_intake import read_item_requirements
+from backend.app.services.filament_intake import fail_auto_source, read_item_requirements
 from backend.app.services.filament_policy import auto_policy, serialize_policy
 from backend.app.services.filament_requirements import PrintRequirementsCache, SourceIdentity
 from backend.app.services.filament_routing import resolve_filament_routing
 from backend.app.services.printer_manager import printer_manager
 from backend.app.services.queue_rebalance import REBALANCE_SETTING_KEY
+from backend.app.services.source_io import SOURCE_FAILURES, SourceUnavailable, source_probe
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +143,11 @@ class AutoQueueScheduler:
                 )
                 printer, reason = eligible
                 if printer is None:
+                    source_reason = getattr(eligible.requirements, "reason", None)
+                    if source_reason in SOURCE_FAILURES:
+                        await fail_auto_source(db, item, source_reason)
+                        logger.warning("Auto item %s failed: %s", item.id, source_reason)
+                        continue
                     if not woke_one:
                         woke_one = await self._wake_offline_printer(db, item, busy_printers)
                     # The reason has always been computed and stored on the row;
@@ -165,6 +171,13 @@ class AutoQueueScheduler:
                         plan=eligible.plan,
                         requirements=eligible.requirements,
                     )
+                except SourceUnavailable as exc:
+                    # The nested assignment rolled back; reload its expired row
+                    # before recording the failure outside that savepoint.
+                    await db.refresh(item)
+                    if exc.reason in SOURCE_FAILURES:
+                        await fail_auto_source(db, item, exc.reason)
+                    continue
                 except Exception:
                     logger.exception("Failed to assign auto item %s to printer %s", item.id, printer.id)
                     continue
@@ -175,7 +188,9 @@ class AutoQueueScheduler:
                 if sjf:
                     await self._mark_jumped_peers(db, item)
 
-            announce = self._log_stall(items, placed, blocked, busy_printers)
+            announce = self._log_stall(
+                [item for item in items if item.status == "pending"], placed, blocked, busy_printers
+            )
 
             # Cross-model rebalancing (spec 2026-09-10), behind its setting and only
             # when this pass left something pending. It converts and creates ROUTER
@@ -414,6 +429,8 @@ class AutoQueueScheduler:
         async with db.begin_nested():
             policy = auto_policy(item)
             requirements = requirements or await read_item_requirements(db, item)
+            if requirements.reason in SOURCE_FAILURES:
+                raise SourceUnavailable(requirements.reason)
             if plan is None:
                 plan = resolve_filament_routing(
                     requirements, policy, printer_manager.get_feed_snapshot(printer.id), prefer_lowest=prefer_lowest
@@ -439,10 +456,12 @@ class AutoQueueScheduler:
             next_pos = (max_pos or 0) + 1
 
             # Revalidate the SAME plan after DB awaits and before claiming the row.
+            identity = requirements.source_identity
+            current_identity = await source_probe(("identity", identity.path), SourceIdentity.of, Path(identity.path))
             if (
                 printer_manager.get_feed_snapshot(printer.id).marker != plan.snapshot_marker
                 or policy.fingerprint != plan.policy_fingerprint
-                or requirements.source_identity != SourceIdentity.of(Path(requirements.source_identity.path))
+                or identity != current_identity
             ):
                 raise ValueError("Filament routing evidence changed before assignment")
             if printer_queue.status == "printing" or printer_queue.is_paused:
@@ -464,10 +483,10 @@ class AutoQueueScheduler:
             if not claimed.rowcount:
                 raise ValueError("Auto item is no longer pending")
 
-            if printer_manager.get_feed_snapshot(
-                printer.id
-            ).marker != plan.snapshot_marker or requirements.source_identity != SourceIdentity.of(
-                Path(requirements.source_identity.path)
+            current_identity = await source_probe(("identity", identity.path), SourceIdentity.of, Path(identity.path))
+            if (
+                printer_manager.get_feed_snapshot(printer.id).marker != plan.snapshot_marker
+                or identity != current_identity
             ):
                 raise ValueError("Filament routing evidence changed while claiming assignment")
 
