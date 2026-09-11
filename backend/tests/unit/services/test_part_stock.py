@@ -19,6 +19,7 @@ from backend.app.models.project import Project
 from backend.app.models.project_line import ProjectLine
 from backend.app.services import part_stock as part_stock_module
 from backend.app.services.part_stock import (
+    NOTE_DEFECTS_RECORDED,
     NOTE_FILED_UNDER_ORDER,
     NOTE_LINE_DELETED,
     NOTE_ORDER_CANCELLED,
@@ -27,6 +28,7 @@ from backend.app.services.part_stock import (
     NOTE_UNFILED_FROM_ORDER,
     REASONS,
     PartStockError,
+    adjust_unfiled_print,
     balances,
     credit_unfiled_print,
     delete_for_part,
@@ -1210,3 +1212,106 @@ async def test_movements_across_filters_by_product_part_and_reason(db_session):
     assert [r.delta for r, *_ in await movements_across(db_session, part_id=body.id)] == [4]
     assert [r.delta for r, *_ in await movements_across(db_session, reason="manual")] == [1]
     assert await movements_across(db_session, product_id=999) == []
+
+
+# ---------- Spec 2026-09-11 §3.1: defects recorded after the credit ----------
+
+
+async def _set_defective(db_session, archive, name_key: str, defective: int) -> None:
+    """The row's absolute scrap, the way ``record_defects`` writes it."""
+    row = (
+        await db_session.execute(
+            select(PrintArchivePart).where(
+                PrintArchivePart.archive_id == archive.id, PrintArchivePart.name_key == name_key
+            )
+        )
+    ).scalar_one()
+    row.defective = defective
+    await db_session.flush()
+
+
+async def test_the_note_token_for_late_defects_is_in_the_closed_list():
+    assert NOTE_DEFECTS_RECORDED == "defects_recorded"
+    assert NOTE_DEFECTS_RECORDED in NOTE_TOKENS
+
+
+async def test_late_defects_take_the_difference_off_the_shelf(db_session, shelf):
+    """Credited 3 lids (4 − 1) and 4 bases. The operator later marks one more lid
+    bad: the shelf loses exactly one lid, the bases stay, and the correction is a
+    ``manual`` movement carrying the archive's id and the defects note."""
+    product, parts, archive = shelf
+    await credit_unfiled_print(db_session, archive)
+    await _set_defective(db_session, archive, "lid", 2)
+
+    result = await adjust_unfiled_print(db_session, archive, note=NOTE_DEFECTS_RECORDED)
+
+    assert [(m.product_part_id, m.delta, m.reason, m.note, m.archive_id) for m in result.written] == [
+        (parts["lid"].id, -1, "manual", NOTE_DEFECTS_RECORDED, archive.id)
+    ]
+    assert result.refused == []
+    assert await balances(db_session, product.id) == {parts["lid"].id: 2, parts["base"].id: 4}
+
+
+async def test_lowering_defects_puts_the_parts_back(db_session, shelf):
+    product, parts, archive = shelf
+    await credit_unfiled_print(db_session, archive)
+    await _set_defective(db_session, archive, "lid", 0)
+
+    result = await adjust_unfiled_print(db_session, archive, note=NOTE_DEFECTS_RECORDED)
+
+    assert [(m.product_part_id, m.delta) for m in result.written] == [(parts["lid"].id, 1)]
+    assert await balances(db_session, product.id) == {parts["lid"].id: 4, parts["base"].id: 4}
+
+
+async def test_nothing_changes_when_the_rows_already_match_the_shelf(db_session, shelf):
+    product, parts, archive = shelf
+    await credit_unfiled_print(db_session, archive)
+
+    result = await adjust_unfiled_print(db_session, archive, note=NOTE_DEFECTS_RECORDED)
+
+    assert result.written == [] and result.refused == []
+
+
+async def test_a_print_never_credited_is_not_credited_by_a_correction(db_session, shelf):
+    """No credit standing → nothing to correct. The correction is not a second door onto the shelf."""
+    product, parts, archive = shelf
+    await _set_defective(db_session, archive, "lid", 2)
+
+    result = await adjust_unfiled_print(db_session, archive, note=NOTE_DEFECTS_RECORDED)
+
+    assert result.written == [] and await balances(db_session, product.id) == {parts["lid"].id: 0, parts["base"].id: 0}
+
+
+async def test_a_print_filed_under_an_order_is_left_alone(db_session, shelf):
+    product, parts, archive = shelf
+    await credit_unfiled_print(db_session, archive)
+    archive.project_id = 1
+    await _set_defective(db_session, archive, "lid", 2)
+
+    result = await adjust_unfiled_print(db_session, archive, note=NOTE_DEFECTS_RECORDED)
+
+    assert result.written == []
+
+
+async def test_spent_stock_is_refused_by_part_and_the_rest_is_still_corrected(db_session, shelf):
+    """The lids went out of the door already (balance 0); a base did not. The lid
+    correction is refused and NAMED, the base correction is written."""
+    product, parts, archive = shelf
+    await credit_unfiled_print(db_session, archive)
+    await move(db_session, part_id=parts["lid"].id, delta=-3, reason="manual", note="sold")
+    await _set_defective(db_session, archive, "lid", 2)
+    await _set_defective(db_session, archive, "base", 1)
+
+    result = await adjust_unfiled_print(db_session, archive, note=NOTE_DEFECTS_RECORDED)
+
+    assert result.refused == [parts["lid"].id]
+    assert [(m.product_part_id, m.delta) for m in result.written] == [(parts["base"].id, -1)]
+    assert await balances(db_session, product.id) == {parts["lid"].id: 0, parts["base"].id: 3}
+
+
+async def test_the_credit_and_the_correction_read_one_wanted_map(db_session, shelf):
+    """``_wanted_by_part`` is what the credit writes — extracted, not copied."""
+    product, parts, archive = shelf
+    wanted, _parts = await part_stock_module._wanted_by_part(db_session, archive)
+    written = await credit_unfiled_print(db_session, archive)
+    assert wanted == {m.product_part_id: m.delta for m in written}

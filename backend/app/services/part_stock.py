@@ -55,7 +55,7 @@ nothing can name any more.
 import logging
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -93,6 +93,9 @@ NOTE_RESERVATION_REWRITTEN = "reservation_rewritten"
 NOTE_FILED_UNDER_ORDER = "filed_under_order"
 NOTE_UNFILED_FROM_ORDER = "unfiled_from_order"
 NOTE_COUNTED_BY_OPERATOR = "counted_by_operator"
+# Defects recorded after the print was credited: the shelf is brought back to
+# ``printed − defective`` by a ``manual`` movement carrying the archive's id.
+NOTE_DEFECTS_RECORDED = "defects_recorded"
 
 NOTE_TOKENS = (
     NOTE_ORDER_CANCELLED,
@@ -102,6 +105,7 @@ NOTE_TOKENS = (
     NOTE_FILED_UNDER_ORDER,
     NOTE_UNFILED_FROM_ORDER,
     NOTE_COUNTED_BY_OPERATOR,
+    NOTE_DEFECTS_RECORDED,
 )
 
 #: The one archive status a print may be credited from. Spelled here rather
@@ -888,6 +892,76 @@ async def _net_by_part(db: AsyncSession, archive_id: int) -> dict[int, int]:
     return {part_id: int(net or 0) for part_id, net in rows}
 
 
+async def _wanted_by_part(db: AsyncSession, archive: PrintArchive) -> tuple[dict[int, int], list[ProductPart]]:
+    """``product_part_id → printed − defective`` for this archive's rows — what the shelf should hold for it.
+
+    The mapping is order attribution's own, borrowed rather than restated:
+    :func:`order_metrics.products_for_print` for plate → product,
+    ``product_composition.part_index`` for object name → part,
+    :func:`order_metrics.row_quantity` for what a finished row handed over. A
+    row no product counts is skipped — the same silence a ``qty_per_unit = 0``
+    part gets from attribution, because it is the same statement: the product
+    does not measure this object.
+
+    One function, two writers: the credit at completion and the correction
+    after defects were recorded late both read it, so the two cannot disagree
+    about what a plate put on the shelf. Returns the map and the product parts
+    it resolved through, which the callers lock before deciding.
+    """
+    rows = (
+        (
+            await db.execute(
+                select(PrintArchivePart).where(PrintArchivePart.archive_id == archive.id).order_by(PrintArchivePart.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not rows:
+        return {}, []
+
+    plates = (
+        (await db.execute(select(ProductPlate).where(ProductPlate.library_file_id == archive.library_file_id)))
+        .scalars()
+        .all()
+    )
+    plate_product, whole_file_product = index_plates(plates)
+    product_ids = products_for_print(
+        plate_product,
+        whole_file_product,
+        library_file_id=archive.library_file_id,
+        plate_index=archive.plate_index,
+    )
+    if not product_ids:
+        logger.debug("part_stock: archive %s prints a plate no product claims; nothing to credit", archive.id)
+        return {}, []
+
+    parts = (await db.execute(select(ProductPart).where(ProductPart.product_id.in_(product_ids)))).scalars().all()
+    by_product: dict[int, list[ProductPart]] = defaultdict(list)
+    for part in parts:
+        by_product[part.product_id].append(part)
+    # ``product_ids`` comes back sorted from ``index_plates``, so a shared file
+    # whose object key sits in two products always credits the same one of them
+    # — the spec's "a shared file's rows go to the product that owns each part
+    # key", made deterministic. Crediting both would double physical parts that
+    # only exist once.
+    indexes = [part_index(by_product.get(product_id, [])) for product_id in product_ids]
+
+    wanted: dict[int, int] = defaultdict(int)
+    for row in rows:
+        owner: ProductPart | None = None
+        for index in indexes:
+            candidate = index.get(row.name_key)
+            if candidate is not None and is_counted(candidate):
+                owner = candidate
+                break
+        if owner is None:
+            logger.debug("part_stock: archive %s object %r resolves to no counted part", archive.id, row.name_key)
+            continue
+        wanted[owner.id] += row_quantity(row, archive.status)
+    return dict(wanted), list(parts)
+
+
 async def credit_unfiled_print(
     db: AsyncSession, archive: PrintArchive, *, created_by: int | None = None, note: str | None = None
 ) -> list[ProductPartStockMovement]:
@@ -935,57 +1009,7 @@ async def credit_unfiled_print(
     if archive.project_id is not None or archive.status != _COMPLETED or archive.library_file_id is None:
         return []
 
-    rows = (
-        (
-            await db.execute(
-                select(PrintArchivePart).where(PrintArchivePart.archive_id == archive.id).order_by(PrintArchivePart.id)
-            )
-        )
-        .scalars()
-        .all()
-    )
-    if not rows:
-        return []
-
-    plates = (
-        (await db.execute(select(ProductPlate).where(ProductPlate.library_file_id == archive.library_file_id)))
-        .scalars()
-        .all()
-    )
-    plate_product, whole_file_product = index_plates(plates)
-    product_ids = products_for_print(
-        plate_product,
-        whole_file_product,
-        library_file_id=archive.library_file_id,
-        plate_index=archive.plate_index,
-    )
-    if not product_ids:
-        logger.debug("part_stock: archive %s prints a plate no product claims; nothing to credit", archive.id)
-        return []
-
-    parts = (await db.execute(select(ProductPart).where(ProductPart.product_id.in_(product_ids)))).scalars().all()
-    by_product: dict[int, list[ProductPart]] = defaultdict(list)
-    for part in parts:
-        by_product[part.product_id].append(part)
-    # ``product_ids`` comes back sorted from ``index_plates``, so a shared file
-    # whose object key sits in two products always credits the same one of them
-    # — the spec's "a shared file's rows go to the product that owns each part
-    # key", made deterministic. Crediting both would double physical parts that
-    # only exist once.
-    indexes = [part_index(by_product.get(product_id, [])) for product_id in product_ids]
-
-    wanted: dict[int, int] = defaultdict(int)
-    for row in rows:
-        owner: ProductPart | None = None
-        for index in indexes:
-            candidate = index.get(row.name_key)
-            if candidate is not None and is_counted(candidate):
-                owner = candidate
-                break
-        if owner is None:
-            logger.debug("part_stock: archive %s object %r resolves to no counted part", archive.id, row.name_key)
-            continue
-        wanted[owner.id] += row_quantity(row, archive.status)
+    wanted, parts = await _wanted_by_part(db, archive)
     if not wanted:
         return []
 
@@ -1118,6 +1142,85 @@ async def reverse_unfiled_print(db: AsyncSession, archive: PrintArchive, note: s
             f"print put on the shelf; {len(written)} of {len(written) + len(refused)} reversal(s) were written"
         )
     return written
+
+
+@dataclass
+class AdjustResult:
+    """What a late-defects correction did: the movements it wrote, and the
+    product part ids whose correction the ledger refused (their stock was
+    already spent — the operator corrects those by hand)."""
+
+    written: list[ProductPartStockMovement] = field(default_factory=list)
+    refused: list[int] = field(default_factory=list)
+
+
+async def adjust_unfiled_print(
+    db: AsyncSession, archive: PrintArchive, *, note: str, created_by: int | None = None
+) -> AdjustResult:
+    """Bring what an archive holds on the shelf back to ``printed − defective`` (spec 2026-09-11 §3.1).
+
+    The credit at completion read the rows as they were then; defects recorded
+    the next morning left the shelf holding parts that are in the bin. For every
+    product part this archive is STANDING on (``_net_by_part > 0``) the
+    difference ``wanted − standing`` is written as a ``manual`` movement with
+    the archive's id, in either direction — one more bad lid takes one lid
+    off, a correction downwards puts it back.
+
+    Silent (an empty result) for a print this does not apply to: filed under an
+    order (its figures count the defects live), not finished, no library file —
+    the same three conditions the credit checks. A part with nothing standing
+    is never touched: it was never credited (a pre-pass-8 print, or one whose
+    credit was reversed by filing), and inventing a credit here would be a
+    second door onto the shelf.
+
+    **Never raises for a refusal.** A part whose stock was already spent is
+    returned in ``refused`` after every other part was corrected — the callers
+    keep the defects (the archive is the print history and must say what came
+    out bad) and log the names; the shelf is corrected by hand. Flushes through
+    :func:`move`; the caller commits.
+    """
+    result = AdjustResult()
+    if archive.project_id is not None or archive.status != _COMPLETED or archive.library_file_id is None:
+        return result
+    wanted, _parts = await _wanted_by_part(db, archive)
+    credited = {part_id: net for part_id, net in (await _net_by_part(db, archive.id)).items() if net > 0}
+    if not credited:
+        return result
+    parts = {
+        part.id: part for part in (await db.execute(select(ProductPart).where(ProductPart.id.in_(credited)))).scalars()
+    }
+    await lock_parts(db, list(parts.values()))
+    # Re-read under the lock: the decision is "standing vs wanted", and a
+    # concurrent reversal between the first read and the lock would make it wrong.
+    standing = await _net_by_part(db, archive.id)
+    for part_id, net in standing.items():
+        if net <= 0:
+            continue
+        part = parts.get(part_id)
+        if part is None or not is_counted(part):
+            logger.info(
+                "part_stock: part %s no longer holds stock; archive %s not corrected on it", part_id, archive.id
+            )
+            continue
+        delta = wanted.get(part_id, 0) - net
+        if delta == 0:
+            continue
+        try:
+            movement = await move(
+                db,
+                part_id=part_id,
+                delta=delta,
+                reason="manual",
+                archive_id=archive.id,
+                note=note,
+                created_by=created_by,
+            )
+        except PartStockError:
+            result.refused.append(part_id)
+            continue
+        if movement is not None:
+            result.written.append(movement)
+    return result
 
 
 async def repoint(db: AsyncSession, *, from_part_id: int, to_part_id: int) -> int:
