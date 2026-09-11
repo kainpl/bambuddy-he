@@ -1,13 +1,15 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Clock, Calendar, ChevronRight, Loader2, CircleCheck, RotateCcw } from 'lucide-react';
+import { Clock, Calendar, ChevronRight, Loader2, CircleCheck, RotateCcw, PackageX } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { api } from '../api/client';
+import type { DefectsWriteBody } from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { formatRelativeTime } from '../utils/date';
-import { invalidateQueueViews } from '../utils/queryInvalidation';
+import { invalidateQueueViews, invalidateOrderViews } from '../utils/queryInvalidation';
+import { DefectsFields } from './DefectsFields';
 
 interface PrinterQueueWidgetProps {
   printerId: number;
@@ -31,22 +33,56 @@ export function PrinterQueueWidget({ printerId, printerState, awaitingPlateClear
     refetchInterval: 30000,
   });
 
+  // The print the gate is about, with its part rows — fetched only while the
+  // block is on screen, and the counters live here so both answers can carry them.
+  const [defectsOpen, setDefectsOpen] = useState(false);
+  const [defectValues, setDefectValues] = useState<Record<number, number>>({});
+  const [defectFlat, setDefectFlat] = useState(0);
+  const [defectsTouched, setDefectsTouched] = useState(false);
+  const gateArmed = requirePlateClear && (printerState === 'FINISH' || printerState === 'FAILED') && !!awaitingPlateClear;
+  const { data: waiting } = useQuery({
+    queryKey: ['waiting-print', printerId],
+    queryFn: () => api.getWaitingPrint(printerId),
+    enabled: gateArmed,
+    retry: false,
+  });
+  useEffect(() => {
+    if (waiting && !defectsTouched) {
+      setDefectValues(Object.fromEntries(waiting.parts.map((p) => [p.id, p.defective])));
+      setDefectFlat(waiting.defective_count);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [waiting]);
+  const defectsBody = (): { defects: DefectsWriteBody } | undefined => {
+    if (!defectsTouched || !waiting) return undefined;
+    return waiting.parts.length > 0
+      ? { defects: { parts: waiting.parts.map((p) => ({ id: p.id, defective: defectValues[p.id] ?? 0 })) } }
+      : { defects: { defective_count: defectFlat } };
+  };
+  const afterAnswer = () => {
+    invalidateQueueViews(queryClient);
+    queryClient.invalidateQueries({ queryKey: ['printerStatus', printerId] });
+    queryClient.invalidateQueries({ queryKey: ['waiting-print', printerId] });
+    // The shelf may have moved with the defects.
+    invalidateOrderViews(queryClient);
+    setDefectsTouched(false);
+    setDefectsOpen(false);
+  };
+
   // The other answer to a full plate — see services/plate_hold on the backend.
   const repeatPrintMutation = useMutation({
-    mutationFn: () => api.repeatPrint(printerId),
+    mutationFn: () => api.repeatPrint(printerId, defectsBody()),
     onSuccess: () => {
-      invalidateQueueViews(queryClient);
-      queryClient.invalidateQueries({ queryKey: ['printerStatus', printerId] });
+      afterAnswer();
       showToast(t('queue.repeatPrintSuccess'), 'success');
     },
     onError: (error: Error) => showToast(error.message, 'error'),
   });
 
   const clearPlateMutation = useMutation({
-    mutationFn: () => api.clearPlate(printerId),
+    mutationFn: () => api.clearPlate(printerId, defectsBody()),
     onSuccess: () => {
-      invalidateQueueViews(queryClient);
-      queryClient.invalidateQueries({ queryKey: ['printerStatus', printerId] });
+      afterAnswer();
       showToast(t('queue.clearPlateSuccess'), 'success');
     },
     onError: (err: Error) => {
@@ -78,6 +114,13 @@ export function PrinterQueueWidget({ printerId, printerState, awaitingPlateClear
 
   if (needsClearPlate) {
     const displayItem = nextAutoItem || nextItem;
+    // The touched total wins over the server's count the moment the operator
+    // types — same semantics as the toggle label the brief specifies.
+    const shownDefects = waiting
+      ? defectsTouched
+        ? Object.values(defectValues).reduce((a, n) => a + n, 0) || defectFlat
+        : waiting.defective_count
+      : 0;
     return (
       <div className="mb-3 p-3 bg-bambu-dark rounded-lg border border-yellow-400/30">
         <div className="flex items-center gap-3 mb-2">
@@ -94,6 +137,39 @@ export function PrinterQueueWidget({ printerId, printerState, awaitingPlateClear
             </span>
           )}
         </div>
+        {waiting && waiting.status === 'completed' && waiting.quantity > 0 && (
+          <div className="mb-2">
+            <button
+              type="button"
+              onClick={() => setDefectsOpen((open) => !open)}
+              data-testid="plate-defects-toggle"
+              className="text-xs text-bambu-gray hover:text-white inline-flex items-center gap-1"
+            >
+              <PackageX className="w-3.5 h-3.5" />
+              {shownDefects > 0
+                ? t('queue.defects.toggleWithCount', { count: shownDefects })
+                : t('queue.defects.toggle')}
+            </button>
+            {defectsOpen && (
+              <div className="mt-2" data-testid="plate-defects-fields">
+                <DefectsFields
+                  parts={waiting.parts}
+                  values={defectValues}
+                  onChange={(id, next) => {
+                    setDefectValues((prev) => ({ ...prev, [id]: next }));
+                    setDefectsTouched(true);
+                  }}
+                  quantity={waiting.quantity}
+                  flat={defectFlat}
+                  onFlatChange={(next) => {
+                    setDefectFlat(next);
+                    setDefectsTouched(true);
+                  }}
+                />
+              </div>
+            )}
+          </div>
+        )}
         {clearPlateMutation.isSuccess ? (
           <div className="w-full py-2 px-3 rounded-lg bg-bambu-green/10 border border-bambu-green/20 text-bambu-green text-sm flex items-center justify-center gap-2">
             <CircleCheck className="w-4 h-4" />
