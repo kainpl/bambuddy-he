@@ -98,10 +98,18 @@ operations.
 6. The `v*` tag triggers `docker-publish-tag.yml` (GHCR + Docker Hub,
    `linux/amd64` + `linux/arm64`), `windows-installer.yml` (attaches the
    `.exe` to the release) and `publish-code-graph.yml` (attaches the code graph,
-   ~3 MB gzipped, for anyone using an LLM assistant — it is a release asset
-   precisely so it never enters git history). Both call `require-green-ci.yml` first, whose rule is
+   ~2 MB gzipped, for anyone using an LLM assistant — it is a release asset
+   precisely so it never enters git history). The first two call
+   `require-green-ci.yml` first, whose rule is
    *"no CI run for this SHA failed"*, not *"some run succeeded"* — the
-   duplicate-skipped run on `main` would satisfy the weaker rule.
+   duplicate-skipped run on `main` would satisfy the weaker rule. The code graph
+   deliberately does not: it is a *description of* a commit, accurate even when
+   that commit's tests fail. Create the release in step 5 as written, right
+   behind the tag push: all three workflows then only attach to it. If you ever
+   push a tag and leave the release for later, the graph job — the first to
+   reach an attach step — creates it instead, marking a `bN` tag pre-release on
+   its own; your `gh release create` then fails with *already exists*, so add
+   the notes with `gh release edit`.
 
 7. **Once the newer release of that line is out**, retire the betas it
    supersedes: `./scripts/cleanup-betas.sh X.Y.Z` (dry-run; `--apply` to do it).
