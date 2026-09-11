@@ -24,6 +24,7 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.app.models.archive import PrintArchive
 from backend.app.models.print_queue import PrintQueueItem
 from backend.app.models.printer import Printer
 from backend.app.models.printer_queue import PrinterQueue
@@ -259,3 +260,15 @@ async def waiting_row(db: AsyncSession, printer_id: int) -> PrintQueueItem | Non
         .scalars()
         .first()
     )
+
+
+async def waiting_archive(db: AsyncSession, printer_id: int) -> PrintArchive | None:
+    """The print the waiting row is about — what both answers may record defects on.
+
+    Resolved BEFORE the answer, because clearing deletes the row and repeating
+    re-arms it; afterwards there is nothing left to ask.
+    """
+    row = await waiting_row(db, printer_id)
+    if row is None or row.archive_id is None:
+        return None
+    return await db.get(PrintArchive, row.archive_id)

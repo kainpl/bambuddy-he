@@ -21,14 +21,17 @@ from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
 from backend.app.core.tasks import spawn_background_task
 from backend.app.models.ams_label import AmsLabel
+from backend.app.models.archive_part import PrintArchivePart
 from backend.app.models.printer import Printer
 from backend.app.models.printer_location import PrinterLocation
 from backend.app.models.printer_tag import PrinterTag
 from backend.app.models.user import User
+from backend.app.schemas.archive import ArchivePartRow
 from backend.app.schemas.printer import (
     AmsLabelBody,
     AMSTray,
     AMSUnit,
+    DefectsWriteIn,
     DiagnosticRequest,
     FilaSwitchResponse,
     HmsActionBody,
@@ -37,6 +40,7 @@ from backend.app.schemas.printer import (
     MQTTRecordingRequest,
     NozzleInfoResponse,
     NozzleRackSlot,
+    PlateAnswerIn,
     PrinterCreate,
     PrinterDiagnosticResult,
     PrinterResponse,
@@ -44,8 +48,10 @@ from backend.app.schemas.printer import (
     PrinterStatus,
     PrinterUpdate,
     PrintOptionsResponse,
+    WaitingPrintOut,
 )
 from backend.app.schemas.timelapse import TimelapseStorage
+from backend.app.services.archive_defects import DefectsWrite, record_defects
 from backend.app.services.bambu_ftp import (
     clear_sdcard_async,
     get_storage_info_async,
@@ -62,7 +68,7 @@ from backend.app.services.bambu_mqtt import (
 )
 from backend.app.services.cloud_link.service import cloud_link_service
 from backend.app.services.mqtt_recorder import mqtt_recorder
-from backend.app.services.plate_hold import has_waiting_row as _has_waiting_row
+from backend.app.services.plate_hold import has_waiting_row as _has_waiting_row, waiting_archive
 from backend.app.services.printer_diagnostic import run_connection_diagnostic
 from backend.app.services.printer_files.factory import transport_for
 from backend.app.services.printer_location_service import load_tree, subtree_ids
@@ -3166,10 +3172,66 @@ async def stop_print(
     return {"success": True, "message": "Print stop command sent"}
 
 
+async def _record_waiting_defects(
+    db: AsyncSession, printer_id: int, defects: DefectsWriteIn, actor_id: int | None
+) -> None:
+    """Write the answer's defects onto the ONE print the gate is about, or 409.
+
+    Resolved before the answer itself — clearing deletes the row and repeating
+    re-arms it — and written under ``printers:clear_plate``: the operator at the
+    machine need not hold ``archives:update_all`` for a print somebody else
+    started, and the scope is exactly the print on the plate.
+    """
+    archive = await waiting_archive(db, printer_id)
+    if archive is None:
+        raise HTTPException(409, "No finished print is waiting on this printer")
+    await record_defects(
+        db,
+        archive,
+        DefectsWrite(parts=tuple((p.id, p.defective) for p in defects.parts or ()), flat=defects.defective_count),
+        actor_id=actor_id,
+    )
+    await db.commit()
+
+
+@router.get("/{printer_id}/waiting-print", response_model=WaitingPrintOut)
+async def get_waiting_print(
+    printer_id: int,
+    _=RequirePermission(Permission.PRINTERS_READ),
+    db: AsyncSession = Depends(get_db),
+):
+    """The finished print waiting for Clear plate / Repeat, with its part rows —
+    what the card's defect counters are about. 404 when nothing waits."""
+    archive = await waiting_archive(db, printer_id)
+    if archive is None:
+        raise HTTPException(404, "No finished print is waiting on this printer")
+    rows = (
+        (
+            await db.execute(
+                select(PrintArchivePart).where(PrintArchivePart.archive_id == archive.id).order_by(PrintArchivePart.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return WaitingPrintOut(
+        archive_id=archive.id,
+        print_name=archive.print_name or archive.filename,
+        status=archive.status,
+        quantity=int(archive.quantity or 0),
+        defective_count=int(archive.defective_count or 0),
+        parts=[
+            ArchivePartRow(id=r.id, name=r.name, name_key=r.name_key, quantity=r.quantity, defective=r.defective)
+            for r in rows
+        ],
+    )
+
+
 @router.post("/{printer_id}/clear-plate")
 async def clear_plate(
     printer_id: int,
-    _=RequirePermission(Permission.PRINTERS_CLEAR_PLATE),
+    data: PlateAnswerIn | None = None,
+    current_user: User | None = RequirePermission(Permission.PRINTERS_CLEAR_PLATE),
     db: AsyncSession = Depends(get_db),
 ):
     """Acknowledge that the build plate has been cleared after a finished/failed print.
@@ -3212,6 +3274,11 @@ async def clear_plate(
             f"Printer is not in FINISH, FAILED, or IDLE state (current: {state.state if state else 'unknown'})",
         )
 
+    # The defects travel with the answer — written before the row is answered
+    # away (spec 2026-09-11 §5). A body-less call is the old behaviour.
+    if data is not None and data.defects is not None:
+        await _record_waiting_defects(db, printer_id, data.defects, current_user.id if current_user else None)
+
     printer_manager.set_awaiting_plate_clear(printer_id, False)
 
     # The finished row was held for this answer — see ``services/plate_hold``.
@@ -3225,7 +3292,8 @@ async def clear_plate(
 @router.post("/{printer_id}/repeat-print")
 async def repeat_print(
     printer_id: int,
-    _=RequirePermission(Permission.PRINTERS_CLEAR_PLATE),
+    data: PlateAnswerIn | None = None,
+    current_user: User | None = RequirePermission(Permission.PRINTERS_CLEAR_PLATE),
     db: AsyncSession = Depends(get_db),
 ):
     """Print the job that just finished again — the card's other answer to a full plate.
@@ -3247,6 +3315,11 @@ async def repeat_print(
     result = await db.execute(select(Printer).where(Printer.id == printer_id))
     if result.scalar_one_or_none() is None:
         raise HTTPException(404, "Printer not found")
+
+    # The defects travel with the answer — written before the row is answered
+    # away (spec 2026-09-11 §5). A body-less call is the old behaviour.
+    if data is not None and data.defects is not None:
+        await _record_waiting_defects(db, printer_id, data.defects, current_user.id if current_user else None)
 
     try:
         row = await answer_by_repeating(db, printer_id)

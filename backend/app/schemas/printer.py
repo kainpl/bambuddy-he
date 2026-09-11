@@ -2,6 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from backend.app.schemas.archive import ArchivePartDefective, ArchivePartRow
 from backend.app.schemas.printer_location import PrinterLocationOut, reject_legacy_key
 from backend.app.schemas.printer_tag import PrinterTagOut
 
@@ -588,3 +589,26 @@ class MQTTRecordingRequest(BaseModel):
     """
 
     enabled: bool
+
+
+class DefectsWriteIn(BaseModel):
+    """What came out bad on the print that is waiting on the plate: per part when
+    it has part rows, else one flat count. Absolute, clamped server-side."""
+
+    parts: list[ArchivePartDefective] | None = None
+    defective_count: int | None = Field(default=None, ge=0)
+
+
+class PlateAnswerIn(BaseModel):
+    """Optional body of Clear plate / Repeat: the defects travel with the answer."""
+
+    defects: DefectsWriteIn | None = None
+
+
+class WaitingPrintOut(BaseModel):
+    archive_id: int
+    print_name: str | None
+    status: str
+    quantity: int
+    defective_count: int
+    parts: list[ArchivePartRow] = []
