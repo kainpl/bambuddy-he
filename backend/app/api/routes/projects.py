@@ -82,6 +82,7 @@ from backend.app.schemas.project import (
     TimelineEvent,
 )
 from backend.app.services import (
+    archive_parts,
     farm_forecast,
     filament_needs,
     order_from_files,
@@ -981,18 +982,12 @@ async def _order_print(db: AsyncSession, project_id: int, archive_id: int) -> Pr
     return archive
 
 
-def _print_defects_out(
-    archive: PrintArchive, rows: list[PrintArchivePart], *, refused: int = 0
-) -> OrderPrintDefectsOut:
+def _print_defects_out(archive: PrintArchive, rows: list[PrintArchivePart]) -> OrderPrintDefectsOut:
     return OrderPrintDefectsOut(
         archive_id=archive.id,
         quantity=int(archive.quantity or 0),
         defective_count=int(archive.defective_count or 0),
-        parts=[
-            ArchivePartRow(id=r.id, name=r.name, name_key=r.name_key, quantity=r.quantity, defective=r.defective)
-            for r in rows
-        ],
-        ledger_refused_parts=refused,
+        parts=[ArchivePartRow.from_row(r) for r in rows],
     )
 
 
@@ -1010,16 +1005,7 @@ async def get_order_print_parts(
     from here rather than from ``GET /archives/{id}``.
     """
     archive = await _order_print(db, project_id, archive_id)
-    rows = list(
-        (
-            await db.execute(
-                select(PrintArchivePart).where(PrintArchivePart.archive_id == archive.id).order_by(PrintArchivePart.id)
-            )
-        )
-        .scalars()
-        .all()
-    )
-    return _print_defects_out(archive, rows)
+    return _print_defects_out(archive, await archive_parts.load_rows(db, archive.id))
 
 
 @router.post("/{project_id}/archives/{archive_id}/defects", response_model=OrderPrintDefectsOut)
@@ -1045,7 +1031,12 @@ async def record_order_print_defects(
         DefectsWrite(parts=tuple((p.id, p.defective) for p in data.parts or ()), flat=data.defective_count),
         actor_id=current_user.id if current_user else None,
     )
-    return _print_defects_out(archive, result.parts, refused=len(result.ledger_refused))
+    # No ledger-refusal report here, and none is possible: a print reachable
+    # through this route is FILED under an order (``_order_print`` requires
+    # ``project_id == project_id``), and ``adjust_unfiled_print`` returns an
+    # empty result on exactly that condition. The refusal is reported where it
+    # can happen — the two plate answers and the Telegram prompt.
+    return _print_defects_out(archive, result.parts)
 
 
 @router.post("/{project_id}/add-queue")

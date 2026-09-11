@@ -204,6 +204,43 @@ async def test_has_waiting_row_is_the_cards_question(db_session, printer_factory
     assert await has_waiting_row(db_session, printer.id) is True
 
 
+async def test_a_trashed_archive_is_not_a_waiting_print(db_session, printer_factory):
+    """A queue row whose archive went to the trash has nothing to be asked about.
+
+    Every other reader of a print's defects excludes ``deleted_at`` — the order
+    route through ``PrintArchive.active()``, Telegram's own loader — and without
+    the same check here ``GET /waiting-print`` answered 200 for a trashed print
+    and both plate answers accepted a defect write onto it.
+    """
+    from datetime import datetime, timezone
+
+    from backend.app.models.archive import PrintArchive
+    from backend.app.services.plate_hold import waiting_archive
+
+    printer, queue = await _queue(db_session, printer_factory, require_plate_clear=True)
+    archive = PrintArchive(
+        printer_id=printer.id,
+        filename="gone.3mf",
+        print_name="Gone",
+        file_path="x/gone.3mf",
+        file_size=1,
+        status="completed",
+    )
+    db_session.add(archive)
+    await db_session.flush()
+    db_session.add(PrintQueueItem(queue_id=queue.id, status="completed", position=0, archive_id=archive.id))
+    await db_session.commit()
+
+    assert await waiting_archive(db_session, printer.id) is not None
+
+    archive.deleted_at = datetime.now(timezone.utc)
+    await db_session.commit()
+
+    assert await waiting_archive(db_session, printer.id) is None
+    # The ROW is still waiting — trashing an archive does not answer the plate.
+    assert await waiting_row(db_session, printer.id) is not None
+
+
 def test_every_place_that_releases_the_gate_answers_the_row():
     """⚠️ A structural guard, because the failure is invisible.
 

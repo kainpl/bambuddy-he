@@ -521,13 +521,16 @@ class OrderPrintDefectsIn(BaseModel):
 
 
 class OrderPrintDefectsOut(BaseModel):
+    """⚠️ No ``ledger_refused_parts`` here, deliberately. A print this route can
+    reach is FILED under an order, and ``part_stock.adjust_unfiled_print``
+    returns an empty result on exactly that condition — so the field was
+    structurally always 0 and the toast behind it was dead code. The refusal is
+    reported where it can happen: the two plate answers and Telegram's prompt."""
+
     archive_id: int
     quantity: int
     defective_count: int
     parts: list[ArchivePartRow] = []
-    # How many product parts the shelf correction refused (stock already spent).
-    # 0 for a print filed under an order — its figures count the defects live.
-    ledger_refused_parts: int = 0
 
 
 class BankSurplusResponse(BaseModel):

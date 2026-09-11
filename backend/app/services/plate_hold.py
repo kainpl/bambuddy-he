@@ -267,8 +267,17 @@ async def waiting_archive(db: AsyncSession, printer_id: int) -> PrintArchive | N
 
     Resolved BEFORE the answer, because clearing deletes the row and repeating
     re-arms it; afterwards there is nothing left to ask.
+
+    A trashed archive is no archive: every other reader of a print's defects
+    excludes ``deleted_at`` (``PrintArchive.active()`` on the order route,
+    Telegram's own loader), and without the same check here a queue row whose
+    archive went to the trash still answered ``GET /waiting-print`` with 200 and
+    still accepted a defect write.
     """
     row = await waiting_row(db, printer_id)
     if row is None or row.archive_id is None:
         return None
-    return await db.get(PrintArchive, row.archive_id)
+    archive = await db.get(PrintArchive, row.archive_id)
+    if archive is None or archive.deleted_at is not None:
+        return None
+    return archive

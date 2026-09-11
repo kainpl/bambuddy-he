@@ -66,7 +66,12 @@ async def test_parts_are_read_and_written_under_the_order(committing_client, db_
     )
     assert wrote.status_code == 200, wrote.text
     body = wrote.json()
-    assert body["defective_count"] == 3 and body["ledger_refused_parts"] == 0
+    assert body["defective_count"] == 3
+    # ⚠️ No ``ledger_refused_parts`` on this route's shape, by design: a print it
+    # can reach is FILED under an order, and the shelf correction is a no-op for
+    # those — the field was structurally always 0. The refusal is reported on the
+    # plate answers and in Telegram, where an order-less print is graded.
+    assert "ledger_refused_parts" not in body
     assert {p["name_key"]: p["defective"] for p in body["parts"]} == {"lid": 2, "base": 1}
     # Read the id BEFORE expiring: an expired attribute reloads itself, and a
     # lazy load from plain async code is a MissingGreenlet, not a query.
