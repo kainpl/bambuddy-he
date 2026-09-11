@@ -127,7 +127,14 @@ async def _allowed(
     return True
 
 
-async def _write_and_continue(callback: CallbackQuery, lang: str, archive_id: int, row_id: int, value: int) -> None:
+def _actor_id(tg_chat: TelegramChat | None) -> int | None:
+    """Who the ledger credits — the system user behind the chat, if it has one."""
+    return tg_chat.user_id if tg_chat is not None else None
+
+
+async def _write_and_continue(
+    callback: CallbackQuery, lang: str, archive_id: int, row_id: int, value: int, actor_id: int | None
+) -> None:
     """Write one answer, edit the asked message to say so, and ask the next part."""
     from backend.app.core.database import async_session
 
@@ -137,7 +144,7 @@ async def _write_and_continue(callback: CallbackQuery, lang: str, archive_id: in
             await callback.answer(t(lang, NS, "defects.gone"), show_alert=True)
             return
         write = DefectsWrite(parts=((row_id, value),)) if row_id else DefectsWrite(flat=value)
-        result = await record_defects(db, archive, write)
+        result = await record_defects(db, archive, write, actor_id=actor_id)
         await db.commit()
         by_id = {r.id: r for r in result.parts}
         answered = by_id.get(row_id)
@@ -167,7 +174,7 @@ async def _write_and_continue(callback: CallbackQuery, lang: str, archive_id: in
 
 
 @router.callback_query(F.data.startswith("action:defects:"))
-async def cb_defects_start(callback: CallbackQuery, tg_chat: TelegramChat | None = None) -> None:
+async def cb_defects_start(callback: CallbackQuery, state: FSMContext, tg_chat: TelegramChat | None = None) -> None:
     from backend.app.core.database import async_session
 
     lang = await get_language()
@@ -176,12 +183,15 @@ async def cb_defects_start(callback: CallbackQuery, tg_chat: TelegramChat | None
         archive, rows = await _load(db, archive_id)
     if not await _allowed(callback, tg_chat, archive, lang):
         return
+    # A fresh prompt ends any «other…» left waiting, or the number typed for
+    # this one would be filed against the row that prompt was about.
+    await state.clear()
     await callback.answer()
     await _ask(callback.message, lang, archive, rows[0] if rows else None)
 
 
 @router.callback_query(F.data.startswith("defects:"))
-async def cb_defects_set(callback: CallbackQuery, tg_chat: TelegramChat | None = None) -> None:
+async def cb_defects_set(callback: CallbackQuery, state: FSMContext, tg_chat: TelegramChat | None = None) -> None:
     from backend.app.core.database import async_session
 
     lang = await get_language()
@@ -190,11 +200,14 @@ async def cb_defects_set(callback: CallbackQuery, tg_chat: TelegramChat | None =
         archive, _rows = await _load(db, int(archive_id))
     if not await _allowed(callback, tg_chat, archive, lang):
         return
-    await _write_and_continue(callback, lang, int(archive_id), int(row_id), int(value))
+    # The tap IS the answer: a pending «other…» state must not survive it and
+    # read the operator's next ordinary message as a count.
+    await state.clear()
+    await _write_and_continue(callback, lang, int(archive_id), int(row_id), int(value), _actor_id(tg_chat))
 
 
 @router.callback_query(F.data.startswith("defects_none:"))
-async def cb_defects_none(callback: CallbackQuery, tg_chat: TelegramChat | None = None) -> None:
+async def cb_defects_none(callback: CallbackQuery, state: FSMContext, tg_chat: TelegramChat | None = None) -> None:
     """This part and every part after it: no defects. Ends the prompt."""
     from backend.app.core.database import async_session
 
@@ -205,9 +218,10 @@ async def cb_defects_none(callback: CallbackQuery, tg_chat: TelegramChat | None 
         archive, rows = await _load(db, archive_id)
         if not await _allowed(callback, tg_chat, archive, lang):
             return
+        await state.clear()
         rest = tuple((r.id, 0) for r in rows if r.id >= row_id) if row_id else ()
         write = DefectsWrite(parts=rest) if rest else DefectsWrite(flat=0)
-        result = await record_defects(db, archive, write)
+        result = await record_defects(db, archive, write, actor_id=_actor_id(tg_chat))
         await db.commit()
         total_quantity = int(archive.quantity or 0)
     await callback.message.edit_text(
@@ -265,7 +279,9 @@ async def msg_defects_count(message: Message, state: FSMContext, tg_chat: Telegr
         await state.clear()
         return
     text = (message.text or "").strip()
-    if not text.isdigit():
+    # ``isdecimal`` and not ``isdigit``: "²" is a digit to Python and a
+    # ValueError to ``int()``.
+    if not text.isdecimal():
         await message.answer(escape_md(t(lang, NS, "defects.invalid", max=data.get("maximum", 0))))
         return
     value = int(text)
@@ -275,11 +291,25 @@ async def msg_defects_count(message: Message, state: FSMContext, tg_chat: Telegr
             await state.clear()
             await message.answer(escape_md(t(lang, NS, "defects.gone")))
             return
-        if not has_perm(tg_chat, "printers:clear_plate") or not chat_allows_printer(tg_chat, archive.printer_id):
+        if not has_perm(tg_chat, "printers:clear_plate"):
             await state.clear()
+            await message.answer(escape_md(t(lang, NS, "auth.no_permission")))
+            return
+        if not chat_allows_printer(tg_chat, archive.printer_id):
+            await state.clear()
+            await message.answer(escape_md(t(lang, NS, "auth.not_in_scope")))
+            return
+        row = next((r for r in rows if r.id == int(row_id)), None) if row_id else None
+        maximum = row.quantity if row is not None else int(archive.quantity or 0)
+        if value > maximum:
+            # The question promised "0 to {max}", so a bigger number is a typo,
+            # not an instruction to clamp. The state stays: the next message is
+            # still read as the answer for this part. (The writer clamps too —
+            # that is the last line of defence, not this answer's behaviour.)
+            await message.answer(escape_md(t(lang, NS, "defects.invalid", max=maximum)))
             return
         write = DefectsWrite(parts=((int(row_id), value),)) if row_id else DefectsWrite(flat=value)
-        result = await record_defects(db, archive, write)
+        result = await record_defects(db, archive, write, actor_id=_actor_id(tg_chat))
         await db.commit()
         remaining = [r for r in result.parts if r.id > int(row_id)] if row_id else []
         total_quantity = int(archive.quantity or 0)

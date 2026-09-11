@@ -1220,7 +1220,7 @@ class NotificationService:
 
                         # «Брак…» on the completion message, gate or no gate — the
                         # print just announced is the printer's newest completed
-                        # archive (spec 2026-09-11 \u00a75). Nothing for a failed print:
+                        # archive (spec 2026-09-11 §5). Nothing for a failed print:
                         # there is nothing good on the plate to grade.
                         if event_type == "print_complete":
                             from backend.app.models.archive import PrintArchive
