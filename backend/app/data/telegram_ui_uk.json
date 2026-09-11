@@ -177,6 +177,20 @@
     "status_cancelled": "Скасовано",
     "status_skipped": "Пропущено"
   },
+  "defects": {
+    "btn_defects": "Брак…",
+    "prompt_part": "{name} ×{quantity} — скільки вийшло браком?",
+    "prompt_flat": "{name} ({quantity} шт.) — скільки вийшло браком?",
+    "btn_other": "інше…",
+    "btn_none_rest": "без браку, готово",
+    "btn_cancel": "Скасувати",
+    "enter_count": "Надішліть кількість бракованих деталей (0–{max})",
+    "invalid": "Надішліть ціле число від 0 до {max}",
+    "recorded_part": "{name}: брак {defective} з {quantity}",
+    "done": "Брак записано: {defective} з {quantity}",
+    "gone": "Цього друку вже немає",
+    "cancelled": "Скасовано"
+  },
   "queue_add": {
     "title": "Додати в чергу",
     "select_file": "Оберіть файл:",

@@ -177,6 +177,20 @@
     "status_cancelled": "Cancelled",
     "status_skipped": "Skipped"
   },
+  "defects": {
+    "btn_defects": "Defects…",
+    "prompt_part": "{name} ×{quantity} — how many came out bad?",
+    "prompt_flat": "{name} ({quantity} pcs) — how many came out bad?",
+    "btn_other": "other…",
+    "btn_none_rest": "no defects, done",
+    "btn_cancel": "Cancel",
+    "enter_count": "Send the number of defective parts (0–{max})",
+    "invalid": "Send a whole number from 0 to {max}",
+    "recorded_part": "{name}: {defective} of {quantity} bad",
+    "done": "Defects recorded: {defective} of {quantity}",
+    "gone": "This print no longer exists",
+    "cancelled": "Cancelled"
+  },
   "queue_add": {
     "title": "Add to Queue",
     "select_file": "Select a file:",

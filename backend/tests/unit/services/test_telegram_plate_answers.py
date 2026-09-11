@@ -33,6 +33,8 @@ async def test_repeating_re_arms_and_releases_the_gate():
             MagicMock(side_effect=lambda p, v: released.append((p, v))),
         ),
         patch("backend.app.services.plate_hold.answer_by_repeating", AsyncMock(return_value=MagicMock(id=1))),
+        # The session is a fake here, so the defects hook's own lookup is faked too.
+        patch("backend.app.services.plate_hold.waiting_archive", AsyncMock(return_value=None)),
         patch("backend.app.core.database.async_session", MagicMock()),
         patch("backend.app.services.telegram_handlers.printers.show_printer_detail", AsyncMock()),
     ):
@@ -78,6 +80,7 @@ async def test_nothing_waiting_says_so_and_leaves_the_gate_armed():
             MagicMock(side_effect=lambda p, v: released.append((p, v))),
         ),
         patch("backend.app.services.plate_hold.answer_by_repeating", AsyncMock(return_value=None)),
+        patch("backend.app.services.plate_hold.waiting_archive", AsyncMock(return_value=None)),
         patch("backend.app.core.database.async_session", MagicMock()),
     ):
         await cb_repeat_print(callback)

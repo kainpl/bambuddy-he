@@ -1218,6 +1218,36 @@ class NotificationService:
                             )
                             buttons.append(answers)
 
+                        # «Брак…» on the completion message, gate or no gate — the
+                        # print just announced is the printer's newest completed
+                        # archive (spec 2026-09-11 \u00a75). Nothing for a failed print:
+                        # there is nothing good on the plate to grade.
+                        if event_type == "print_complete":
+                            from backend.app.models.archive import PrintArchive
+
+                            finished = (
+                                await db.execute(
+                                    select(PrintArchive.id)
+                                    .where(
+                                        PrintArchive.printer_id == printer_id,
+                                        PrintArchive.status == "completed",
+                                        PrintArchive.deleted_at.is_(None),
+                                        PrintArchive.quantity > 0,
+                                    )
+                                    .order_by(PrintArchive.completed_at.desc().nullslast(), PrintArchive.id.desc())
+                                    .limit(1)
+                                )
+                            ).scalar_one_or_none()
+                            if finished is not None:
+                                buttons.append(
+                                    [
+                                        InlineKeyboardButton(
+                                            text=f"\U0001f9ee {t(lang, NS, 'defects.btn_defects')}",
+                                            callback_data=f"action:defects:{finished}",
+                                        )
+                                    ]
+                                )
+
                 # Print progress → pause/stop buttons
                 if event_type == "print_progress":
                     if tg_chat.has_permission("printers:control"):
