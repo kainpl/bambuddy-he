@@ -1043,6 +1043,36 @@ export interface ArchivePart {
   defective: number;
 }
 
+export interface ArchivePartDefect {
+  id: number;
+  defective: number;
+}
+
+/** What came out bad: per part when the print has rows, else one flat count.
+ *  Absolute values; the server clamps to each row's (or the print's) quantity. */
+export interface DefectsWriteBody {
+  parts?: ArchivePartDefect[];
+  defective_count?: number;
+}
+
+export interface OrderPrintDefects {
+  archive_id: number;
+  quantity: number;
+  defective_count: number;
+  parts: ArchivePart[];
+  /** Product parts whose shelf correction was refused (stock already spent). */
+  ledger_refused_parts: number;
+}
+
+export interface WaitingPrint {
+  archive_id: number;
+  print_name: string | null;
+  status: string;
+  quantity: number;
+  defective_count: number;
+  parts: ArchivePart[];
+}
+
 export interface Archive {
   id: number;
   printer_id: number | null;
@@ -1259,6 +1289,11 @@ export interface ArchiveListParams {
 }
 
 
+export interface DefectsByPrinter {
+  printed: number;
+  defective: number;
+}
+
 export interface ArchiveStats {
   total_prints: number;
   successful_prints: number;
@@ -1271,6 +1306,9 @@ export interface ArchiveStats {
   prints_by_printer: Record<string, number>;
   average_time_accuracy: number | null;
   time_accuracy_by_printer: Record<string, number> | null;
+  /** Completed prints in the period: what came off each printer's plates and
+   *  how much went in the bin. Optional — an older backend says nothing. */
+  defects_by_printer?: Record<string, DefectsByPrinter>;
   // Two pairs, deliberately. `print_*` is measured between the start and end of
   // each print and honours the date filter; `total_*` is what the plugs
   // themselves counted, idle included, and all-time comes from their lifetime
@@ -2106,6 +2144,7 @@ export const STOCK_NOTE_TOKENS = [
   'filed_under_order',
   'unfiled_from_order',
   'counted_by_operator',
+  'defects_recorded',
 ] as const;
 
 export type StockNoteToken = (typeof STOCK_NOTE_TOKENS)[number];
@@ -7208,16 +7247,21 @@ export const api = {
     request<{ success: boolean; message: string }>(`/printers/${printerId}/print/resume`, {
       method: 'POST',
     }),
-  clearPlate: (printerId: number) =>
+  // Both answers to a full plate may carry the print's defects (spec 2026-09-11 §5);
+  // without a body they behave exactly as before.
+  clearPlate: (printerId: number, body?: { defects: DefectsWriteBody }) =>
     request<{ success: boolean; message: string }>(`/printers/${printerId}/clear-plate`, {
       method: 'POST',
+      ...(body ? { body: JSON.stringify(body) } : {}),
     }),
   // The other answer to a full plate: re-arm the job that just finished and
   // print it again. Same permission as clearPlate — two answers, one question.
-  repeatPrint: (printerId: number) =>
+  repeatPrint: (printerId: number, body?: { defects: DefectsWriteBody }) =>
     request<{ success: boolean; item_id: number }>(`/printers/${printerId}/repeat-print`, {
       method: 'POST',
+      ...(body ? { body: JSON.stringify(body) } : {}),
     }),
+  getWaitingPrint: (printerId: number) => request<WaitingPrint>(`/printers/${printerId}/waiting-print`),
   startCalibration: (printerId: number, options: {
     bed_leveling?: boolean;
     vibration?: boolean;
@@ -10086,6 +10130,13 @@ export const api = {
     request<{ message: string }>(`/projects/${projectId}/remove-archives`, {
       method: 'POST',
       body: JSON.stringify({ archive_ids: archiveIds }),
+    }),
+  getOrderPrintParts: (orderId: number, archiveId: number) =>
+    request<OrderPrintDefects>(`/projects/${orderId}/archives/${archiveId}/parts`),
+  recordOrderPrintDefects: (orderId: number, archiveId: number, body: DefectsWriteBody) =>
+    request<OrderPrintDefects>(`/projects/${orderId}/archives/${archiveId}/defects`, {
+      method: 'POST',
+      body: JSON.stringify(body),
     }),
 
   // Orders (projects redesign, pass 2)

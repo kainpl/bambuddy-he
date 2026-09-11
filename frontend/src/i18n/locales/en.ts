@@ -1517,6 +1517,11 @@ export default {
     repeatPrintSuccess: 'Printing it again',
     clearPlateSuccess: 'Plate cleared - ready for next print',
     plateReady: 'Plate cleared - ready for next print',
+    defects: {
+      toggle: 'Defects in this print',
+      toggleWithCount_one: 'Defects in this print: {{count}}',
+      toggleWithCount_other: 'Defects in this print: {{count}}',
+    },
     // Sections
     // Status
     // Summary cards
@@ -1777,6 +1782,11 @@ export default {
     noTimeAccuracyData: 'No time accuracy data yet',
     noFilamentData: 'No filament data available',
     noPrinterData: 'No printer data available',
+    defectsByPrinter: 'Defects by Printer',
+    noDefectData: 'No completed prints in this period',
+    defectsPrinted: 'Printed',
+    defectsCount: 'Defective',
+    defectsRate: 'Rate',
     noPrintData: 'No print data available',
     noPrintDataLast30Days: 'No print data in the last 30 days',
     failureReasons: 'Failure Reasons',
@@ -5243,6 +5253,17 @@ export default {
       actions: 'Print actions',
       empty: 'No prints for this order yet.',
       loadOlder: 'Load older prints',
+      defective_one: '{{count}} defective',
+      defective_other: '{{count}} defective',
+      defects: {
+        action: 'Defects…',
+        title: 'Defects in this print',
+        save: 'Save',
+        saved_one: '{{count}} defective part recorded',
+        saved_other: '{{count}} defective parts recorded',
+        ledgerRefused_one: 'The shelf could not be corrected for {{count}} part — it was already spent; fix it by hand on the product page',
+        ledgerRefused_other: 'The shelf could not be corrected for {{count}} parts — they were already spent; fix them by hand on the product page',
+      },
     },
     queue: {
       title: 'Queue',
@@ -5696,6 +5717,7 @@ export default {
       filed_under_order: 'filed under an order',
       unfiled_from_order: 'taken back out of its order',
       counted_by_operator: 'counted by the operator',
+      defects_recorded: 'defects recorded after the print was counted',
     },
     adjust: {
       open: 'Adjust',

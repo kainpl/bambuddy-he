@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
 import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { X, Save, Tag, Camera, Trash2, Loader2, Plus, FolderKanban, Hash, Link, PackagePlus, PackageX } from 'lucide-react';
+import { X, Save, Tag, Camera, Trash2, Loader2, Plus, FolderKanban, Hash, Link, PackagePlus } from 'lucide-react';
 import { api } from '../api/client';
 import type { Archive } from '../api/client';
 import { Button } from './Button';
 import { Modal } from './Modal';
+import { DefectsFields } from './DefectsFields';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { OrderPicker } from './pickers/OrderPicker';
@@ -413,67 +414,19 @@ export function EditArchiveModal({ archive, onClose, existingTags = [] }: EditAr
           </p>
         </div>
 
-        {/* Defective parts — scrap out of the plate above. When the archive
-            has parts-ledger rows, scrap is entered per part (each capped at
-            that part's own quantity) instead of as one flat total. */}
-        {hasParts ? (
-          <div>
-            <label className="block text-sm text-bambu-gray mb-1">
-              <PackageX className="w-4 h-4 inline mr-1" />
-              {t('editArchive.partsDefectiveTitle')}
-            </label>
-            <div className="space-y-2">
-              {parts.map((part) => (
-                <div key={part.id} className="flex items-center justify-between gap-3">
-                  <span className="text-sm text-white truncate flex-1">{part.name}</span>
-                  <span className="text-xs text-bambu-gray whitespace-nowrap">&times; {part.quantity}</span>
-                  <input
-                    type="number"
-                    min={0}
-                    max={part.quantity}
-                    value={partsDefective[part.id] ?? 0}
-                    onChange={(e) => {
-                      const raw = parseInt(e.target.value) || 0;
-                      const clamped = Math.min(part.quantity, Math.max(0, raw));
-                      setPartsDefective((prev) => ({ ...prev, [part.id]: clamped }));
-                      setPartsDirty(true);
-                    }}
-                    data-testid={`part-defective-${part.id}`}
-                    className="w-20 px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
-                  />
-                </div>
-              ))}
-            </div>
-            <p className="text-sm text-white mt-2" data-testid="parts-defective-total">
-              {t('editArchive.partsDefectiveTotal')}: {partsDefectiveSum}
-            </p>
-            <p className="text-xs text-bambu-gray mt-1">
-              {t('editArchive.partsDefectiveHelp')}
-            </p>
-          </div>
-        ) : (
-          <div>
-            <label className="block text-sm text-bambu-gray mb-1">
-              <PackageX className="w-4 h-4 inline mr-1" />
-              {t('editArchive.defectiveParts')}
-            </label>
-            <input
-              type="number"
-              min={0}
-              max={quantity}
-              value={defectiveCount}
-              onChange={(e) =>
-                setDefectiveCount(Math.min(quantity, Math.max(0, parseInt(e.target.value) || 0)))
-              }
-              data-testid="defective-count-input"
-              className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
-              placeholder="0"
-            />
-            <p className="text-xs text-bambu-gray mt-1">
-              {t('editArchive.defectivePartsHelp')}
-            </p>
-          </div>
-        )}
+        {/* Defective parts — scrap out of the plate above. One form, shared
+            with the order page and the printer card (`DefectsFields`). */}
+        <DefectsFields
+          parts={parts}
+          values={partsDefective}
+          onChange={(id, next) => {
+            setPartsDefective((prev) => ({ ...prev, [id]: next }));
+            setPartsDirty(true);
+          }}
+          quantity={quantity}
+          flat={defectiveCount}
+          onFlatChange={setDefectiveCount}
+        />
 
         {/* Notes */}
         <div>

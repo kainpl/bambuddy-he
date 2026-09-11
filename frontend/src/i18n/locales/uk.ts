@@ -1528,6 +1528,13 @@ export default {
     repeatPrintSuccess: 'Друкуємо ще раз',
     clearPlateSuccess: 'Стіл очищено - готовий до наступного друку',
     plateReady: 'Стіл очищено - готовий до наступного друку',
+    defects: {
+      toggle: 'Брак у цьому друці',
+      toggleWithCount_one: 'Брак у цьому друці: {{count}}',
+      toggleWithCount_few: 'Брак у цьому друці: {{count}}',
+      toggleWithCount_many: 'Брак у цьому друці: {{count}}',
+      toggleWithCount_other: 'Брак у цьому друці: {{count}}',
+    },
     // Sections
     // Status
     // Summary cards
@@ -1790,6 +1797,11 @@ export default {
     noTimeAccuracyData: 'Ще немає даних точності часу',
     noFilamentData: 'Немає даних про філамент',
     noPrinterData: 'Немає даних про принтери',
+    defectsByPrinter: 'Брак по принтерах',
+    noDefectData: 'Немає завершених друків за цей період',
+    defectsPrinted: 'Надруковано',
+    defectsCount: 'Брак',
+    defectsRate: 'Частка',
     noPrintData: 'Немає даних про друк',
     noPrintDataLast30Days: 'Немає даних про друк за останні 30 днів',
     failureReasons: 'Причини помилок',
@@ -5309,6 +5321,23 @@ export default {
       actions: 'Дії з друком',
       empty: 'Для цього замовлення ще немає друків.',
       loadOlder: 'Завантажити старіші друки',
+      defective_one: '{{count}} брак',
+      defective_few: '{{count}} браку',
+      defective_many: '{{count}} браку',
+      defective_other: '{{count}} браку',
+      defects: {
+        action: 'Брак…',
+        title: 'Брак у цьому друці',
+        save: 'Зберегти',
+        saved_one: 'Записано {{count}} браковану деталь',
+        saved_few: 'Записано {{count}} браковані деталі',
+        saved_many: 'Записано {{count}} бракованих деталей',
+        saved_other: 'Записано {{count}} бракованих деталей',
+        ledgerRefused_one: 'Полицю не вдалося виправити для {{count}} деталі — її вже витратили; поправте руками на сторінці виробу',
+        ledgerRefused_few: 'Полицю не вдалося виправити для {{count}} деталей — їх уже витратили; поправте руками на сторінці виробу',
+        ledgerRefused_many: 'Полицю не вдалося виправити для {{count}} деталей — їх уже витратили; поправте руками на сторінці виробу',
+        ledgerRefused_other: 'Полицю не вдалося виправити для {{count}} деталей — їх уже витратили; поправте руками на сторінці виробу',
+      },
     },
     queue: {
       title: 'Черга',
@@ -5781,6 +5810,7 @@ export default {
       filed_under_order: 'віднесено до замовлення',
       unfiled_from_order: 'вилучено із замовлення',
       counted_by_operator: 'зараховано оператором',
+      defects_recorded: 'брак записано після зарахування друку',
     },
     adjust: {
       open: 'Коригувати',
