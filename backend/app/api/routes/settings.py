@@ -637,6 +637,20 @@ def _restore_zigbee_db(staging: Path, data_dir: Path) -> None:
         )
 
 
+def _write_mfa_key(path: Path, content: bytes) -> None:
+    """Replace a key atomically, with private permissions and no leaked temp file."""
+    import tempfile
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=".mfa-restore-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(content)
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
 async def create_backup_zip(output_path: Path | None = None) -> tuple[Path, str]:
     """Create a complete backup ZIP (database + all data directories).
 
@@ -649,7 +663,7 @@ async def create_backup_zip(output_path: Path | None = None) -> tuple[Path, str]
     import tempfile
 
     from backend.app.core.database import Base, engine
-    from backend.app.core.db_portable import dump_to_sqlite
+    from backend.app.core.db_portable import _staged_output, dump_to_sqlite
 
     base_dir = app_settings.base_dir
     filename = f"bamdude-backup-{datetime.now().strftime('%Y%m%d-%H%M%S')}.zip"
@@ -730,11 +744,16 @@ async def create_backup_zip(output_path: Path | None = None) -> tuple[Path, str]
             os.close(fd)
             zip_file = Path(tmp_path_str)
 
-        with zipfile.ZipFile(zip_file, "w", zipfile.ZIP_DEFLATED) as zf:
-            for file_path in temp_path.rglob("*"):
-                if file_path.is_file():
-                    arcname = file_path.relative_to(temp_path)
-                    zf.write(file_path, arcname)
+        try:
+            with _staged_output(zip_file) as staging_zip, zipfile.ZipFile(staging_zip, "w", zipfile.ZIP_DEFLATED) as zf:
+                for file_path in temp_path.rglob("*"):
+                    if file_path.is_file():
+                        arcname = file_path.relative_to(temp_path)
+                        zf.write(file_path, arcname)
+        except BaseException:
+            if output_path is None:
+                zip_file.unlink(missing_ok=True)
+            raise
 
     return zip_file, filename
 
@@ -829,6 +848,16 @@ async def restore_backup(
         if not backup_db.exists():
             raise HTTPException(400, "Invalid backup: missing database file (bamdude.db or bambuddy.db)")
 
+        from backend.app.core.db_portable import _file_work, validate_sqlite_backup
+
+        try:
+            await _file_work(validate_sqlite_backup, backup_db, require_app_schema=True)
+        except ValueError as exc:
+            logger.warning("Restore preflight rejected database: %s", exc)
+            raise HTTPException(400, "Invalid backup database: damaged or incompatible. Check server logs.") from exc
+
+        restored_key = None
+        database_replaced = False
         try:
             import asyncio
 
@@ -874,6 +903,7 @@ async def restore_backup(
 
             # 4. Close current database connections
             logger.info("Closing database connections...")
+            await db.close()  # Release this request's auth/read transaction before DROP TABLE.
             await close_all_connections()
 
             # 4b. Restore the MFA encryption key file BEFORE the database swap.
@@ -887,20 +917,10 @@ async def restore_backup(
             mfa_key_src = temp_path / ".mfa_encryption_key"
             if mfa_key_src.exists() and mfa_key_src.is_file():
                 dst_key = resolve_data_dir() / ".mfa_encryption_key"
-                tmp_key = dst_key.parent / ".mfa_encryption_key.restore-tmp"
                 try:
-                    dst_key.parent.mkdir(parents=True, exist_ok=True)
-                    # Atomic write with restrictive mode from creation. O_TRUNC
-                    # because a stale tmp may exist from a prior failed
-                    # restore attempt — we want to overwrite it.
-                    fd = os.open(str(tmp_key), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-                    try:
-                        os.write(fd, mfa_key_src.read_bytes())
-                    finally:
-                        os.close(fd)
-                    # POSIX rename(2) — atomic when source/dest are on the
-                    # same filesystem (we're staying inside dst_key.parent).
-                    os.replace(str(tmp_key), str(dst_key))
+                    previous_key = dst_key.read_bytes() if dst_key.exists() else None
+                    _write_mfa_key(dst_key, mfa_key_src.read_bytes())
+                    restored_key = (dst_key, previous_key)
                     actual_mode = dst_key.stat().st_mode & 0o777
                     if actual_mode != 0o600:
                         logger.warning(
@@ -922,29 +942,6 @@ async def restore_backup(
                         status_code=500,
                         detail="Restore aborted: MFA key write failed. Database is unchanged. Check server logs.",
                     ) from e
-
-            # zigpy's device database carries the Zigbee network key. Restored
-            # here, beside the other DATA_DIR artifacts and BEFORE the database
-            # swap, so a failure still leaves the live install untouched.
-            _restore_zigbee_db(temp_path, resolve_data_dir())
-
-            # Restore the anonymous telemetry install id (best-effort). Keeps the
-            # same identity when a user does a clean install then restores the old
-            # DB — without it the restored instance would look brand-new. A failure
-            # here must NOT abort the restore (the id is non-critical).
-            install_id_src = temp_path / ".install_id"
-            if install_id_src.exists() and install_id_src.is_file():
-                dst_id = resolve_data_dir() / ".install_id"
-                try:
-                    dst_id.parent.mkdir(parents=True, exist_ok=True)
-                    fd = os.open(str(dst_id), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-                    try:
-                        os.write(fd, install_id_src.read_bytes())
-                    finally:
-                        os.close(fd)
-                    logger.info("Restored .install_id from backup")
-                except OSError as e:
-                    logger.warning("Could not restore install id from backup: %s - continuing", e)
 
             # 5. Replace database
             logger.info("Restoring database from backup...")
@@ -988,6 +985,31 @@ async def restore_backup(
                 from backend.app.core.db_portable import import_sqlite_to_postgres
 
                 await import_sqlite_to_postgres(current_engine, Base.metadata, backup_db)
+
+            database_replaced = True
+
+            # zigpy's device database carries the Zigbee network key. Restored
+            # only after the main DB swap, so a failed import leaves the
+            # previous network and telemetry identity untouched.
+            _restore_zigbee_db(temp_path, resolve_data_dir())
+
+            # Restore the anonymous telemetry install id (best-effort). Keeps the
+            # same identity when a user does a clean install then restores the old
+            # DB — without it the restored instance would look brand-new. A failure
+            # here must NOT abort the restore (the id is non-critical).
+            install_id_src = temp_path / ".install_id"
+            if install_id_src.exists() and install_id_src.is_file():
+                dst_id = resolve_data_dir() / ".install_id"
+                try:
+                    dst_id.parent.mkdir(parents=True, exist_ok=True)
+                    fd = os.open(str(dst_id), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                    try:
+                        os.write(fd, install_id_src.read_bytes())
+                    finally:
+                        os.close(fd)
+                    logger.info("Restored .install_id from backup")
+                except OSError as e:
+                    logger.warning("Could not restore install id from backup: %s - continuing", e)
 
             # 6. Replace data directories
             # For Docker compatibility: clear contents then copy (don't delete mount points)
@@ -1071,6 +1093,14 @@ async def restore_backup(
                 status_code=500,
                 content={"success": False, "message": "Restore failed. Check server logs for details."},
             )
+        finally:
+            if restored_key is not None and not database_replaced:
+                key_path, previous_key = restored_key
+                if previous_key is None:
+                    key_path.unlink(missing_ok=True)
+                else:
+                    _write_mfa_key(key_path, previous_key)
+                logger.info("Database swap failed; restored the previous MFA key file")
 
 
 @router.post("/optimize-db")

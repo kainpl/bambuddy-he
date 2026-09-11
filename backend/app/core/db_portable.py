@@ -5,20 +5,19 @@ Restore can import SQLite backups into both SQLite and PostgreSQL.
 Auto-migration transfers data from local SQLite to PostgreSQL on first PG start.
 """
 
+import asyncio
 import logging
+import os
 import re
 import sqlite3
-from datetime import datetime
+import tempfile
+from contextlib import asynccontextmanager, closing, contextmanager
+from datetime import date, datetime
 from pathlib import Path
 
 from sqlalchemy import MetaData, text
 
 logger = logging.getLogger(__name__)
-
-# Marker for "this NOT NULL column has a server-side default, substitute the
-# current timestamp". The import path spells the same idea as the string
-# ``"__now__"``; a sentinel object avoids colliding with a real stored value.
-_NOW_SENTINEL = object()
 
 
 def _is_datetime_column(col) -> bool:
@@ -28,125 +27,235 @@ def _is_datetime_column(col) -> bool:
     return "TIMESTAMP" in type_name or "DATETIME" in type_name or type_name == "DATE"
 
 
-async def dump_to_sqlite(engine, metadata, output_path: Path) -> None:
-    """Export current database (any backend) to a portable SQLite file.
+@contextmanager
+def _staged_output(output_path: Path):
+    """Own the temporary file until a complete backup can replace the destination."""
+    fd, name = tempfile.mkstemp(prefix=f".{output_path.name}.", suffix=".tmp", dir=output_path.parent)
+    os.close(fd)
+    staging = Path(name)
+    try:
+        yield staging
+        os.replace(staging, output_path)
+    finally:
+        staging.unlink(missing_ok=True)
 
-    For SQLite backend: checkpoint WAL and copy the file directly.
-    For PostgreSQL: read all tables via ORM and write to a new SQLite file.
+
+def _sqlite_connection(path: Path):
+    # mode=ro refuses missing files instead of creating an empty "backup".
+    return sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+
+
+def validate_sqlite_backup(path: Path, *, require_app_schema: bool = False) -> None:
+    """Reject damaged/incompatible files before touching the destination or services.
+
+    Old files without migration history remain supported. Their schema is owned
+    by the file; the normal legacy bootstrap and pending migration chain apply.
     """
+    from backend.app.migrations import _discover_migrations
+
+    try:
+        with closing(_sqlite_connection(path)) as src:
+            if src.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
+                raise ValueError("SQLite integrity check failed")
+            tables = {r[0] for r in src.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if not tables:
+                raise ValueError("Backup database has no tables")
+            if require_app_schema and not {"printers", "settings"} <= tables:
+                raise ValueError("Backup is missing application tables")
+            if "_migrations" in tables:
+                versions = {r[0] for r in src.execute("SELECT version FROM _migrations")}
+                known = {m["version"] for m in _discover_migrations()}
+                if versions - known:
+                    raise ValueError("Backup contains newer or unsupported migrations")
+    except sqlite3.Error as exc:
+        raise ValueError("Backup is not a readable SQLite database") from exc
+
+
+def _snapshot_sqlite(source: Path, destination: Path) -> None:
+    with closing(_sqlite_connection(source)) as src, closing(sqlite3.connect(destination)) as dst:
+        src.backup(dst, pages=256)
+
+
+async def _file_work(function, *args, **kwargs):
+    """Join off-thread file work even on cancellation, before its directory disappears."""
+    task = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
+    cancelled = False
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            cancelled = True
+        except Exception:
+            if not cancelled:
+                raise
+            break
+    if cancelled:
+        if not task.cancelled() and task.exception() is not None:
+            logger.error("File operation failed while backup was being cancelled: %s", task.exception())
+        raise asyncio.CancelledError
+    return task.result()
+
+
+async def dump_to_sqlite(engine, metadata, output_path: Path) -> None:
+    """Export a consistent database snapshot to the existing portable SQLite format."""
     from backend.app.core.db_dialect import is_sqlite
 
     if is_sqlite():
-        import shutil
-
-        from backend.app.core.config import settings
-
-        db_path = Path(settings.database_url.replace("sqlite+aiosqlite:///", ""))
-        # Checkpoint WAL to ensure all data is in main db file
-        async with engine.begin() as conn:
-            await conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
-        shutil.copy2(db_path, output_path)
+        # Read through SQLite, including committed WAL pages. Checkpoint + copy
+        # can race writers and does not capture a consistent live database.
+        with _staged_output(output_path) as staging:
+            await _file_work(_snapshot_sqlite, Path(engine.url.database), staging)
     else:
         await _export_pg_to_sqlite(engine, metadata, output_path)
 
 
+def _portable_metadata(metadata) -> MetaData:
+    """Full canonical DDL, without altering the models used by bootstrap migrations."""
+    from sqlalchemy import Column, DateTime, Integer, String, Table, func
+
+    portable = MetaData()
+    for table in metadata.tables.values():
+        copy = table.to_metadata(portable)
+        for col in list(copy.c):
+            if col.info.get("migration_shim"):
+                # These are standalone bootstrap columns. Refuse a future shim
+                # that participates in a constraint/index rather than corrupt DDL.
+                if col.primary_key or col.foreign_keys or any(col.name in i.columns for i in copy.indexes):
+                    raise ValueError(f"Constrained migration shim: {table.name}.{col.name}")
+                if any(col.name in c.columns for c in copy.constraints):
+                    raise ValueError(f"Constrained migration shim: {table.name}.{col.name}")
+                copy._columns.remove(col)
+    Table(
+        "_migrations",
+        portable,
+        Column("id", Integer, primary_key=True),
+        Column("version", Integer, nullable=False, unique=True),
+        Column("name", String(100), nullable=False),
+        Column("applied_at", DateTime, server_default=func.current_timestamp()),
+    )
+    return portable
+
+
+async def _check_export_schema(conn, portable, models) -> None:
+    """Never silently drop source data that the portable schema cannot represent."""
+    from sqlalchemy import inspect
+
+    def inventory(sync_conn):
+        inspector = inspect(sync_conn)
+        return {name: {c["name"] for c in inspector.get_columns(name)} for name in inspector.get_table_names()}
+
+    present = await conn.run_sync(inventory)
+    expected = set(portable.tables)
+    if set(present) != expected:
+        raise ValueError(
+            f"Portable schema mismatch: missing tables {sorted(expected - present.keys())}; "
+            f"unhandled tables {sorted(present.keys() - expected)}"
+        )
+    if conn.dialect.name == "postgresql":
+        from backend.app.migrations import _discover_migrations
+
+        versions = set((await conn.execute(text("SELECT version FROM _migrations"))).scalars())
+        if versions != {m["version"] for m in _discover_migrations()}:
+            # Canonical DDL describes the current application, not an older
+            # migration level. Never discard legacy shim values from a source
+            # whose converters have not run yet.
+            raise ValueError("Finish database migrations before creating a portable backup")
+    for name, table in portable.tables.items():
+        wanted = set(table.c.keys())
+        ignored = (
+            {c.name for c in models.tables[name].c if c.info.get("migration_shim")} if name in models.tables else set()
+        )
+        if name == "print_archives":
+            ignored.add("search_vector")  # Rebuilt as SQLite FTS, never copied as user data.
+        missing, extra = wanted - present[name], present[name] - wanted - ignored
+        if missing or extra:
+            raise ValueError(
+                f"Portable schema mismatch in {name}: missing {sorted(missing)}; unhandled {sorted(extra)}"
+            )
+
+
 async def _export_pg_to_sqlite(engine, metadata, output_path: Path) -> None:
-    """Export PostgreSQL data to a portable SQLite file.
-
-    The schema is emitted by ``Base.metadata.create_all()`` against a real
-    SQLite engine, so the portable file gets **exactly the DDL a native SQLite
-    install has**: NOT NULL, DEFAULT (``func.now()`` → ``CURRENT_TIMESTAMP``),
-    foreign keys, unique constraints, CHECKs, indexes and ``LargeBinary`` →
-    ``BLOB``. This replaced a hand-rolled ``CREATE TABLE`` loop that emitted
-    only column name + coarse type + primary key (upstream #2526).
-
-    Why that mattered: restoring one of these backups onto a SQLite install
-    page-copies the schema straight onto the live database, and the
-    post-restore ``init_db()`` cannot repair it — ``create_all`` is
-    ``CREATE TABLE IF NOT EXISTS``. So every ``server_default`` column (we have
-    121 of them, 91 being the ``created_at``/``updated_at`` ``func.now()``
-    pattern) lost its DEFAULT: SQLAlchemy omits server-default columns from the
-    INSERT, the database had no DEFAULT to supply, NULL was written, and the
-    next read failed Pydantic validation with a 500 on whole list endpoints.
-
-    Known gap, unchanged here: the export walks ``metadata.sorted_tables``, so
-    the raw-SQL ``_migrations`` table and the SQLite-only ``archive_fts`` FTS5
-    virtual table + triggers are still absent from a PG-origin portable file.
-    """
+    """Export canonical DDL + data + migration history from one read-only snapshot."""
     import json
 
-    from sqlalchemy import create_engine as create_sync_engine
+    from sqlalchemy import JSON, Text, cast, create_engine as create_sync_engine, select
+    from sqlalchemy.ext.asyncio import create_async_engine
 
-    # Full-fidelity DDL, identical to what a native SQLite install gets.
-    schema_engine = create_sync_engine(f"sqlite:///{output_path}")
-    try:
-        metadata.create_all(schema_engine)
-    finally:
-        schema_engine.dispose()
-
-    dst = sqlite3.connect(str(output_path))
-    # Our FK graph has cycles (auto_queue_items / library_files / library_folders
-    # / print_archives / print_queue), so `sorted_tables` insert order is not
-    # safe under enforcement. sqlite3 defaults this to OFF; be explicit now that
-    # the portable file actually carries foreign keys.
-    dst.execute("PRAGMA foreign_keys = OFF")
-
-    # Export data
-    async with engine.connect() as conn:
-        for table in metadata.sorted_tables:
-            result = await conn.execute(table.select())
-            rows = result.fetchall()
-            if not rows:
-                continue
-            columns = list(result.keys())
-            placeholders = ", ".join(["?"] * len(columns))
-            col_list = ", ".join(columns)
-            insert_sql = f"INSERT INTO {table.name} ({col_list}) VALUES ({placeholders})"  # noqa: S608
-
-            # Now that NOT NULL is enforced in the portable file, a source row
-            # holding NULL in a model-NOT-NULL column would abort the whole
-            # backup. That happens where a migration added a column nullable
-            # while the model declares it NOT NULL. Fill from the column's own
-            # default, mirroring what `import_sqlite_to_postgres` already does
-            # on the way in.
-            not_null_defaults: dict[str, object] = {}
-            for col in table.columns:
-                if col.name not in columns or col.nullable:
-                    continue
-                if col.default is not None:
-                    default = col.default.arg
-                    not_null_defaults[col.name] = default(None) if callable(default) else default
-                elif col.server_default is not None and _is_datetime_column(col):
-                    # Only datetime server-defaults are substitutable — they are
-                    # all `func.now()`. A boolean/integer server_default is an
-                    # SQL expression we must NOT guess at: filling a timestamp
-                    # into an integer column would be worse than the NULL, so
-                    # leave it and let the IntegrityError below name the table.
-                    not_null_defaults[col.name] = _NOW_SENTINEL
-
-            now = datetime.now()  # noqa: DTZ005
-
-            def _serialize_row(row, cols=columns, nn=not_null_defaults, _n=now):
-                values = []
-                for name, v in zip(cols, row, strict=True):
-                    if v is None and name in nn:
-                        v = _n if nn[name] is _NOW_SENTINEL else nn[name]
-                    values.append(json.dumps(v) if isinstance(v, (list, dict)) else v)
-                return tuple(values)
-
+    portable = _portable_metadata(metadata)
+    with _staged_output(output_path) as staging:
+        async with engine.connect() as conn, conn.begin():
+            if engine.dialect.name == "postgresql":
+                # Issue before the first SELECT. Plain READ COMMITTED takes a
+                # new snapshot for each table and can mix parent/child revisions.
+                await conn.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY"))
+            await _check_export_schema(conn, portable, metadata)
+            schema_engine = create_sync_engine(f"sqlite:///{staging}")
             try:
-                dst.executemany(insert_sql, [_serialize_row(row) for row in rows])
-            except sqlite3.IntegrityError:
-                logger.error(
-                    "Portable export: table %s violates the model schema; backup aborted",
-                    table.name,
-                )
-                dst.close()
-                raise
+                portable.create_all(schema_engine)
+            finally:
+                schema_engine.dispose()
+            with closing(sqlite3.connect(staging)) as dst:
+                # Cyclic FKs require loading without enforcement. Constraints
+                # remain in the portable DDL, and are checked after all rows land.
+                dst.execute("PRAGMA foreign_keys = OFF")
+                now = datetime.now()  # noqa: DTZ005
+                for table in portable.tables.values():
+                    columns = list(table.c)
+                    defaults = {}
+                    for col in columns:
+                        if not col.nullable:
+                            if col.default is not None:
+                                default = col.default.arg
+                                defaults[col.name] = default(None) if callable(default) else default
+                            elif col.server_default is not None and _is_datetime_column(col):
+                                defaults[col.name] = now
+                    quoted = ", ".join(_quote(c.name) for c in columns)
+                    placeholders = ", ".join("?" for _ in columns)
+                    insert = f"INSERT INTO {_quote(table.name)} ({quoted}) VALUES ({placeholders})"  # noqa: S608
 
-    dst.commit()
-    dst.close()
+                    def serialize(row, columns=columns, defaults=defaults):
+                        values = []
+                        for col, value in zip(columns, row, strict=True):
+                            if value is None and col.name in defaults:
+                                value = defaults[col.name]
+                                if isinstance(col.type, JSON):
+                                    value = json.dumps(value)
+                            if isinstance(value, datetime):
+                                value = value.isoformat(" ")
+                            elif isinstance(value, date):
+                                value = value.isoformat()
+                            values.append(value)
+                        return tuple(values)
+
+                    # Read JSON as text, preserving SQL NULL vs JSON null and
+                    # scalar strings/booleans without decoding/re-encoding them.
+                    statement = select(
+                        *(cast(c, Text).label(c.name) if isinstance(c.type, JSON) else c for c in columns)
+                    )
+                    async with conn.stream(statement) as result:
+                        async for rows in result.partitions(500):
+                            dst.executemany(insert, [serialize(row) for row in rows])
+                violations = dst.execute("PRAGMA foreign_key_check").fetchmany(5)
+                if violations:
+                    raise ValueError(f"Portable backup has foreign key violations: {violations}")
+                dst.commit()
+        if "print_archives" in portable.tables:
+            from backend.app.migrations.m001_bamdude_baseline import _setup_sqlite_fts
+
+            fts_engine = create_async_engine(f"sqlite+aiosqlite:///{staging}")
+            try:
+                async with fts_engine.begin() as conn:
+                    await _setup_sqlite_fts(conn)
+                    # Explicit rebuild surfaces errors the legacy helper tolerates.
+                    await conn.execute(text("INSERT INTO archive_fts(archive_fts) VALUES ('rebuild')"))
+            finally:
+                await fts_engine.dispose()
+        await _file_work(validate_sqlite_backup, staging)
     logger.info("PostgreSQL exported to portable SQLite: %s", output_path)
+
+
+def _quote(identifier: str) -> str:
+    return '"' + identifier.replace('"', '""') + '"'
 
 
 def _pg_predicate(sql: str, booleans: set[str]) -> str:
@@ -327,7 +436,19 @@ async def _restore_model_indexes(conn, models_metadata) -> None:
     await conn.run_sync(_do)
 
 
-async def _add_foreign_key(engine, tbl, label, ddl, parent, ccols, pcols, set_null, repaired) -> str | None:
+@asynccontextmanager
+async def _fk_transaction(engine, connection=None):
+    if connection is None:
+        async with engine.begin() as conn:
+            yield conn
+    else:
+        async with connection.begin_nested():
+            yield connection
+
+
+async def _add_foreign_key(
+    engine, tbl, label, ddl, parent, ccols, pcols, set_null, repaired, *, connection=None
+) -> str | None:
     """Run one ``ALTER TABLE … ADD … FOREIGN KEY``, repairing the rows that forbid it.
 
     A failure here is NOT cosmetic: it means the rows contain references the
@@ -345,7 +466,7 @@ async def _add_foreign_key(engine, tbl, label, ddl, parent, ccols, pcols, set_nu
     """
     for attempt in (1, 2):
         try:
-            async with engine.begin() as conn:
+            async with _fk_transaction(engine, connection) as conn:
                 await conn.execute(text(ddl))
             return None
         except Exception as e:  # noqa: BLE001
@@ -360,7 +481,7 @@ async def _add_foreign_key(engine, tbl, label, ddl, parent, ccols, pcols, set_nu
                 repair = f"UPDATE {tbl} c SET {assigns} {orphans}"  # noqa: S608
             else:
                 repair = f"DELETE FROM {tbl} c {orphans}"  # noqa: S608
-            async with engine.begin() as conn:
+            async with _fk_transaction(engine, connection) as conn:
                 res = await conn.execute(text(repair))
             if res.rowcount:
                 verb = "Nulled" if set_null else "Purged"
@@ -655,218 +776,235 @@ async def import_sqlite_to_postgres(engine, metadata, sqlite_path: Path) -> int:
     is the models' metadata, consulted for column TYPES only — never for which
     tables or columns exist; that is the file's business.
 
-    Drops and recreates tables without FKs, imports data, then restores FKs.
+    Drops and recreates tables without FKs, imports data, then restores FKs
+    in ONE transaction: a failed import leaves the previous PostgreSQL intact.
 
     Returns number of tables imported.
     """
-    src = sqlite3.connect(str(sqlite_path))
-    src.row_factory = sqlite3.Row
+    validate_sqlite_backup(sqlite_path)
 
-    # The schema to build is the file's own. ``_migrations`` is deliberately
-    # IN: it is what lets the chain resume at the right place instead of
-    # replaying from m001 against data that has already been through it.
-    reflected = _reflect_sqlite_schema(sqlite_path, metadata)
-    sorted_tables = [t.name for t in reflected.sorted_tables]
+    with closing(_sqlite_connection(sqlite_path)) as src:
+        src.row_factory = sqlite3.Row
+        # The schema to build is the file's own. ``_migrations`` is deliberately
+        # IN: it is what lets the chain resume at the right place instead of
+        # replaying from m001 against data that has already been through it.
+        reflected = _reflect_sqlite_schema(sqlite_path, metadata)
+        sorted_tables = [t.name for t in reflected.sorted_tables]
 
-    # Phase 1: Drop and recreate the schema, then strip foreign keys IN THE
-    # DATABASE before loading data.
-    #
-    # This used to remove the constraint objects from ``metadata`` and rely on
-    # ``create_all`` emitting FK-free DDL. That silently fails for the cyclic
-    # group (auto_queue_items ↔ library_files ↔ library_folders ↔ print_archives
-    # ↔ print_queue): SQLAlchemy cannot inline a cycle, so it emits those FKs as
-    # separate ALTER TABLE statements built from the column-level ``ForeignKey``
-    # objects, which the metadata surgery never touched. Measured on a real
-    # PostgreSQL: 99 constraints before, 20 still standing after the strip — and
-    # the first insert into library_files then died on a folder_id violation,
-    # aborting the whole migration.
-    #
-    # Dropping them from the catalogue instead is immune to how SQLAlchemy
-    # chooses to emit DDL, and lets the rows land in any order.
-    async with engine.begin() as conn:
-        # On PostgreSQL, plain metadata.drop_all only enumerates ORM-defined tables
-        # and emits non-CASCADE DROP TABLE. Orphan tables left over from removed
-        # features (e.g. legacy spoolman_* whose FKs still reference printers) then
-        # block the drop with DependentObjectsStillExistError, aborting the whole
-        # restore. Drop every public-schema table with CASCADE first so the orphans
-        # and their constraints come down alongside the ORM ones; restricted to
-        # schemaname='public' so a shared Postgres instance with non-BamDude data
-        # in other schemas isn't affected. SQLite is unaffected (no orphan-FK risk).
-        from backend.app.core.db_dialect import is_postgres
+        # Phase 1: Drop and recreate the schema, then strip foreign keys IN THE
+        # DATABASE before loading data.
+        #
+        # This used to remove the constraint objects from ``metadata`` and rely on
+        # ``create_all`` emitting FK-free DDL. That silently fails for the cyclic
+        # group (auto_queue_items ↔ library_files ↔ library_folders ↔ print_archives
+        # ↔ print_queue): SQLAlchemy cannot inline a cycle, so it emits those FKs as
+        # separate ALTER TABLE statements built from the column-level ``ForeignKey``
+        # objects, which the metadata surgery never touched. Measured on a real
+        # PostgreSQL: 99 constraints before, 20 still standing after the strip — and
+        # the first insert into library_files then died on a folder_id violation,
+        # aborting the whole migration.
+        #
+        # Dropping them from the catalogue instead is immune to how SQLAlchemy
+        # chooses to emit DDL, and lets the rows land in any order.
+        async with engine.begin() as conn:
+            # On PostgreSQL, plain metadata.drop_all only enumerates ORM-defined tables
+            # and emits non-CASCADE DROP TABLE. Orphan tables left over from removed
+            # features (e.g. legacy spoolman_* whose FKs still reference printers) then
+            # block the drop with DependentObjectsStillExistError, aborting the whole
+            # restore. Drop every public-schema table with CASCADE first so the orphans
+            # and their constraints come down alongside the ORM ones; restricted to
+            # schemaname='public' so a shared Postgres instance with non-BamDude data
+            # in other schemas isn't affected. SQLite is unaffected (no orphan-FK risk).
+            from backend.app.core.db_dialect import is_postgres
 
-        if is_postgres():
-            # Cap how long DROP TABLE will wait for AccessExclusiveLock so any
-            # residual concurrent writer (a per-printer MQTT client writing
-            # reactively, a background loop that woke on its cadence) surfaces a
-            # fast `lock_timeout` error instead of blocking the restore for the
-            # default cadence or producing an AB/BA deadlock. SET LOCAL scopes
-            # to this transaction only; outside this restore path the global
-            # default (no timeout) applies. Pairs with the background-service
-            # pause in routes/settings.py::restore_backup (#1... PG deadlock).
-            await conn.execute(text("SET LOCAL lock_timeout = '10s'"))
-            await conn.execute(
-                text(
-                    "DO $$ DECLARE r RECORD; "
-                    "BEGIN FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public') LOOP "
-                    "EXECUTE 'DROP TABLE IF EXISTS public.' || quote_ident(r.tablename) || ' CASCADE'; "
-                    "END LOOP; END $$;"
-                )
-            )
-        else:
-            await conn.run_sync(metadata.drop_all)
-            await conn.run_sync(reflected.drop_all)
-        # The file's schema, at the file's level — see _reflect_sqlite_schema.
-        await conn.run_sync(reflected.create_all)
-
-        # Now strip the foreign keys from the catalogue itself, remembering each
-        # definition verbatim so Phase 3 can put it back exactly as PostgreSQL
-        # rendered it. ``pg_get_constraintdef`` gives us the full
-        # ``FOREIGN KEY (...) REFERENCES ... ON DELETE ...`` clause. This is the
-        # one place FKs are handled — see the note at the end of
-        # ``_reflect_sqlite_schema`` for why it cannot be done on the metadata.
-        saved_db_fks = []
-        if is_postgres():
-            rows = (
+            if is_postgres():
+                # Cap how long DROP TABLE will wait for AccessExclusiveLock so any
+                # residual concurrent writer (a per-printer MQTT client writing
+                # reactively, a background loop that woke on its cadence) surfaces a
+                # fast `lock_timeout` error instead of blocking the restore for the
+                # default cadence or producing an AB/BA deadlock. SET LOCAL scopes
+                # to this transaction only; outside this restore path the global
+                # default (no timeout) applies. Pairs with the background-service
+                # pause in routes/settings.py::restore_backup (#1... PG deadlock).
+                await conn.execute(text("SET LOCAL lock_timeout = '10s'"))
                 await conn.execute(
                     text(
-                        "SELECT c.conrelid::regclass::text AS child, c.conname, "
-                        "       pg_get_constraintdef(c.oid) AS cdef, "
-                        "       c.confrelid::regclass::text AS parent, "
-                        "       (SELECT array_agg(a.attname ORDER BY u.ord) "
-                        "          FROM unnest(c.conkey) WITH ORDINALITY u(attnum, ord) "
-                        "          JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = u.attnum) AS ccols, "
-                        "       (SELECT array_agg(a.attname ORDER BY u.ord) "
-                        "          FROM unnest(c.confkey) WITH ORDINALITY u(attnum, ord) "
-                        "          JOIN pg_attribute a ON a.attrelid = c.confrelid AND a.attnum = u.attnum) AS pcols "
-                        "FROM pg_constraint c "
-                        "WHERE c.contype = 'f' AND c.connamespace = 'public'::regnamespace"
+                        "DO $$ DECLARE r RECORD; "
+                        "BEGIN FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public') LOOP "
+                        "EXECUTE 'DROP TABLE IF EXISTS public.' || quote_ident(r.tablename) || ' CASCADE'; "
+                        "END LOOP; END $$;"
                     )
                 )
-            ).all()
-            saved_db_fks = [(r[0], r[1], r[2], r[3], list(r[4]), list(r[5])) for r in rows]
-            for tbl, conname, *_ in saved_db_fks:
-                await conn.execute(text(f'ALTER TABLE {tbl} DROP CONSTRAINT "{conname}"'))
-            logger.info("Dropped %d foreign keys for the duration of the import", len(saved_db_fks))
+            else:
+                await conn.run_sync(metadata.drop_all)
+                await conn.run_sync(reflected.drop_all)
+            # The file's schema, at the file's level — see _reflect_sqlite_schema.
+            await conn.run_sync(reflected.create_all)
 
-    # Phase 2: Import data
-    imported = 0
-    async with engine.begin() as conn:
-        for table_name in sorted_tables:
-            rows = src.execute(f"SELECT * FROM {table_name}").fetchall()  # noqa: S608
-            if not rows:
-                continue
+            # Now strip the foreign keys from the catalogue itself, remembering each
+            # definition verbatim so Phase 3 can put it back exactly as PostgreSQL
+            # rendered it. ``pg_get_constraintdef`` gives us the full
+            # ``FOREIGN KEY (...) REFERENCES ... ON DELETE ...`` clause. This is the
+            # one place FKs are handled — see the note at the end of
+            # ``_reflect_sqlite_schema`` for why it cannot be done on the metadata.
+            saved_db_fks = []
+            if is_postgres():
+                rows = (
+                    await conn.execute(
+                        text(
+                            "SELECT c.conrelid::regclass::text AS child, c.conname, "
+                            "       pg_get_constraintdef(c.oid) AS cdef, "
+                            "       c.confrelid::regclass::text AS parent, "
+                            "       (SELECT array_agg(a.attname ORDER BY u.ord) "
+                            "          FROM unnest(c.conkey) WITH ORDINALITY u(attnum, ord) "
+                            "          JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = u.attnum) AS ccols, "
+                            "       (SELECT array_agg(a.attname ORDER BY u.ord) "
+                            "          FROM unnest(c.confkey) WITH ORDINALITY u(attnum, ord) "
+                            "          JOIN pg_attribute a ON a.attrelid = c.confrelid AND a.attnum = u.attnum) AS pcols "
+                            "FROM pg_constraint c "
+                            "WHERE c.contype = 'f' AND c.connamespace = 'public'::regnamespace"
+                        )
+                    )
+                ).all()
+                saved_db_fks = [(r[0], r[1], r[2], r[3], list(r[4]), list(r[5])) for r in rows]
+                for tbl, conname, *_ in saved_db_fks:
+                    await conn.execute(text(f'ALTER TABLE {tbl} DROP CONSTRAINT "{conname}"'))
+                logger.info("Dropped %d foreign keys for the duration of the import", len(saved_db_fks))
 
-            # Every source column exists in PostgreSQL now — the target IS the
-            # file's schema. The intersection stays as a belt-and-braces check.
-            src_columns = rows[0].keys()
-            pg_table = reflected.tables.get(table_name)
-            if pg_table is None:
-                continue
-            pg_columns = {c.name for c in pg_table.columns}
-            columns = [c for c in src_columns if c in pg_columns]
-            if not columns:
-                continue
-
-            col_list = ", ".join(columns)
-            param_list = ", ".join(f":{c}" for c in columns)
-            insert_sql = text(
-                f"INSERT INTO {table_name} ({col_list}) VALUES ({param_list}) ON CONFLICT DO NOTHING"  # noqa: S608
-            )
-
-            # Identify type conversions needed
-            bool_columns = set()
-            datetime_columns = set()
-            not_null_defaults: dict[str, object] = {}
-
-            for col in pg_table.columns:
-                if col.name not in columns:
+            # Phase 2: Import data
+            imported = 0
+            for table_name in sorted_tables:
+                cursor = src.execute(f"SELECT * FROM {_quote(table_name)}")  # noqa: S608
+                rows = cursor.fetchmany(500)
+                if not rows:
                     continue
-                col_type = str(col.type).upper()
-                if col_type == "BOOLEAN":
-                    bool_columns.add(col.name)
-                elif "TIMESTAMP" in col_type or col_type == "DATETIME":
-                    datetime_columns.add(col.name)
-                if not col.nullable and col.default is not None:
-                    default = col.default.arg
-                    if callable(default):
-                        default = default(None)
-                    not_null_defaults[col.name] = default
-                elif not col.nullable and col.server_default is not None:
-                    if col.name in datetime_columns:
-                        not_null_defaults[col.name] = "__now__"
 
-            now = datetime.now()  # noqa: DTZ005
+                # Every source column exists in PostgreSQL now — the target IS the
+                # file's schema. The intersection stays as a belt-and-braces check.
+                src_columns = rows[0].keys()
+                pg_table = reflected.tables.get(table_name)
+                if pg_table is None:
+                    continue
+                pg_columns = {c.name for c in pg_table.columns}
+                columns = [c for c in src_columns if c in pg_columns]
+                if not columns:
+                    continue
 
-            def _convert_row(row, cols=columns, bools=bool_columns, dts=datetime_columns, nn=not_null_defaults, _n=now):
-                result = {}
-                for c in cols:
-                    val = row[c]
-                    if val is None and c in nn:
-                        val = _n if nn[c] == "__now__" else nn[c]
-                    if val is not None:
-                        if c in bools:
-                            val = bool(val)
-                        elif c in dts and isinstance(val, str):
-                            try:
-                                val = datetime.fromisoformat(val)  # noqa: DTZ011
-                            except ValueError:
-                                pass
-                    result[c] = val
-                return result
+                col_list = ", ".join(_quote(c) for c in columns)
+                param_list = ", ".join(f":{c}" for c in columns)
+                insert_sql = text(
+                    f"INSERT INTO {_quote(table_name)} ({col_list}) VALUES ({param_list})"  # noqa: S608
+                )
 
-            batch = [_convert_row(row) for row in rows]
-            await conn.execute(insert_sql, batch)
-            imported += 1
-            logger.info("Imported %d rows into %s", len(batch), table_name)
+                # Identify type conversions needed
+                bool_columns = set()
+                datetime_columns = set()
+                not_null_defaults: dict[str, object] = {}
 
-        # Reset sequences to max(id) + 1
-        for table_name in sorted_tables:
-            try:
-                async with conn.begin_nested():
-                    result = await conn.execute(text(f"SELECT MAX(id) FROM {table_name}"))  # noqa: S608
-                    max_id = result.scalar()
-                    if max_id is not None:
-                        await conn.execute(text(f"SELECT setval('{table_name}_id_seq', {max_id})"))  # noqa: S608
-            except Exception:
-                pass  # Table may not have an id column or sequence
+                for col in pg_table.columns:
+                    if col.name not in columns:
+                        continue
+                    col_type = str(col.type).upper()
+                    if col_type == "BOOLEAN":
+                        bool_columns.add(col.name)
+                    elif "TIMESTAMP" in col_type or col_type == "DATETIME":
+                        datetime_columns.add(col.name)
+                    if not col.nullable and col.default is not None:
+                        default = col.default.arg
+                        if callable(default):
+                            default = default(None)
+                        not_null_defaults[col.name] = default
+                    elif not col.nullable and col.server_default is not None:
+                        if col.name in datetime_columns:
+                            not_null_defaults[col.name] = "__now__"
 
-    src.close()
+                now = datetime.now()  # noqa: DTZ005
 
-    # Phase 3: Put the foreign keys back, exactly as they were. One that the
-    # rows forbid is repaired the way the key itself would have — see
-    # _add_foreign_key — and one that still fails stops the import: a database
-    # silently missing constraints is a worse outcome than a migration that
-    # stops and says why.
-    if is_postgres():
-        failed, repaired = [], []
-        model_rules = _model_fk_rules(metadata)
-        for tbl, conname, cdef, parent, ccols, pcols in saved_db_fks:
-            ddl = f'ALTER TABLE {tbl} ADD CONSTRAINT "{conname}" {cdef}'
-            # The repair follows the MODEL's ON DELETE rule for this key where
-            # the model still has it — the file's own spelling rarely carries
-            # one (SQLite never enforced it), and conform_imported_schema is
-            # about to rewrite the key the model's way regardless.
-            file_rule = "SET NULL" if "ON DELETE SET NULL" in cdef.upper() else ""
-            rule = model_rules.get((tbl, tuple(ccols)), (file_rule, ""))[0]
-            err = await _add_foreign_key(engine, tbl, conname, ddl, parent, ccols, pcols, rule == "SET NULL", repaired)
-            if err:
-                failed.append(err)
-        if failed:
-            raise RuntimeError(
-                f"{len(failed)} foreign key(s) could not be restored after import: {'; '.join(failed[:5])}"
-            )
-        logger.info("Restored %d foreign keys", len(saved_db_fks))
-        if repaired:
-            logger.warning("Import repaired orphaned rows the source database was carrying: %s", "; ".join(repaired))
+                def _convert_row(
+                    row, cols=columns, bools=bool_columns, dts=datetime_columns, nn=not_null_defaults, _n=now
+                ):
+                    result = {}
+                    for c in cols:
+                        val = row[c]
+                        if val is None and c in nn:
+                            val = _n if nn[c] == "__now__" else nn[c]
+                        if val is not None:
+                            if c in bools:
+                                val = bool(val)
+                            elif c in dts and isinstance(val, str):
+                                try:
+                                    val = datetime.fromisoformat(val)  # noqa: DTZ011
+                                except ValueError:
+                                    pass
+                        result[c] = val
+                    return result
 
-    # What the models declare beyond the file — indexes reflection could not
-    # carry, foreign keys no migration ever created — is added AFTER the
-    # pending migrations, when the tables they belong to exist. See
-    # conform_imported_schema.
-    _request_conform()
+                count = 0
+                while rows:
+                    batch = [_convert_row(row) for row in rows]
+                    await conn.execute(insert_sql, batch)
+                    count += len(batch)
+                    rows = cursor.fetchmany(500)
+                imported += 1
+                logger.info("Imported %d rows into %s", count, table_name)
 
-    logger.info("Cross-database import complete: %d tables imported", imported)
-    return imported
+            # New tables have new sequences: reset only the ones that actually
+            # exist, and fail the transaction if one cannot be restored.
+            if is_postgres():
+                for table_name in sorted_tables:
+                    if "id" not in reflected.tables[table_name].c:
+                        continue
+                    sequence = (
+                        await conn.execute(
+                            text("SELECT pg_get_serial_sequence(:table, 'id')"), {"table": _quote(table_name)}
+                        )
+                    ).scalar()
+                    if sequence:
+                        max_id = (await conn.execute(text(f"SELECT MAX(id) FROM {_quote(table_name)}"))).scalar()  # noqa: S608
+                        if max_id is not None:
+                            await conn.execute(
+                                text("SELECT setval(:sequence, :value)"), {"sequence": sequence, "value": max_id}
+                            )
+
+            # Phase 3: Put the foreign keys back, exactly as they were. One that the
+            # rows forbid is repaired the way the key itself would have — see
+            # _add_foreign_key — and one that still fails stops the import: a database
+            # silently missing constraints is a worse outcome than a migration that
+            # stops and says why.
+            if is_postgres():
+                failed, repaired = [], []
+                model_rules = _model_fk_rules(metadata)
+                for tbl, conname, cdef, parent, ccols, pcols in saved_db_fks:
+                    ddl = f'ALTER TABLE {tbl} ADD CONSTRAINT "{conname}" {cdef}'
+                    # The repair follows the MODEL's ON DELETE rule for this key where
+                    # the model still has it — the file's own spelling rarely carries
+                    # one (SQLite never enforced it), and conform_imported_schema is
+                    # about to rewrite the key the model's way regardless.
+                    file_rule = "SET NULL" if "ON DELETE SET NULL" in cdef.upper() else ""
+                    rule = model_rules.get((tbl, tuple(ccols)), (file_rule, ""))[0]
+                    err = await _add_foreign_key(
+                        engine, tbl, conname, ddl, parent, ccols, pcols, rule == "SET NULL", repaired, connection=conn
+                    )
+                    if err:
+                        failed.append(err)
+                if failed:
+                    raise RuntimeError(
+                        f"{len(failed)} foreign key(s) could not be restored after import: {'; '.join(failed[:5])}"
+                    )
+                logger.info("Restored %d foreign keys", len(saved_db_fks))
+                if repaired:
+                    logger.warning(
+                        "Import repaired orphaned rows the source database was carrying: %s", "; ".join(repaired)
+                    )
+
+        # What the models declare beyond the file — indexes reflection could not
+        # carry, foreign keys no migration ever created — is added AFTER the
+        # pending migrations, when the tables they belong to exist. See
+        # conform_imported_schema.
+        _request_conform()
+
+        logger.info("Cross-database import complete: %d tables imported", imported)
+        return imported
 
 
 async def _local_sqlite_candidate(data_dir) -> Path | None:

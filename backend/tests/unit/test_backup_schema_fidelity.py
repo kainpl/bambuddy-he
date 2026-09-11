@@ -106,6 +106,9 @@ class TestPortableExportEndToEnd:
             "CREATE TABLE settings (id INTEGER PRIMARY KEY, key TEXT, value TEXT, created_at TEXT, updated_at TEXT)"
         )
         raw.execute("INSERT INTO settings (key, value, created_at, updated_at) VALUES ('k', 'v', NULL, NULL)")
+        raw.execute(
+            "CREATE TABLE _migrations (id INTEGER PRIMARY KEY, version INTEGER NOT NULL UNIQUE, name VARCHAR(100) NOT NULL, applied_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
+        )
         raw.commit()
         raw.close()
 
@@ -136,9 +139,8 @@ class TestPortableExportEndToEnd:
             out.close()
 
     @pytest.mark.asyncio
-    async def test_sqlite_source_still_file_copies(self, tmp_path, monkeypatch):
-        """The SQLite branch is untouched — it copies the live file, which is
-        already full-fidelity."""
+    async def test_sqlite_source_uses_online_backup(self, tmp_path, monkeypatch):
+        """The SQLite online snapshot carries the source schema."""
         from sqlalchemy.ext.asyncio import create_async_engine
 
         from backend.app.core import db_portable
@@ -146,6 +148,9 @@ class TestPortableExportEndToEnd:
         src_path = tmp_path / "live.db"
         raw = sqlite3.connect(str(src_path))
         raw.execute("CREATE TABLE marker (id INTEGER PRIMARY KEY)")
+        raw.execute(
+            "CREATE TABLE _migrations (id INTEGER PRIMARY KEY, version INTEGER NOT NULL UNIQUE, name VARCHAR(100) NOT NULL, applied_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
+        )
         raw.commit()
         raw.close()
 
@@ -228,6 +233,9 @@ class TestPortableRoundTripCarriesProductsAndOrders:
         try:
             Base.metadata.create_all(src_sync)
             with src_sync.begin() as conn:
+                conn.exec_driver_sql(
+                    "CREATE TABLE _migrations (id INTEGER PRIMARY KEY, version INTEGER NOT NULL UNIQUE, name VARCHAR(100) NOT NULL, applied_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
+                )
                 conn.exec_driver_sql("INSERT INTO customers (id, name) VALUES (1, 'ACME')")
                 conn.exec_driver_sql("INSERT INTO products (id, name, is_active) VALUES (1, 'Lamp', 1)")
                 conn.exec_driver_sql(
