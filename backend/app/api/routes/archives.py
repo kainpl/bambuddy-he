@@ -40,6 +40,7 @@ from backend.app.schemas.plate_objects import PlateObjectsResponse
 from backend.app.schemas.project import StockMovedOut
 from backend.app.services import archive_aggregate, part_stock
 from backend.app.services.archive import ArchiveService, resolve_display_stem
+from backend.app.services.archive_defects import DefectsWrite, record_defects
 from backend.app.services.design_settings import overrides_from_config
 from backend.app.services.filament_cost import default_rate_per_kg
 from backend.app.services.smart_plug_manager import smart_plug_manager
@@ -1524,23 +1525,26 @@ async def update_archive(
         if stale is None or stale.project_id != update_data.project_id:
             archive.project_line_id = None
 
-    # parts_defective is not a PrintArchive column — it is applied separately
-    # below against PrintArchivePart rows and must never reach setattr.
-    for field, value in update_data.model_dump(exclude_unset=True, exclude={"parts_defective"}).items():
+    # ``parts_defective`` and ``defective_count`` are the defects writer's
+    # (services/archive_defects), not columns to setattr — the writer clamps,
+    # sums the rows and tells the shelf.
+    for field, value in update_data.model_dump(
+        exclude_unset=True, exclude={"parts_defective", "defective_count"}
+    ).items():
         setattr(archive, field, value)
 
-    if update_data.parts_defective:
-        rows = (
-            (await db.execute(select(PrintArchivePart).where(PrintArchivePart.archive_id == archive.id)))
-            .scalars()
-            .all()
+    if update_data.parts_defective or (
+        "defective_count" in update_data.model_fields_set and update_data.defective_count is not None
+    ):
+        await record_defects(
+            db,
+            archive,
+            DefectsWrite(
+                parts=tuple((item.id, item.defective) for item in update_data.parts_defective or ()),
+                flat=update_data.defective_count,
+            ),
+            actor_id=user.id if user else None,
         )
-        by_id = {r.id: r for r in rows}
-        for item in update_data.parts_defective:
-            row = by_id.get(item.id)  # foreign ids are ignored, not an error
-            if row is not None:
-                row.defective = min(item.defective, row.quantity)
-        archive.defective_count = sum(r.defective or 0 for r in rows)
 
     if filed_under_order:
         try:

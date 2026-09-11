@@ -7,6 +7,8 @@ from sqlalchemy import select
 
 from backend.app.models.archive import PrintArchive
 from backend.app.models.archive_part import PrintArchivePart
+from backend.app.models.product import Product, ProductPart, ProductPlate
+from backend.app.services.part_stock import balances, credit_unfiled_print
 
 pytestmark = pytest.mark.integration
 
@@ -111,3 +113,43 @@ async def test_a_foreign_part_row_id_is_rejected(async_client, printer_factory, 
     assert resp.status_code == 200, "foreign ids are ignored, not an error"
     await db_session.refresh(other_row)
     assert other_row.defective == 0
+
+
+@pytest.mark.asyncio
+async def test_patching_defects_on_a_credited_print_corrects_the_shelf(async_client, printer_factory, db_session):
+    """The archive editor was the one door that wrote defects without the ledger
+    hearing about it. A print credited as 2 lids, then marked 1 bad, must leave
+    1 lid on the shelf."""
+    printer = await printer_factory()
+    product = Product(name="Widget")
+    db_session.add(product)
+    await db_session.flush()
+    lid = ProductPart(product_id=product.id, kind="printed", name="lid", name_key="lid", qty_per_unit=1, sort_order=0)
+    db_session.add_all([lid, ProductPlate(product_id=product.id, library_file_id=77, plate_index=0)])
+    await db_session.flush()
+    product_id, lid_id = product.id, lid.id
+    archive = await _archive_with_parts(db_session, printer.id, {"lid": 2})
+    archive.library_file_id = 77
+    archive.plate_index = 1
+    await db_session.commit()
+    archive_id = archive.id
+    await credit_unfiled_print(db_session, archive)
+    await db_session.commit()
+    assert await balances(db_session, product_id) == {lid_id: 2}
+    row = (
+        await db_session.execute(select(PrintArchivePart).where(PrintArchivePart.archive_id == archive_id))
+    ).scalar_one()
+
+    resp = await async_client.patch(
+        f"/api/v1/archives/{archive_id}", json={"parts_defective": [{"id": row.id, "defective": 1}]}
+    )
+
+    assert resp.status_code == 200, resp.text
+    # ``expire_all`` forces the next reads off the DB (the API used a different
+    # session) — but only via a fresh query, never a stale attribute: an
+    # expired instance's attribute cannot be lazy-loaded outside the async
+    # greenlet (``MissingGreenlet``), so the ids used below were captured
+    # while the instances were still fresh.
+    db_session.expire_all()
+    assert await balances(db_session, product_id) == {lid_id: 1}
+    assert (await db_session.get(PrintArchive, archive_id)).defective_count == 1
