@@ -18,8 +18,9 @@ from backend.app.services.camera import (
 
 
 @pytest.fixture(autouse=True)
-def _clear_capture_pids():
+def _clear_capture_pids(monkeypatch):
     """Ensure _active_capture_pids is empty before/after each test."""
+    monkeypatch.setattr("backend.app.services.camera_tls.close_tls_proxy", AsyncMock())
     _active_capture_pids.clear()
     yield
     _active_capture_pids.clear()

@@ -835,5 +835,6 @@
   "{} not supported on this printer": "{} не підтримується на цьому принтері",
   "{} partially applied: {}/{} spools updated": "{} застосовано частково: оновлено {}/{} котушок",
   "{} target must be 0 (off) or between {} and {} °C": "Ціль {} має бути 0 (вимкнено) або в діапазоні від {} до {} °C",
-  "{}: '{}' must be a list": "{}: «{}» має бути списком"
+  "{}: '{}' must be a list": "{}: «{}» має бути списком",
+  "Invalid backup database: damaged or incompatible. Check server logs.": "Некоректна база резервної копії: файл пошкоджений або несумісний. Перевірте журнали сервера."
 }
