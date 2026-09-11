@@ -105,7 +105,7 @@ def build_loaded_filaments(status) -> list[dict]:
     """Build the loaded-filaments list from a printer status object.
 
     Each entry: ``{type, color, tray_info_idx, ams_id, tray_id, is_ht,
-    is_external, global_tray_id, extruder_id, remain}``.
+    is_external, global_tray_id, extruder_id, remain, tray_uuid, tag_uid}``.
 
     Mirrors upstream ``PrintScheduler._build_loaded_filaments``.
     """
@@ -135,6 +135,10 @@ def build_loaded_filaments(status) -> list[dict]:
                     "global_tray_id": global_tray_id,
                     "extruder_id": ams_extruder_map.get(str(ams_id)),
                     "remain": tray.get("remain", -1),
+                    # The spool's identity, for anything that must say "still the
+                    # same spool" across syncs (the low-filament announcement).
+                    "tray_uuid": tray.get("tray_uuid", ""),
+                    "tag_uid": tray.get("tag_uid", ""),
                 }
             )
 
@@ -154,6 +158,8 @@ def build_loaded_filaments(status) -> list[dict]:
                 "global_tray_id": tray_id,
                 "extruder_id": (255 - tray_id) if ams_extruder_map else None,
                 "remain": vt.get("remain", -1),
+                "tray_uuid": vt.get("tray_uuid", ""),
+                "tag_uid": vt.get("tag_uid", ""),
             }
         )
 

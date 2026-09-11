@@ -1044,6 +1044,66 @@ class PrintScheduler:
             return {}
         return overrides
 
+    async def _inventory_label_weights(self, db: AsyncSession, printer_id: int, loaded: list[dict]) -> dict[int, float]:
+        """``{global_tray_id: label_weight_grams}`` for the same bound slots
+        ``_build_inventory_remain_overrides`` answers for — BamDude ``label_weight``
+        or Spoolman ``initial_weight``. The low-filament threshold
+        (``services/filament_low.py``) turns the two into a percent, so that
+        event reads the SAME remaining figure prefer-lowest does, not a fourth.
+        Best-effort: ``{}`` on any failure; a slot without a known weight is absent.
+        """
+        if not loaded:
+            return {}
+        tracked_slots = [(f["ams_id"], f["tray_id"], f["global_tray_id"]) for f in loaded if not f.get("is_external")]
+        if not tracked_slots:
+            return {}
+        weights: dict[int, float] = {}
+        try:
+            if await self._is_spoolman_mode(db):
+                result = await db.execute(
+                    select(SpoolmanSlotAssignment).where(SpoolmanSlotAssignment.printer_id == printer_id)
+                )
+                by_slot = {(a.ams_id, a.tray_id): a.spoolman_spool_id for a in result.scalars().all()}
+                if not by_slot:
+                    return {}
+                from backend.app.services.spoolman import get_spoolman_client
+
+                client = await get_spoolman_client()
+                if client is None:
+                    return {}
+                for ams_id, tray_id, gtid in tracked_slots:
+                    spoolman_id = by_slot.get((ams_id, tray_id))
+                    if spoolman_id is None:
+                        continue
+                    try:
+                        spool = await client.get_spool(spoolman_id)
+                    except Exception:  # noqa: BLE001
+                        continue
+                    initial = (
+                        spool.get("initial_weight")
+                        if isinstance(spool, dict)
+                        else getattr(spool, "initial_weight", None)
+                    )
+                    if initial:
+                        weights[gtid] = float(initial)
+                return weights
+
+            result = await db.execute(
+                select(SpoolAssignment)
+                .options(selectinload(SpoolAssignment.spool))
+                .where(SpoolAssignment.printer_id == printer_id)
+            )
+            by_slot = {(a.ams_id, a.tray_id): a.spool for a in result.scalars().all()}
+            for ams_id, tray_id, gtid in tracked_slots:
+                spool = by_slot.get((ams_id, tray_id))
+                if spool is None or not spool.label_weight:
+                    continue
+                weights[gtid] = float(spool.label_weight)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("inventory label weights failed for printer %s: %s", printer_id, e)
+            return {}
+        return weights
+
     @staticmethod
     async def _is_spoolman_mode(db: AsyncSession) -> bool:
         """True when the install is in Spoolman inventory mode."""

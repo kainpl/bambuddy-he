@@ -2136,6 +2136,16 @@ async def on_ams_change(printer_id: int, ams_data: list):
     except Exception as e:
         logger.warning("Failed to broadcast AMS change for printer %s: %s", printer_id, e)
 
+    # The low-filament threshold (``services/filament_low.py``): a slot that
+    # crossed it announces once. Best-effort — never in the way of the sync.
+    try:
+        from backend.app.services.filament_low import check_printer as _check_filament_low
+
+        async with async_session() as db:
+            await _check_filament_low(db, printer_id)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("filament_low check skipped for printer %s: %s", printer_id, e)
+
     from backend.app.utils.color_utils import colors_similar as _colors_similar
 
     # Auto-unlink spool assignments with stale fingerprints
