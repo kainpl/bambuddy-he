@@ -5,6 +5,7 @@
 - **Automatically generated passwords are now shuffled with a cryptographic generator.** Advanced authentication and the password-recovery e-mail create a password for you. Every character in it was drawn securely, but their final ORDER was decided by Python's general-purpose random generator, whose internal state can be reconstructed from its output — and the arrangement matters here, because the first four positions are known by construction to hold one lower-case letter, one upper-case, one digit and one special character. Nothing needs to be re-issued; passwords already sent remain 16 characters drawn from a secure source.
 
 - **Frontend dependencies bumped on Dependabot security advisories:** `@tiptap/core` 3.19 → 3.31, `fflate` 0.8.2 → 0.8.3, `@humanfs/node` 0.16.7 → 0.16.8 (transitive; the rich-text editor and the 3MF reader keep working as before).
+- **A second round of frontend dependency bumps:** `vitest` 4.1.9 → 4.1.11 with its coverage plugin and mocker (a path-traversal advisory in the test mocker — development only), `js-yaml` 4.3.1 → 4.3.2 (a CPU-exhaustion advisory), `@tiptap/core` 3.31.0 → 3.31.3 and `baseline-browser-mapping` 2.11.21 → 2.11.22. `npm audit` reports nothing; the test suite passes on the new runner.
 
 ### Added
 
