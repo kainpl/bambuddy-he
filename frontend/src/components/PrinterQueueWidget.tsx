@@ -40,10 +40,16 @@ export function PrinterQueueWidget({ printerId, printerState, awaitingPlateClear
   const [defectFlat, setDefectFlat] = useState(0);
   const [defectsTouched, setDefectsTouched] = useState(false);
   const gateArmed = requirePlateClear && (printerState === 'FINISH' || printerState === 'FAILED') && !!awaitingPlateClear;
+  // Split into auto-dispatchable vs staged (manual_start) items. Read up here
+  // because the waiting-print query is gated on it: the counters live inside the
+  // `needsClearPlate` block, which also needs a non-empty auto queue, so a gate
+  // armed over an empty queue used to issue one GET per card that nobody read.
+  const autoDispatchQueue = queue?.filter(item => !item.manual_start) ?? [];
+  const totalPending = queue?.length || 0;
   const { data: waiting } = useQuery({
     queryKey: ['waiting-print', printerId],
     queryFn: () => api.getWaitingPrint(printerId),
-    enabled: gateArmed,
+    enabled: gateArmed && autoDispatchQueue.length > 0,
     retry: false,
   });
   useEffect(() => {
@@ -59,34 +65,55 @@ export function PrinterQueueWidget({ printerId, printerState, awaitingPlateClear
       ? { defects: { parts: waiting.parts.map((p) => ({ id: p.id, defective: defectValues[p.id] ?? 0 })) } }
       : { defects: { defective_count: defectFlat } };
   };
-  const afterAnswer = () => {
+  const afterAnswer = (ledgerRefused?: number) => {
     invalidateQueueViews(queryClient);
     queryClient.invalidateQueries({ queryKey: ['printerStatus', printerId] });
     queryClient.invalidateQueries({ queryKey: ['waiting-print', printerId] });
     // The shelf may have moved with the defects.
     invalidateOrderViews(queryClient);
+    // And so did the archive's defective count: the Archives page's column and
+    // the statistics page's «Defects by printer» both read it.
+    queryClient.invalidateQueries({ queryKey: ['archives'] });
+    queryClient.invalidateQueries({ queryKey: ['archiveStats'] });
+    queryClient.invalidateQueries({ queryKey: ['archiveAggregate'] });
     setDefectsTouched(false);
     setDefectsOpen(false);
+    // Reported here because here it can happen — the print on the plate is
+    // usually filed under no order, so its defects correct a free-stock credit,
+    // and parts already spent cannot come back off the shelf. After the success
+    // toast, so the operator reads "saved" first and then "fix the shelf".
+    if (ledgerRefused && ledgerRefused > 0) {
+      showToast(t('queue.defects.ledgerRefused', { count: ledgerRefused }), 'error');
+    }
+  };
+  // A refused answer rolls its defects back on the server (the write and the
+  // answer share one transaction), so the card must stop showing what it typed.
+  const afterFailedAnswer = () => {
+    queryClient.invalidateQueries({ queryKey: ['waiting-print', printerId] });
   };
 
   // The other answer to a full plate — see services/plate_hold on the backend.
   const repeatPrintMutation = useMutation({
     mutationFn: () => api.repeatPrint(printerId, defectsBody()),
-    onSuccess: () => {
-      afterAnswer();
+    onSuccess: (result) => {
       showToast(t('queue.repeatPrintSuccess'), 'success');
+      afterAnswer(result.ledger_refused_parts);
     },
-    onError: (error: Error) => showToast(error.message, 'error'),
+    onError: (error: Error) => {
+      showToast(error.message, 'error');
+      afterFailedAnswer();
+    },
   });
 
   const clearPlateMutation = useMutation({
     mutationFn: () => api.clearPlate(printerId, defectsBody()),
-    onSuccess: () => {
-      afterAnswer();
+    onSuccess: (result) => {
       showToast(t('queue.clearPlateSuccess'), 'success');
+      afterAnswer(result.ledger_refused_parts);
     },
     onError: (err: Error) => {
       showToast(err.message, 'error');
+      afterFailedAnswer();
     },
   });
 
@@ -98,10 +125,6 @@ export function PrinterQueueWidget({ printerId, printerState, awaitingPlateClear
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [printerState]);
-
-  // Split into auto-dispatchable vs staged (manual_start) items
-  const autoDispatchQueue = queue?.filter(item => !item.manual_start) ?? [];
-  const totalPending = queue?.length || 0;
 
   if (totalPending === 0) {
     return null;
@@ -116,11 +139,17 @@ export function PrinterQueueWidget({ printerId, printerState, awaitingPlateClear
     const displayItem = nextAutoItem || nextItem;
     // The touched total wins over the server's count the moment the operator
     // types — same semantics as the toggle label the brief specifies.
-    const shownDefects = waiting
-      ? defectsTouched
-        ? Object.values(defectValues).reduce((a, n) => a + n, 0) || defectFlat
-        : waiting.defective_count
-      : 0;
+    // ⚠️ Branch on whether the print HAS part rows, exactly as `defectsBody()`
+    // does — never `sum || defectFlat`: zeroing every counter makes the sum 0,
+    // and the `||` then fell through to the server-seeded flat count, so the
+    // toggle kept advertising the old total while every field read 0.
+    const shownDefects = !waiting
+      ? 0
+      : !defectsTouched
+        ? waiting.defective_count
+        : waiting.parts.length > 0
+          ? Object.values(defectValues).reduce((a, n) => a + n, 0)
+          : defectFlat;
     return (
       <div className="mb-3 p-3 bg-bambu-dark rounded-lg border border-yellow-400/30">
         <div className="flex items-center gap-3 mb-2">

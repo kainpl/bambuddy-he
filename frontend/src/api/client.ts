@@ -1060,8 +1060,6 @@ export interface OrderPrintDefects {
   quantity: number;
   defective_count: number;
   parts: ArchivePart[];
-  /** Product parts whose shelf correction was refused (stock already spent). */
-  ledger_refused_parts: number;
 }
 
 export interface WaitingPrint {
@@ -7249,18 +7247,28 @@ export const api = {
     }),
   // Both answers to a full plate may carry the print's defects (spec 2026-09-11 §5);
   // without a body they behave exactly as before.
+  // `ledger_refused_parts` counts the product parts whose free-stock correction
+  // the ledger refused (already spent) — the answer's defects were saved either
+  // way, and the operator is told there is a hand correction to make. 0 when no
+  // defects travelled with the answer, and absent on an older backend.
   clearPlate: (printerId: number, body?: { defects: DefectsWriteBody }) =>
-    request<{ success: boolean; message: string }>(`/printers/${printerId}/clear-plate`, {
-      method: 'POST',
-      ...(body ? { body: JSON.stringify(body) } : {}),
-    }),
+    request<{ success: boolean; message: string; ledger_refused_parts?: number }>(
+      `/printers/${printerId}/clear-plate`,
+      {
+        method: 'POST',
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      },
+    ),
   // The other answer to a full plate: re-arm the job that just finished and
   // print it again. Same permission as clearPlate — two answers, one question.
   repeatPrint: (printerId: number, body?: { defects: DefectsWriteBody }) =>
-    request<{ success: boolean; item_id: number }>(`/printers/${printerId}/repeat-print`, {
-      method: 'POST',
-      ...(body ? { body: JSON.stringify(body) } : {}),
-    }),
+    request<{ success: boolean; item_id: number; ledger_refused_parts?: number }>(
+      `/printers/${printerId}/repeat-print`,
+      {
+        method: 'POST',
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      },
+    ),
   getWaitingPrint: (printerId: number) => request<WaitingPrint>(`/printers/${printerId}/waiting-print`),
   startCalibration: (printerId: number, options: {
     bed_leveling?: boolean;

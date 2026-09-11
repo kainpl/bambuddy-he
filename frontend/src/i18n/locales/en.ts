@@ -259,6 +259,7 @@ export default {
     close: 'Close',
     confirm: 'Confirm',
     loading: 'Loading...',
+    retry: 'Retry',
     reconnecting: 'Reconnecting…',
     gramShort: 'g',
     error: 'Error',
@@ -1521,6 +1522,10 @@ export default {
       toggle: 'Defects in this print',
       toggleWithCount_one: 'Defects in this print: {{count}}',
       toggleWithCount_other: 'Defects in this print: {{count}}',
+      // Reported where a refusal can actually happen: the print on the plate is
+      // usually filed under no order, so its defects correct a free-stock credit.
+      ledgerRefused_one: 'The shelf could not be corrected for {{count}} part — it was already spent; fix it by hand on the product page',
+      ledgerRefused_other: 'The shelf could not be corrected for {{count}} parts — they were already spent; fix them by hand on the product page',
     },
     // Sections
     // Status
@@ -5262,8 +5267,6 @@ export default {
         save: 'Save',
         saved_one: '{{count}} defective part recorded',
         saved_other: '{{count}} defective parts recorded',
-        ledgerRefused_one: 'The shelf could not be corrected for {{count}} part — it was already spent; fix it by hand on the product page',
-        ledgerRefused_other: 'The shelf could not be corrected for {{count}} parts — they were already spent; fix them by hand on the product page',
       },
     },
     queue: {

@@ -326,10 +326,9 @@ describe('OrderPrints', () => {
         { id: 11, name: 'lid', name_key: 'lid', quantity: 2, defective: 0 },
         { id: 12, name: 'base', name_key: 'base', quantity: 4, defective: 2 },
       ],
-      ledger_refused_parts: 0,
     });
     const record = vi.spyOn(api, 'recordOrderPrintDefects').mockResolvedValue({
-      archive_id: 1, quantity: 6, defective_count: 3, parts: [], ledger_refused_parts: 0,
+      archive_id: 1, quantity: 6, defective_count: 3, parts: [],
     });
     const order = {
       id: 1,
@@ -359,10 +358,10 @@ describe('OrderPrints', () => {
       { id: 2, filename: 'b.3mf', status: 'completed', project_line_id: 10, quantity: 3, defective_count: 0 },
     ] as never);
     vi.spyOn(api, 'getOrderPrintParts').mockResolvedValue({
-      archive_id: 2, quantity: 3, defective_count: 0, parts: [], ledger_refused_parts: 0,
+      archive_id: 2, quantity: 3, defective_count: 0, parts: [],
     });
     const record = vi.spyOn(api, 'recordOrderPrintDefects').mockResolvedValue({
-      archive_id: 2, quantity: 3, defective_count: 1, parts: [], ledger_refused_parts: 0,
+      archive_id: 2, quantity: 3, defective_count: 1, parts: [],
     });
     const order = {
       id: 1, other_archive_ids: [], lines: [{ id: 10, product_name: 'Flask', quantity: 2, archive_ids: [2] }],
@@ -375,6 +374,42 @@ describe('OrderPrints', () => {
     fireEvent.click(screen.getByTestId('print-defects-save'));
 
     await waitFor(() => expect(record).toHaveBeenCalledWith(1, 2, { defective_count: 1 }));
+  });
+
+  it('a failed parts fetch says so and offers a retry instead of hanging on Loading', async () => {
+    // `const { data } = useQuery(...)` with no error branch left the dialog on
+    // «Loading…» for ever, Save disabled and Cancel the only exit.
+    vi.spyOn(api, 'getProjectArchives').mockResolvedValue([
+      { id: 3, filename: 'c.3mf', status: 'completed', project_line_id: 10, quantity: 2, defective_count: 0 },
+    ] as never);
+    const parts = vi
+      .spyOn(api, 'getOrderPrintParts')
+      .mockRejectedValueOnce(new Error('Print not found in this order'))
+      .mockResolvedValue({
+        archive_id: 3,
+        quantity: 2,
+        defective_count: 0,
+        parts: [{ id: 31, name: 'lid', name_key: 'lid', quantity: 2, defective: 0 }],
+      });
+    const order = {
+      id: 1, other_archive_ids: [], lines: [{ id: 10, product_name: 'Flask', quantity: 1, archive_ids: [3] }],
+    } as unknown as Order;
+
+    render(<OrderPrints order={order} canEdit />);
+    fireEvent.click(await screen.findByTestId('print-menu-3'));
+    fireEvent.click(await screen.findByText('Defects…'));
+
+    // The boundary already translated the sentence — it is rendered, never
+    // branched on.
+    expect(await screen.findByText('Print not found in this order')).toBeInTheDocument();
+    expect(screen.getByTestId('print-defects-save')).toBeDisabled();
+    expect(screen.getByText('Cancel')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('Retry'));
+
+    await waitFor(() => expect(parts.mock.calls.length).toBeGreaterThan(1));
+    expect(await screen.findByTestId('part-defective-31')).toBeInTheDocument();
+    expect(screen.getByTestId('print-defects-save')).not.toBeDisabled();
   });
 
   it('offers no menu at all without the permission', async () => {

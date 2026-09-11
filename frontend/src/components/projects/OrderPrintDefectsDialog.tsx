@@ -26,7 +26,7 @@ export function OrderPrintDefectsDialog({ orderId, archive, onClose }: OrderPrin
   const { showToast } = useToast();
   const queryClient = useQueryClient();
 
-  const { data } = useQuery({
+  const { data, isError, error, isFetching, refetch } = useQuery({
     queryKey: ['order-print-parts', orderId, archive.id],
     queryFn: () => api.getOrderPrintParts(orderId, archive.id),
   });
@@ -52,13 +52,20 @@ export function OrderPrintDefectsDialog({ orderId, archive, onClose }: OrderPrin
       return api.recordOrderPrintDefects(orderId, archive.id, body);
     },
     onSuccess: (result) => {
+      // No ledger-refusal toast here: a print reachable through the order route
+      // is filed under an order, and the shelf correction is a no-op for those
+      // by construction. The refusal is reported on the printer card and in
+      // Telegram, where an order-less print is graded.
       showToast(t('orders.prints.defects.saved', { count: result.defective_count }), 'success');
-      if (result.ledger_refused_parts > 0) {
-        showToast(t('orders.prints.defects.ledgerRefused', { count: result.ledger_refused_parts }), 'error');
-      }
       invalidateOrderViews(queryClient, { orderId });
       queryClient.invalidateQueries({ queryKey: ['archive-detail', archive.id] });
       queryClient.invalidateQueries({ queryKey: ['order-print-parts', orderId, archive.id] });
+      // The Archives page's defective column and the statistics page's
+      // «Defects by printer» read these; without them both keep the old numbers
+      // until something unrelated refetches.
+      queryClient.invalidateQueries({ queryKey: ['archives'] });
+      queryClient.invalidateQueries({ queryKey: ['archiveStats'] });
+      queryClient.invalidateQueries({ queryKey: ['archiveAggregate'] });
       onClose();
     },
     onError: (e: Error) => showToast(e.message, 'error'),
@@ -77,6 +84,16 @@ export function OrderPrintDefectsDialog({ orderId, archive, onClose }: OrderPrin
             flat={flat}
             onFlatChange={setFlat}
           />
+        ) : isError ? (
+          // A failed parts fetch used to leave the dialog on «Loading…» for
+          // ever, with Save disabled and Cancel the only exit. The message is
+          // already translated by the API boundary — rendered, never branched on.
+          <div className="space-y-2" data-testid="print-defects-error">
+            <p className="text-sm text-red-400">{(error as Error)?.message}</p>
+            <Button type="button" variant="secondary" onClick={() => refetch()} disabled={isFetching}>
+              {t('common.retry')}
+            </Button>
+          </div>
         ) : (
           <p className="text-sm text-bambu-gray">{t('common.loading')}</p>
         )}
