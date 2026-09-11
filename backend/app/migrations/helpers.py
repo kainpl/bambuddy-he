@@ -153,11 +153,42 @@ async def recreate_table(conn, table: str, new_ddl: str, columns_to_copy: str) -
         if missing:
             logger.info("recreate_table %s: skipping column(s) the table no longer has: %s", table, ", ".join(missing))
         copy_list = ", ".join(copied)
+        # ⚠️ The rebuild loses every index the DDL does not restate — a CREATE
+        # TABLE cannot carry named indexes — so m024's ix_auto_queue_status_position
+        # and three others vanished from long-lived installs the first time a
+        # later migration rebuilt their table (m172 puts those four back). Read
+        # the table's own indexes first and carry over the ones whose columns
+        # survive: an auto-index (UNIQUE / PRIMARY KEY, ``sql`` NULL) belongs to
+        # the new DDL, and an index on a dropped column stays dropped.
+        carried = await _sqlite_indexes_to_carry(conn, table, set(copied))
         await conn.execute(text(f"DROP TABLE IF EXISTS {tmp}"))
         await conn.execute(text(new_ddl.replace(f"CREATE TABLE {table}", f"CREATE TABLE {tmp}")))
         await conn.execute(text(f"INSERT INTO {tmp} ({copy_list}) SELECT {copy_list} FROM {table}"))
         await conn.execute(text(f"DROP TABLE {table}"))
         await conn.execute(text(f"ALTER TABLE {tmp} RENAME TO {table}"))
+        for index_sql in carried:
+            await conn.execute(text(index_sql))
+
+
+async def _sqlite_indexes_to_carry(conn, table: str, surviving_columns: set[str]) -> list[str]:
+    """The CREATE INDEX statements of ``table``'s explicit indexes whose columns
+    all survive a rebuild, rewritten with IF NOT EXISTS so a migration that
+    restates one of them afterwards does not collide."""
+    rows = await conn.execute(
+        text("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = :t AND sql IS NOT NULL"),
+        {"t": table},
+    )
+    carried: list[str] = []
+    for name, sql in rows.fetchall():
+        info = await conn.execute(text(f'PRAGMA index_info("{name}")'))
+        columns = {r[2] for r in info.fetchall() if r[2] is not None}
+        if not columns or not columns <= surviving_columns:
+            continue
+        head, sep, tail = sql.partition(" INDEX ")
+        if not sep:
+            continue
+        carried.append(sql if "IF NOT EXISTS" in sql.upper() else f"{head} INDEX IF NOT EXISTS {tail}")
+    return carried
 
 
 async def get_table_columns(conn, table: str) -> list[str]:
