@@ -328,31 +328,157 @@ async def test_a_gone_print_answers_gone(patched_session):
     assert cb.answer.await_args.args[0] == t("en", NS, "defects.gone")
 
 
-async def test_the_completion_message_offers_the_defects_button(patched_session, db_session):
-    """The button is `print_complete`'s alone — a failed plate has nothing good to grade."""
+def _button_data(markup):
+    return [b.callback_data for row in (markup.inline_keyboard if markup else []) for b in row]
+
+
+async def _ops_chat(db_session) -> None:
     from backend.app.models.group import Group
     from backend.app.models.telegram_chat import TelegramChat
-    from backend.app.services.notification_service import notification_service
 
-    archive = await _print(db_session, {"lid": 2})
     group = Group(name="Ops", permissions=["printers:clear_plate"])
     db_session.add(group)
     await db_session.flush()
     db_session.add(TelegramChat(chat_id=4242, group_id=group.id, is_active=True))
     await db_session.commit()
 
-    def _buttons(markup):
-        return [b.callback_data for row in (markup.inline_keyboard if markup else []) for b in row]
 
-    with (
+def _keyboard_env():
+    return (
         patch("backend.app.i18n.get_language", AsyncMock(return_value="en")),
         patch(
             "backend.app.services.printer_manager.printer_manager.is_awaiting_plate_clear",
             MagicMock(return_value=False),
         ),
-    ):
-        complete = await notification_service._build_telegram_actions("print_complete", 5, 4242)
-        failed = await notification_service._build_telegram_actions("print_failed", 5, 4242)
+    )
 
-    assert f"action:defects:{archive.id}" in _buttons(complete)
-    assert not any(data.startswith("action:defects:") for data in _buttons(failed))
+
+async def test_the_completion_message_offers_the_defects_button(patched_session, db_session):
+    """The button is `print_complete`'s alone — a failed plate has nothing good to grade."""
+    from backend.app.services.notification_service import notification_service
+
+    archive = await _print(db_session, {"lid": 2})
+    await _ops_chat(db_session)
+    extra = {"archive_id": archive.id}
+
+    p1, p2 = _keyboard_env()
+    with p1, p2:
+        complete = await notification_service._build_telegram_actions("print_complete", 5, 4242, extra)
+        failed = await notification_service._build_telegram_actions("print_failed", 5, 4242, extra)
+
+    assert f"action:defects:{archive.id}" in _button_data(complete)
+    assert not any(data.startswith("action:defects:") for data in _button_data(failed))
+
+
+async def test_the_button_names_the_archive_it_was_given_and_no_other(patched_session, db_session):
+    """The id comes from the notification, never from a query.
+
+    A printer-wide "newest completed archive" lookup got the PREVIOUS plate
+    whenever the announced print could not be identified — and every tap then
+    wrote defects, and a free-stock ledger correction, against the wrong print.
+    """
+    from backend.app.services.notification_service import notification_service
+
+    older = await _print(db_session, {"lid": 2})
+    newer = await _print(db_session, {"base": 1})
+    await _ops_chat(db_session)
+    older_id, newer_id = older.id, newer.id
+
+    p1, p2 = _keyboard_env()
+    with p1, p2:
+        markup = await notification_service._build_telegram_actions("print_complete", 5, 4242, {"archive_id": older_id})
+
+    assert f"action:defects:{older_id}" in _button_data(markup)
+    assert f"action:defects:{newer_id}" not in _button_data(markup), "not the newest — the one announced"
+
+
+async def test_a_completion_with_no_archive_gets_no_defects_button(patched_session, db_session):
+    """``main.py``'s no-archive path ("Could not find archive for print complete")
+    still sends the completion notification. A print we could not attach to an
+    archive must not be offered a grading button at all — there is nothing to
+    grade it against, and the old guess reached for the previous plate."""
+    from backend.app.services.notification_service import notification_service
+
+    await _print(db_session, {"lid": 2})
+    await _ops_chat(db_session)
+
+    p1, p2 = _keyboard_env()
+    with p1, p2:
+        no_extra = await notification_service._build_telegram_actions("print_complete", 5, 4242)
+        empty_extra = await notification_service._build_telegram_actions("print_complete", 5, 4242, {})
+
+    assert not any(data.startswith("action:defects:") for data in _button_data(no_extra))
+    assert not any(data.startswith("action:defects:") for data in _button_data(empty_extra))
+
+
+async def test_the_done_message_says_the_shelf_could_not_follow(patched_session, db_session):
+    """A refusal is reported where it happens.
+
+    The spec's rule is "callers log the refused parts and keep the defects; the
+    shelf is corrected by hand" — and half of it was missing: nothing told the
+    operator there was a hand correction to make. The count is read off the last
+    write, which is the standing list: ``adjust_unfiled_print`` recomputes the
+    whole archive against the shelf on every tap, so a part it refused once is
+    refused again until somebody fixes it.
+    """
+    from backend.app.models.product import Product, ProductPart, ProductPlate
+    from backend.app.services.part_stock import credit_unfiled_print, move
+    from backend.app.services.telegram_handlers.defects import cb_defects_set
+
+    product = Product(name="Widget")
+    db_session.add(product)
+    await db_session.flush()
+    db_session.add_all(
+        [
+            ProductPart(product_id=product.id, kind="printed", name="lid", name_key="lid", qty_per_unit=1),
+            ProductPlate(product_id=product.id, library_file_id=77, plate_index=0),
+        ]
+    )
+    archive = PrintArchive(
+        printer_id=5,
+        filename="p.3mf",
+        print_name="Plate",
+        file_path="x/p.3mf",
+        file_size=1,
+        status="completed",
+        library_file_id=77,
+        plate_index=1,
+        quantity=4,
+        completed_at=datetime.now(timezone.utc),
+    )
+    db_session.add(archive)
+    await db_session.flush()
+    row = PrintArchivePart(archive_id=archive.id, name="lid", name_key="lid", quantity=4)
+    db_session.add(row)
+    await db_session.flush()
+    await credit_unfiled_print(db_session, archive)
+    # Sold before anybody graded the plate: the shelf has nothing left to give back.
+    lid = (await db_session.execute(select(ProductPart).where(ProductPart.name_key == "lid"))).scalar_one()
+    await move(db_session, part_id=lid.id, delta=-4, reason="manual", note="sold")
+    await db_session.commit()
+    archive_id, row_id = archive.id, row.id
+
+    cb = _callback(f"defects:{archive_id}:{row_id}:1")
+    p1, p2, p3 = _allowed()
+    with p1, p2, p3:
+        await cb_defects_set(cb, _FakeState())
+
+    said = cb.message.edit_text.await_args.args[0]
+    assert escape_md(t("en", NS, "defects.ledger_refused", count=1)) in said
+    db_session.expire_all()
+    assert (await db_session.get(PrintArchive, archive_id)).defective_count == 1, "the defects are kept regardless"
+
+
+async def test_a_done_message_with_nothing_refused_carries_no_extra_line(patched_session, db_session):
+    from backend.app.services.telegram_handlers.defects import cb_defects_set
+
+    archive = await _print(db_session, {"lid": 2})
+    rows = await _rows(db_session, archive)
+    cb = _callback(f"defects:{archive.id}:{rows['lid'].id}:1")
+    p1, p2, p3 = _allowed()
+    with p1, p2, p3:
+        await cb_defects_set(cb, _FakeState())
+
+    said = cb.message.edit_text.await_args.args[0]
+    assert "\n" not in said
+    assert cb.message.edit_text.await_count == 1, "one edit for the last part, not a confirmation then a total"

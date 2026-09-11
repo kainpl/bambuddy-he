@@ -1218,35 +1218,27 @@ class NotificationService:
                             )
                             buttons.append(answers)
 
-                        # «Брак…» on the completion message, gate or no gate — the
-                        # print just announced is the printer's newest completed
-                        # archive (spec 2026-09-11 §5). Nothing for a failed print:
-                        # there is nothing good on the plate to grade.
-                        if event_type == "print_complete":
-                            from backend.app.models.archive import PrintArchive
-
-                            finished = (
-                                await db.execute(
-                                    select(PrintArchive.id)
-                                    .where(
-                                        PrintArchive.printer_id == printer_id,
-                                        PrintArchive.status == "completed",
-                                        PrintArchive.deleted_at.is_(None),
-                                        PrintArchive.quantity > 0,
+                        # «Брак…» on the completion message, gate or no gate — for
+                        # the print this message ANNOUNCES and no other (spec
+                        # 2026-09-11 §5). The id travels in ``extra_data`` from
+                        # ``on_print_complete``; when it is absent there is no
+                        # button at all. ⚠️ Never guess it from "the printer's
+                        # newest completed archive": ``main.py`` sends this very
+                        # notification on a path that could not identify the
+                        # archive, and the guess then offered the PREVIOUS plate's
+                        # parts — every tap writing defects, and a free-stock
+                        # ledger correction, against the wrong print. Nothing for
+                        # a failed print: there is nothing good on the plate to grade.
+                        graded_archive_id = (extra_data or {}).get("archive_id")
+                        if event_type == "print_complete" and graded_archive_id:
+                            buttons.append(
+                                [
+                                    InlineKeyboardButton(
+                                        text=f"\U0001f9ee {t(lang, NS, 'defects.btn_defects')}",
+                                        callback_data=f"action:defects:{int(graded_archive_id)}",
                                     )
-                                    .order_by(PrintArchive.completed_at.desc().nullslast(), PrintArchive.id.desc())
-                                    .limit(1)
-                                )
-                            ).scalar_one_or_none()
-                            if finished is not None:
-                                buttons.append(
-                                    [
-                                        InlineKeyboardButton(
-                                            text=f"\U0001f9ee {t(lang, NS, 'defects.btn_defects')}",
-                                            callback_data=f"action:defects:{finished}",
-                                        )
-                                    ]
-                                )
+                                ]
+                            )
 
                 # Print progress → pause/stop buttons
                 if event_type == "print_progress":
@@ -1665,6 +1657,11 @@ class NotificationService:
 
         logger.info("Found %s providers for %s: %s", len(providers), event_field, [p.name for p in providers])
         title, message = await self._build_message_from_template(db, event_type, variables)
+        # The archive this message is about, for the keyboard builder. Absent on
+        # the no-archive path (``main.py``: "Could not find archive for print
+        # complete"), and the button is then not offered at all — see
+        # ``_build_telegram_actions``.
+        archive_id = (archive_data or {}).get("archive_id")
         await self._send_to_providers(
             providers,
             title,
@@ -1674,6 +1671,7 @@ class NotificationService:
             printer_id,
             printer_name,
             image_data=image_data,
+            extra_data={"archive_id": archive_id} if archive_id else None,
             variables=variables,
         )
 

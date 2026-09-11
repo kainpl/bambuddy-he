@@ -188,6 +188,7 @@
     "invalid": "Send a whole number from 0 to {max}",
     "recorded_part": "{name}: {defective} of {quantity} bad",
     "done": "Defects recorded: {defective} of {quantity}",
+    "ledger_refused": "⚠ The free-stock shelf could not be corrected for {count} part(s) — they were already spent; fix it by hand on the product page",
     "gone": "This print no longer exists",
     "cancelled": "Cancelled"
   },

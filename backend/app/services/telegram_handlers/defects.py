@@ -20,12 +20,12 @@ from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
-from sqlalchemy import select
 
 from backend.app.i18n import escape_md, get_language, t
 from backend.app.models.archive import PrintArchive
 from backend.app.models.archive_part import PrintArchivePart
 from backend.app.services.archive_defects import DefectsWrite, record_defects
+from backend.app.services.archive_parts import load_rows
 from backend.app.services.telegram_handlers.common import NS, chat_allows_printer, has_perm
 
 if TYPE_CHECKING:
@@ -45,16 +45,7 @@ async def _load(db, archive_id: int) -> tuple[PrintArchive | None, list[PrintArc
     archive = await db.get(PrintArchive, archive_id)
     if archive is None or archive.deleted_at is not None:
         return None, []
-    rows = list(
-        (
-            await db.execute(
-                select(PrintArchivePart).where(PrintArchivePart.archive_id == archive_id).order_by(PrintArchivePart.id)
-            )
-        )
-        .scalars()
-        .all()
-    )
-    return archive, rows
+    return archive, await load_rows(db, archive_id)
 
 
 def _keyboard(archive_id: int, row_id: int, quantity: int, lang: str) -> InlineKeyboardMarkup:
@@ -132,6 +123,22 @@ def _actor_id(tg_chat: TelegramChat | None) -> int | None:
     return tg_chat.user_id if tg_chat is not None else None
 
 
+def _refused_line(lang: str, refused: list[int]) -> str:
+    """The «the shelf could not follow» tail of the done message, or ``""``.
+
+    Read off the LAST write, not accumulated across the taps — and that is
+    complete, not a shortcut: ``part_stock.adjust_unfiled_print`` recomputes
+    ``wanted`` for the whole archive against what the shelf is standing on every
+    single time, so a part whose correction it refused is refused again on every
+    later tap (nothing was written for it, so nothing about it changed), while a
+    part that was corrected has a zero delta and drops out. The last result is
+    therefore the standing list of parts the operator must fix by hand.
+    """
+    if not refused:
+        return ""
+    return "\n" + escape_md(t(lang, NS, "defects.ledger_refused", count=len(refused)))
+
+
 async def _write_and_continue(
     callback: CallbackQuery, lang: str, archive_id: int, row_id: int, value: int, actor_id: int | None
 ) -> None:
@@ -151,24 +158,29 @@ async def _write_and_continue(
         remaining = [r for r in result.parts if r.id > row_id] if row_id else []
         total_quantity = int(archive.quantity or 0)
 
-    if answered is not None:
-        await callback.message.edit_text(
-            escape_md(
-                t(
-                    lang,
-                    NS,
-                    "defects.recorded_part",
-                    name=answered.name,
-                    defective=answered.defective,
-                    quantity=answered.quantity,
+    # ⚠️ ONE edit of the asked message, whichever way this goes. Editing it with
+    # the per-part confirmation and then immediately again with the total was two
+    # Bot API round-trips and a visible flicker, and the last part's own
+    # confirmation never survived the second edit.
+    if remaining:
+        if answered is not None:
+            await callback.message.edit_text(
+                escape_md(
+                    t(
+                        lang,
+                        NS,
+                        "defects.recorded_part",
+                        name=answered.name,
+                        defective=answered.defective,
+                        quantity=answered.quantity,
+                    )
                 )
             )
-        )
-    if remaining:
         await _ask(callback.message, lang, archive, remaining[0])
     else:
         await callback.message.edit_text(
             escape_md(t(lang, NS, "defects.done", defective=result.defective_count, quantity=total_quantity))
+            + _refused_line(lang, result.ledger_refused)
         )
     await callback.answer()
 
@@ -226,6 +238,7 @@ async def cb_defects_none(callback: CallbackQuery, state: FSMContext, tg_chat: T
         total_quantity = int(archive.quantity or 0)
     await callback.message.edit_text(
         escape_md(t(lang, NS, "defects.done", defective=result.defective_count, quantity=total_quantity))
+        + _refused_line(lang, result.ledger_refused)
     )
     await callback.answer()
 
@@ -319,4 +332,5 @@ async def msg_defects_count(message: Message, state: FSMContext, tg_chat: Telegr
     else:
         await message.answer(
             escape_md(t(lang, NS, "defects.done", defective=result.defective_count, quantity=total_quantity))
+            + _refused_line(lang, result.ledger_refused)
         )

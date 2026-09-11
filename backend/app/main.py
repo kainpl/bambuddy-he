@@ -7300,6 +7300,14 @@ async def on_print_complete(printer_id: int, data: dict):
                                 actual_time_seconds = int(elapsed)
 
                         archive_data = {
+                            # ⚠️ The print the message is ABOUT. Telegram's «Брак…»
+                            # button is built from this id and from nothing else —
+                            # it used to be resolved by "the printer's newest
+                            # completed archive", which on the no-archive path
+                            # (``if not archive_id`` above) offered the operator
+                            # the PREVIOUS plate's parts and wrote defects, and a
+                            # ledger correction, against the wrong print.
+                            "archive_id": archive.id,
                             "print_time_seconds": archive.print_time_seconds,
                             "actual_time_seconds": actual_time_seconds,
                             "actual_filament_grams": archive.filament_used_grams,
