@@ -153,3 +153,54 @@ async def test_patching_defects_on_a_credited_print_corrects_the_shelf(async_cli
     db_session.expire_all()
     assert await balances(db_session, product_id) == {lid_id: 1}
     assert (await db_session.get(PrintArchive, archive_id)).defective_count == 1
+
+
+@pytest.mark.asyncio
+async def test_a_flat_count_sent_alone_on_a_print_with_rows_is_ignored(async_client, printer_factory, db_session):
+    """Spec §3 rule 1, pinned because the change is silent.
+
+    ``defective_count`` used to be ``setattr`` verbatim; it now goes through the
+    defects writer as ``DefectsWrite.flat``, which ignores a flat value whenever
+    the print HAS part rows — the column becomes ``Σ rows.defective``. The
+    in-app editor never sends it that way (it sends the flat value only when
+    there are no rows), but an API-key client or an older bundle would have had
+    its number replaced, and nothing said so.
+    """
+    printer = await printer_factory()
+    archive = await _archive_with_parts(db_session, printer.id, {"lid": 2, "base": 4})
+    row = (
+        await db_session.execute(
+            select(PrintArchivePart).where(
+                PrintArchivePart.archive_id == archive.id, PrintArchivePart.name_key == "lid"
+            )
+        )
+    ).scalar_one()
+    row.defective = 1
+    await db_session.commit()
+    archive_id = archive.id
+
+    resp = await async_client.patch(f"/api/v1/archives/{archive_id}", json={"defective_count": 99})
+
+    assert resp.status_code == 200, resp.text
+    db_session.expire_all()
+    assert (await db_session.get(PrintArchive, archive_id)).defective_count == 1, "the rows are the truth, not the 99"
+
+
+@pytest.mark.asyncio
+async def test_a_null_flat_count_leaves_the_column_untouched(async_client, printer_factory, db_session):
+    """``defective_count: null`` used to null the column. It is now skipped —
+    the writer has no "unknown" to write, and a rowless print's recorded scrap
+    must not be wiped by a PATCH that happens to carry the key as null.
+    """
+    printer = await printer_factory()
+    archive = await _archive_with_parts(db_session, printer.id, {})
+    archive.quantity = 4
+    archive.defective_count = 2
+    await db_session.commit()
+    archive_id = archive.id
+
+    resp = await async_client.patch(f"/api/v1/archives/{archive_id}", json={"defective_count": None})
+
+    assert resp.status_code == 200, resp.text
+    db_session.expire_all()
+    assert (await db_session.get(PrintArchive, archive_id)).defective_count == 2
