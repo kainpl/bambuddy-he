@@ -71,9 +71,10 @@ export interface PrintModalAnswer {
   /** The shared Quantity. Per-plate overrides are NOT carried: they are keyed
    *  by this file's plate indexes. */
   quantity: number;
-  /** How `quantity` is to be read on several printers. Optional: absent means
-   *  per printer, so an answer built before the mode existed still type-checks. */
-  quantityMode?: QuantityMode;
+  /** How `quantity` is to be read on several printers. Required (spec §4): a
+   *  silent member must split the way its leader did, and an answer that could
+   *  omit the field would silently fall back to the browser's own memory. */
+  quantityMode: QuantityMode;
   printOptions: PrintOptions;
   swapMacros: SwapMacrosOptions;
   selectedMacroIds: number[];

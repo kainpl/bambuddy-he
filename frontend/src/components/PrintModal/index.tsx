@@ -313,8 +313,14 @@ export function PrintModal({
   // Quantity clears the overrides: it is the bulk setter, and leaving stale
   // per-plate numbers behind it would make the visible field a lie.
   const [plateQuantities, setPlateQuantities] = useState<Record<number, number>>({});
-  const quantityForPlate = (plateIndex: number | null | undefined) =>
-    (plateIndex != null ? plateQuantities[plateIndex] : undefined) ?? quantity;
+  // Memoised because the quantity memos below take it as a dependency: an
+  // identity that changed every render would make them all recompute (and
+  // would force the `exhaustive-deps` disables this file no longer carries).
+  const quantityForPlate = useCallback(
+    (plateIndex: number | null | undefined) =>
+      (plateIndex != null ? plateQuantities[plateIndex] : undefined) ?? quantity,
+    [plateQuantities, quantity],
+  );
   // What the number MEANS on several printers (spec 2026-09-11 §3–4). The
   // group's answer wins, then the browser's memory, then «per printer» — the
   // meaning the field has always had.
@@ -786,7 +792,13 @@ export function PrintModal({
     const unlisted = selectedPrinters.filter((id) => !listed.includes(id));
     return [...listed, ...unlisted];
   }, [printers, selectedPrinters]);
-  const planPlateIds = selectedPlateIds.length > 0 ? selectedPlateIds : [selectedPlate ?? 0];
+  // The plates this submit covers, in ascending order — the one list the deal,
+  // the plan lines, the batch order and the copy counts are all read from.
+  // Memoised so the memos below can depend on it by identity.
+  const planPlateIds = useMemo(
+    () => (selectedPlateIds.length > 0 ? selectedPlateIds : [selectedPlate ?? 0]),
+    [selectedPlateIds, selectedPlate],
+  );
   // Copies per (plate, printer). Per printer: the plate's own number for every
   // target. Total: the plate's number dealt round-robin over the targets, the
   // cursor carrying from plate to plate (spec §3.1).
@@ -799,8 +811,7 @@ export function PrintModal({
     return new Map(
       planPlateIds.map((plateIndex, r) => [plateIndex, new Map(orderedTargets.map((id, c) => [id, rows[r][c] ?? 0]))]),
     );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [planPlateIds.join(','), plateQuantities, quantity, effectiveQuantityMode, orderedTargets]);
+  }, [planPlateIds, quantityForPlate, effectiveQuantityMode, orderedTargets]);
   const copiesFor = (plateIndex: number | null | undefined, printerId: number): number => {
     if (effectiveQuantityMode !== 'total') return quantityForPlate(plateIndex);
     return copiesByPlate.get(plateIndex ?? 0)?.get(printerId) ?? 0;
@@ -812,17 +823,22 @@ export function PrintModal({
   // weighed in the shortage warning (spec §3).
   const dealtCopies = (plateIndex: number | null | undefined, printerId: number): number =>
     mode === 'edit-queue-item' ? 1 : copiesFor(plateIndex, printerId);
+  // The copies ONE target gets across the plates in the plan: the per-printer
+  // plan line's «{{perPrinter}}» and the number `plannedPrints` multiplies.
+  // Written once — the line and the count must not be able to disagree.
+  const perTargetCopies = useMemo(
+    () => planPlateIds.reduce((sum, i) => sum + quantityForPlate(i), 0),
+    [planPlateIds, quantityForPlate],
+  );
 
   // Decision 6: a BATCH is a submission that makes two or more prints — copies,
   // plates, printers — whatever the mode. The count is prints, not rows. In
   // total mode the field IS the count; per printer it multiplies by the targets.
   const plannedPrints = useMemo(() => {
-    const perTarget = planPlateIds.reduce((sum, i) => sum + quantityForPlate(i), 0);
-    if (effectiveQuantityMode === 'total') return perTarget;
+    if (effectiveQuantityMode === 'total') return perTargetCopies;
     const targets = isAutoMode ? 1 : Math.max(1, selectedPrinters.length);
-    return perTarget * targets;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedPlateIds, selectedPlate, plateQuantities, quantity, isAutoMode, selectedPrinters, effectiveQuantityMode]);
+    return perTargetCopies * targets;
+  }, [perTargetCopies, isAutoMode, selectedPrinters, effectiveQuantityMode]);
   const isBatch = plannedPrints >= 2;
 
   const perPlateReqQueries = useQueries({
@@ -1153,7 +1169,11 @@ export function PrintModal({
   useEffect(() => {
     if (mode === 'edit-queue-item') {
       // For edit mode, clear mappings if printer selection or plate changed from initial
-      const printersChanged = JSON.stringify(selectedPrinters.sort()) !== JSON.stringify(initialPrinterIds.sort());
+      // Sort COPIES: `selectedPrinters`' own order is load-bearing now (it is
+      // the submit loop's walk order and the tick-order tail of
+      // `orderedTargets`), and `Array.prototype.sort` reorders in place.
+      const printersChanged =
+        JSON.stringify([...selectedPrinters].sort()) !== JSON.stringify([...initialPrinterIds].sort());
       if (printersChanged || selectedPlate !== initialPlateId) {
         setManualMappings({});
         setManualMappingsByPlate({});
@@ -1200,7 +1220,10 @@ export function PrintModal({
   }, [settings?.per_printer_mapping_expanded, selectedPrinters, initialExpandApplied, multiPrinterMapping]);
 
   const isMultiPlate = platesData?.is_multi_plate ?? false;
-  const plates = platesData?.plates ?? [];
+  // Memoised for the same reason as `quantityForPlate`: the plan lines list it
+  // as a dependency, and a fresh `[]` every render would recompute them every
+  // render (and the `??` would earn an exhaustive-deps warning of its own).
+  const plates = useMemo(() => platesData?.plates ?? [], [platesData]);
 
   // What will actually be printed, in the operator's words — one line, or one
   // per plate in total mode so the plate's number is visibly a total. It sits
@@ -1209,8 +1232,13 @@ export function PrintModal({
     if (isAutoMode || selectedPrinters.length < 2) return [];
     const printerName = (id: number) => printers?.find((p) => p.id === id)?.name ?? `#${id}`;
     if (effectiveQuantityMode !== 'total') {
-      const perPrinter = planPlateIds.reduce((sum, i) => sum + quantityForPlate(i), 0);
-      return [t('printModal.quantityPlan.perPrinter', { perPrinter, count: selectedPrinters.length, total: plannedPrints })];
+      return [
+        t('printModal.quantityPlan.perPrinter', {
+          perPrinter: perTargetCopies,
+          count: selectedPrinters.length,
+          total: plannedPrints,
+        }),
+      ];
     }
     const split = (plateIndex: number) =>
       orderedTargets.map((id) => `${printerName(id)}: ${copiesByPlate.get(plateIndex)?.get(id) ?? 0}`).join(' · ');
@@ -1228,8 +1256,20 @@ export function PrintModal({
         split: split(p),
       }),
     );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAutoMode, selectedPrinters, effectiveQuantityMode, copiesByPlate, plannedPrints, printers, plates, t]);
+  }, [
+    isAutoMode,
+    selectedPrinters,
+    effectiveQuantityMode,
+    copiesByPlate,
+    orderedTargets,
+    planPlateIds,
+    quantityForPlate,
+    perTargetCopies,
+    plannedPrints,
+    printers,
+    plates,
+    t,
+  ]);
 
   const spoolAssignmentsByPrinter = useMemo(() => {
     const map = new Map<number, Map<number, SpoolAssignment>>();
@@ -1340,12 +1380,11 @@ export function PrintModal({
     let submitProjectLineId = filedProjectLineId;
     const ensureBatchOrder = async () => {
       if (!(asksAboutOrder && orderFiling.kind === 'new' && libraryFileId != null)) return;
-      const plateIds = selectedPlateIds.length > 0 ? selectedPlateIds : [selectedPlate ?? 0];
       const targets = isAutoMode ? 1 : Math.max(1, selectedPrinters.length);
       const created = await api.createOrderFromFiles({
         kind: 'plates',
         library_file_id: libraryFileId,
-        plates: plateIds.map((i) => ({
+        plates: planPlateIds.map((i) => ({
           plate_index: i,
           copies: effectiveQuantityMode === 'total' ? quantityForPlate(i) : quantityForPlate(i) * targets,
         })),
@@ -1598,7 +1637,6 @@ export function PrintModal({
       setIsSubmitting(false);
       return;
     }
-    // Calculate total API calls: plates × printers
     const platesToQueue = selectedPlates.size > 1
       ? plates.filter(p => selectedPlates.has(p.index))
       : [null];
