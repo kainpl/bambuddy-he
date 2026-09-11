@@ -7000,6 +7000,16 @@ export default {
     quantity: 'Quantity',
     quantityHint: 'Print multiple copies. Extras are queued after the first.',
     copiesOfThisPlate: 'Copies of this plate',
+    quantityMode: {
+      perPrinter: 'Per printer',
+      total: 'Total',
+    },
+    quantityPlan: {
+      perPrinter_one: '{{perPrinter}} × {{count}} printer = {{total}} in total',
+      perPrinter_other: '{{perPrinter}} × {{count}} printers = {{total}} in total',
+      total: '{{total}} → {{split}}',
+      totalPlate: '{{plate}}: {{total}} → {{split}}',
+    },
     decreaseQuantity: 'Fewer',
     increaseQuantity: 'More',
 

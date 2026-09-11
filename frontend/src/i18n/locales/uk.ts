@@ -7090,6 +7090,18 @@ export default {
     quantity: 'Кількість',
     quantityHint: 'Кілька копій. Додаткові стають у чергу після першої.',
     copiesOfThisPlate: 'Копій цієї плити',
+    quantityMode: {
+      perPrinter: 'На кожен принтер',
+      total: 'Загальна',
+    },
+    quantityPlan: {
+      perPrinter_one: '{{perPrinter}} × {{count}} принтер = усього {{total}}',
+      perPrinter_few: '{{perPrinter}} × {{count}} принтери = усього {{total}}',
+      perPrinter_many: '{{perPrinter}} × {{count}} принтерів = усього {{total}}',
+      perPrinter_other: '{{perPrinter}} × {{count}} принтерів = усього {{total}}',
+      total: '{{total}} → {{split}}',
+      totalPlate: '{{plate}}: {{total}} → {{split}}',
+    },
     decreaseQuantity: 'Менше',
     increaseQuantity: 'Більше',
 

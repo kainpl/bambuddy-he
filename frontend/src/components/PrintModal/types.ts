@@ -10,6 +10,33 @@ import type { AutoCalibrationCaps } from '../../utils/printerCapabilities';
  */
 export type PrintModalMode = 'reprint' | 'add-to-queue' | 'edit-queue-item' | 'edit-auto-item';
 
+/** What the Quantity field means when several specific printers are picked
+ *  (spec 2026-09-11 §3): the number on EACH printer, or the total across them,
+ *  dealt round-robin on submit. With one printer, or in auto mode, the two are
+ *  the same number and the toggle is not shown. */
+export type QuantityMode = 'perPrinter' | 'total';
+
+/** Remembered per browser — each operator keeps their own habit, nothing on
+ *  the server (owner's choice, 2026-09-11). */
+export const QUANTITY_MODE_STORAGE_KEY = 'bamdude.printModal.quantityMode';
+
+export function readStoredQuantityMode(): QuantityMode {
+  try {
+    const raw = window.localStorage.getItem(QUANTITY_MODE_STORAGE_KEY);
+    return raw === 'total' ? 'total' : 'perPrinter';
+  } catch {
+    return 'perPrinter';
+  }
+}
+
+export function storeQuantityMode(mode: QuantityMode): void {
+  try {
+    window.localStorage.setItem(QUANTITY_MODE_STORAGE_KEY, mode);
+  } catch {
+    // Private mode / blocked storage: the choice simply is not remembered.
+  }
+}
+
 /**
  * Everything a submitted dialog was answered WITH — the operator's decisions,
  * and nothing derived from the file.
@@ -44,6 +71,9 @@ export interface PrintModalAnswer {
   /** The shared Quantity. Per-plate overrides are NOT carried: they are keyed
    *  by this file's plate indexes. */
   quantity: number;
+  /** How `quantity` is to be read on several printers. Optional: absent means
+   *  per printer, so an answer built before the mode existed still type-checks. */
+  quantityMode?: QuantityMode;
   printOptions: PrintOptions;
   swapMacros: SwapMacrosOptions;
   selectedMacroIds: number[];
