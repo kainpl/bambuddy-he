@@ -26,12 +26,12 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.models.archive import PrintArchive
 from backend.app.models.archive_part import PrintArchivePart
 from backend.app.services import part_stock
+from backend.app.services.archive_parts import load_rows
 
 logger = logging.getLogger(__name__)
 
@@ -59,15 +59,7 @@ async def record_defects(
     db: AsyncSession, archive: PrintArchive, write: DefectsWrite, *, actor_id: int | None = None
 ) -> DefectsResult:
     """Record scrap on ``archive`` and bring the shelf in line — see the module docstring."""
-    rows = list(
-        (
-            await db.execute(
-                select(PrintArchivePart).where(PrintArchivePart.archive_id == archive.id).order_by(PrintArchivePart.id)
-            )
-        )
-        .scalars()
-        .all()
-    )
+    rows = await load_rows(db, archive.id)
     if rows:
         by_id = {row.id: row for row in rows}
         for row_id, defective in write.parts:

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from backend.app.schemas.calibration_mode import CalibrationMode
 from backend.app.schemas.filament_routing import FilamentRoutingChoices
@@ -10,11 +10,23 @@ from backend.app.schemas.timelapse import TimelapseStorage
 class ArchivePartRow(BaseModel):
     """One canonical part on the printed plate (m158)."""
 
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     name: str
     name_key: str
     quantity: int
     defective: int
+
+    @classmethod
+    def from_row(cls, row: object) -> "ArchivePartRow":
+        """The wire shape of one ``print_archive_parts`` row.
+
+        Named rather than spelled out per call site: three surfaces render the
+        same five fields, and a field added to the row has to reach all of them
+        or one screen silently stops showing it.
+        """
+        return cls.model_validate(row)
 
 
 class ArchivePartDefective(BaseModel):

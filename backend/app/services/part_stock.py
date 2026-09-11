@@ -61,10 +61,10 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.models.archive import PrintArchive
-from backend.app.models.archive_part import PrintArchivePart
 from backend.app.models.part_stock import ProductPartStockMovement
 from backend.app.models.product import Product, ProductPart, ProductPlate
 from backend.app.models.project_line import ProjectLine
+from backend.app.services.archive_parts import load_rows
 from backend.app.services.order_metrics import IN_CHUNK, index_plates, products_for_print, row_quantity
 from backend.app.services.product_composition import part_index
 
@@ -914,15 +914,7 @@ async def _wanted_by_part(db: AsyncSession, archive: PrintArchive) -> tuple[dict
     about what a plate put on the shelf. Returns the map and the product parts
     it resolved through, which the callers lock before deciding.
     """
-    rows = (
-        (
-            await db.execute(
-                select(PrintArchivePart).where(PrintArchivePart.archive_id == archive.id).order_by(PrintArchivePart.id)
-            )
-        )
-        .scalars()
-        .all()
-    )
+    rows = await load_rows(db, archive.id)
     if not rows:
         return {}, []
 
@@ -1209,10 +1201,28 @@ async def adjust_unfiled_print(
         if net <= 0:
             continue
         part = parts.get(part_id)
-        if part is None or not is_counted(part):
+        if part is None:
+            # ``parts`` was built from the PRE-lock balances, ``standing`` is the
+            # post-lock re-read: a part that appeared in between (a concurrent
+            # credit landing inside the locking window) is simply outside the set
+            # this call locked and decided about. Not "uncounted" — unlocked.
             logger.info(
-                "part_stock: part %s is not a counted part of this correction; archive %s not corrected on it",
+                "part_stock: part %s came onto archive %s's shelf inside the locking window and is outside this "
+                "correction's lock set; it will be corrected by the next defects write",
                 part_id,
+                archive.id,
+            )
+            continue
+        if not is_counted(part):
+            # A genuinely different case: the part's own ``kind`` /
+            # ``qty_per_unit`` changed after the credit, so the product no longer
+            # keeps a balance for it at all.
+            logger.info(
+                "part_stock: part %s is no longer a counted part (kind=%s, qty_per_unit=%s); archive %s not "
+                "corrected on it",
+                part_id,
+                part.kind,
+                part.qty_per_unit,
                 archive.id,
             )
             continue
