@@ -30,6 +30,7 @@ import { getCurrencySymbol } from '../../utils/currency';
 import { toDateTimeLocalValue, parseUTCDate } from '../../utils/date';
 import { getBedTypeInfo } from '../../utils/bedType';
 import { getGlobalTrayId, isPlaceholderDate } from '../../utils/amsHelpers';
+import { splitRoundRobin } from '../../lib/quantitySplit';
 import { AutoModeOptions } from './AutoModeOptions';
 import { groupTraysForBackup, privateBackupGroup, type BackupGroup } from './filamentBackupGroups';
 import { FilamentMapping } from './FilamentMapping';
@@ -44,6 +45,7 @@ import type {
   FilamentReqsData,
   PrintModalProps,
   PrintOptions,
+  QuantityMode,
   ScheduleOptions,
   ScheduleType,
   SwapMacroEvent,
@@ -57,6 +59,8 @@ import {
   DEFAULT_SCHEDULE_OPTIONS,
   DEFAULT_SWAP_MACROS_OPTIONS,
   SWAP_MACRO_EVENTS,
+  readStoredQuantityMode,
+  storeQuantityMode,
 } from './types';
 
 /**
@@ -311,6 +315,16 @@ export function PrintModal({
   const [plateQuantities, setPlateQuantities] = useState<Record<number, number>>({});
   const quantityForPlate = (plateIndex: number | null | undefined) =>
     (plateIndex != null ? plateQuantities[plateIndex] : undefined) ?? quantity;
+  // What the number MEANS on several printers (spec 2026-09-11 §3–4). The
+  // group's answer wins, then the browser's memory, then «per printer» — the
+  // meaning the field has always had.
+  const [quantityMode, setQuantityModeState] = useState<QuantityMode>(
+    () => seededAnswer?.quantityMode ?? readStoredQuantityMode(),
+  );
+  const setQuantityMode = (next: QuantityMode) => {
+    setQuantityModeState(next);
+    storeQuantityMode(next);
+  };
 
   // Dispatch mode: 'specific' = pick exact printer(s); 'auto' = route via auto-queue.
   // Only meaningful for add-to-queue mode (reprint is always specific, edit-queue-item
@@ -750,15 +764,51 @@ export function PrintModal({
   const selectedPlateIds = useMemo(() => [...selectedPlates].sort((a, b) => a - b), [selectedPlates]);
   const isMultiPlateSelection = selectedPlates.size > 1;
 
+  // The mode only bites with several SPECIFIC printers; auto mode's field is
+  // the total already, edit modes never show quantity, and one printer makes
+  // the two readings the same number.
+  const effectiveQuantityMode: QuantityMode =
+    !isAutoMode && selectedPrinters.length > 1 && (mode === 'reprint' || mode === 'add-to-queue')
+      ? quantityMode
+      : 'perPrinter';
+  // The picked printers in the order the selector LISTS them (the order of
+  // `api.getPrinters`) — not the order they were ticked. A round-robin tail
+  // goes to the first of these, and the plan line names them in this order,
+  // so what the operator reads is what the deal does.
+  const orderedTargets = useMemo(
+    () => (printers ?? []).filter((p) => selectedPrinters.includes(p.id)).map((p) => p.id),
+    [printers, selectedPrinters],
+  );
+  const planPlateIds = selectedPlateIds.length > 0 ? selectedPlateIds : [selectedPlate ?? 0];
+  // Copies per (plate, printer). Per printer: the plate's own number for every
+  // target. Total: the plate's number dealt round-robin over the targets, the
+  // cursor carrying from plate to plate (spec §3.1).
+  const copiesByPlate = useMemo(() => {
+    const totals = planPlateIds.map((i) => quantityForPlate(i));
+    const rows =
+      effectiveQuantityMode === 'total'
+        ? splitRoundRobin(totals, orderedTargets.length)
+        : totals.map((n) => orderedTargets.map(() => n));
+    return new Map(
+      planPlateIds.map((plateIndex, r) => [plateIndex, new Map(orderedTargets.map((id, c) => [id, rows[r][c] ?? 0]))]),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [planPlateIds.join(','), plateQuantities, quantity, effectiveQuantityMode, orderedTargets]);
+  const copiesFor = (plateIndex: number | null | undefined, printerId: number): number => {
+    if (effectiveQuantityMode !== 'total') return quantityForPlate(plateIndex);
+    return copiesByPlate.get(plateIndex ?? 0)?.get(printerId) ?? 0;
+  };
+
   // Decision 6: a BATCH is a submission that makes two or more prints — copies,
-  // plates, printers — whatever the mode. The count is prints, not rows.
+  // plates, printers — whatever the mode. The count is prints, not rows. In
+  // total mode the field IS the count; per printer it multiplies by the targets.
   const plannedPrints = useMemo(() => {
-    const plateIds = selectedPlateIds.length > 0 ? selectedPlateIds : [selectedPlate ?? 0];
-    const perTarget = plateIds.reduce((sum, i) => sum + quantityForPlate(i), 0);
+    const perTarget = planPlateIds.reduce((sum, i) => sum + quantityForPlate(i), 0);
+    if (effectiveQuantityMode === 'total') return perTarget;
     const targets = isAutoMode ? 1 : Math.max(1, selectedPrinters.length);
     return perTarget * targets;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedPlateIds, selectedPlate, plateQuantities, quantity, isAutoMode, selectedPrinters]);
+  }, [selectedPlateIds, selectedPlate, plateQuantities, quantity, isAutoMode, selectedPrinters, effectiveQuantityMode]);
   const isBatch = plannedPrints >= 2;
 
   const perPlateReqQueries = useQueries({
@@ -1051,6 +1101,7 @@ export function PrintModal({
         Object.values(perPrinterConfigs).some(config => !config.useDefault && !config.autoConfigured),
       scheduleOptions,
       quantity,
+      quantityMode,
       printOptions,
       swapMacros,
       selectedMacroIds: [...selectedMacroIds],
@@ -1068,6 +1119,7 @@ export function PrintModal({
     autoModeOptions,
     scheduleOptions,
     quantity,
+    quantityMode,
     printOptions,
     swapMacros,
     selectedMacroIds,
@@ -1135,6 +1187,32 @@ export function PrintModal({
 
   const isMultiPlate = platesData?.is_multi_plate ?? false;
   const plates = platesData?.plates ?? [];
+
+  // What will actually be printed, in the operator's words — one line, or one
+  // per plate in total mode so the plate's number is visibly a total. It sits
+  // here rather than beside the split above because it reads `plates`.
+  const planLines = useMemo((): string[] => {
+    if (isAutoMode || selectedPrinters.length < 2) return [];
+    const printerName = (id: number) => printers?.find((p) => p.id === id)?.name ?? `#${id}`;
+    if (effectiveQuantityMode !== 'total') {
+      const perPrinter = planPlateIds.reduce((sum, i) => sum + quantityForPlate(i), 0);
+      return [t('printModal.quantityPlan.perPrinter', { perPrinter, count: selectedPrinters.length, total: plannedPrints })];
+    }
+    const split = (plateIndex: number) =>
+      orderedTargets.map((id) => `${printerName(id)}: ${copiesByPlate.get(plateIndex)?.get(id) ?? 0}`).join(' · ');
+    if (planPlateIds.length === 1) {
+      const p = planPlateIds[0];
+      return [t('printModal.quantityPlan.total', { total: quantityForPlate(p), split: split(p) })];
+    }
+    return planPlateIds.map((p) =>
+      t('printModal.quantityPlan.totalPlate', {
+        plate: plates.find((x) => x.index === p)?.name || `Plate ${p}`,
+        total: quantityForPlate(p),
+        split: split(p),
+      }),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAutoMode, selectedPrinters, effectiveQuantityMode, copiesByPlate, plannedPrints, printers, plates, t]);
 
   const spoolAssignmentsByPrinter = useMemo(() => {
     const map = new Map<number, Map<number, SpoolAssignment>>();
@@ -1250,7 +1328,10 @@ export function PrintModal({
       const created = await api.createOrderFromFiles({
         kind: 'plates',
         library_file_id: libraryFileId,
-        plates: plateIds.map((i) => ({ plate_index: i, copies: quantityForPlate(i) * targets })),
+        plates: plateIds.map((i) => ({
+          plate_index: i,
+          copies: effectiveQuantityMode === 'total' ? quantityForPlate(i) : quantityForPlate(i) * targets,
+        })),
       });
       submitProjectId = created.id;
       submitProjectLineId = null;
@@ -1495,7 +1576,13 @@ export function PrintModal({
     const platesToQueue = selectedPlates.size > 1
       ? plates.filter(p => selectedPlates.has(p.index))
       : [null];
-    const totalCount = selectedPrinters.length * platesToQueue.length;
+    // Attempts to make: one per (plate, printer) that gets at least one copy —
+    // in total mode a printer can end with none of a plate and is skipped.
+    const totalCount = platesToQueue.reduce(
+      (sum, plate) =>
+        sum + selectedPrinters.filter((id) => copiesFor(plate ? plate.index : selectedPlate, id) > 0).length,
+      0,
+    );
     setSubmitProgress({ current: 0, total: totalCount });
 
     // ⚠️ `success` counts REQUESTS, `queued` counts ROWS, and they are not the
@@ -1558,7 +1645,7 @@ export function PrintModal({
         : undefined,
       ...printOptions,
       ...getSwapPayloadForPrinter(printerId),
-      quantity: mode === 'edit-queue-item' ? 1 : quantityForPlate(plateId),
+      quantity: mode === 'edit-queue-item' ? 1 : copiesFor(plateId, printerId),
       project_id: submitProjectId,
       project_line_id: submitProjectLineId,
       };
@@ -1571,6 +1658,10 @@ export function PrintModal({
 
       for (let i = 0; i < selectedPrinters.length; i++) {
         const printerId = selectedPrinters[i];
+        const copies = mode === 'edit-queue-item' ? 1 : copiesFor(plateId, printerId);
+        // Total mode dealt this printer none of this plate: nothing to send,
+        // nothing to count — not an attempt, not a progress step.
+        if (copies === 0) continue;
         progressCounter++;
         setSubmitProgress({ current: progressCounter, total: totalCount });
 
@@ -1587,7 +1678,7 @@ export function PrintModal({
                 ...printOptions,
                 ...swapPayload,
                 selected_macro_ids: selectedMacroIds,
-                quantity,
+                quantity: copies,
                 project_id: submitProjectId,
                 project_line_id: submitProjectLineId,
                 cleanup_library_after_dispatch: cleanupLibraryAfterDispatch,
@@ -1603,7 +1694,7 @@ export function PrintModal({
                 ...printOptions,
                 ...swapPayload,
                 selected_macro_ids: selectedMacroIds,
-                quantity,
+                quantity: copies,
               });
             }
           } else if (mode === 'edit-queue-item' && progressCounter === 1) {
@@ -1633,7 +1724,7 @@ export function PrintModal({
           }
           results.success++;
           // Edit mode replaces one row; everything else writes one per copy.
-          results.queued += mode === 'edit-queue-item' ? 1 : quantityForPlate(plateId);
+          results.queued += copies;
         } catch (error) {
           results.failed++;
           const printerName = printers?.find(p => p.id === printerId)?.name || `Printer ${printerId}`;
@@ -2346,6 +2437,40 @@ export function PrintModal({
                     className="w-8 h-8 rounded bg-bambu-dark border border-bambu-dark-tertiary text-white hover:border-bambu-green disabled:opacity-40"
                   >+</button>
                 </div>
+              </div>
+            )}
+
+            {/* What the number means on several printers, and what will be printed (spec 2026-09-11 §5). */}
+            {mode !== 'edit-queue-item' && mode !== 'edit-auto-item' && !isAutoMode && selectedPrinters.length > 1 && (
+              <div className="-mt-2 mb-4 px-3 space-y-1.5">
+                <div
+                  data-testid="quantity-mode-toggle"
+                  role="group"
+                  aria-label={t('printModal.quantity')}
+                  className="inline-flex rounded-md border border-bambu-dark-tertiary overflow-hidden text-xs"
+                >
+                  {(['perPrinter', 'total'] as const).map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      data-testid={`quantity-mode-${m}`}
+                      aria-pressed={quantityMode === m}
+                      onClick={() => setQuantityMode(m)}
+                      className={`px-3 py-1 transition-colors ${
+                        quantityMode === m
+                          ? 'bg-bambu-green/20 text-bambu-green'
+                          : 'bg-bambu-dark text-bambu-gray hover:text-white'
+                      }`}
+                    >
+                      {t(`printModal.quantityMode.${m}`)}
+                    </button>
+                  ))}
+                </div>
+                {planLines.map((line, i) => (
+                  <div key={i} data-testid="quantity-plan" className="text-xs text-bambu-gray">
+                    {line}
+                  </div>
+                ))}
               </div>
             )}
 

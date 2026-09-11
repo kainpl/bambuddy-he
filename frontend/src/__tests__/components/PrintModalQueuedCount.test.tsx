@@ -25,7 +25,13 @@ describe('the queued-count toast', () => {
   });
 
   it('counts a request as as many rows as it carries copies', () => {
-    expect(source).toMatch(/results\.queued \+= mode === 'edit-queue-item' \? 1 : quantityForPlate\(plateId\)/);
+    // ⚠️ `copies` is the SAME number the request carries as its `quantity` —
+    // since the «Total» quantity mode (spec 2026-09-11) deals a different one
+    // to each printer, the rows counter must add what was SENT, never the
+    // field's own figure.
+    expect(source).toMatch(/const copies = mode === 'edit-queue-item' \? 1 : copiesFor\(plateId, printerId\)/);
+    expect(source).toMatch(/quantity: mode === 'edit-queue-item' \? 1 : copiesFor\(plateId, printerId\)/);
+    expect(source).toMatch(/results\.queued \+= copies;/);
   });
 
   it('keeps attempts and rows as separate counters', () => {
