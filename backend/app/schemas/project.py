@@ -5,6 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
 
+from backend.app.schemas.archive import ArchivePartDefective, ArchivePartRow
+
 PROJECT_STATUSES = ("active", "completed", "cancelled")
 PROJECT_PRIORITIES = ("low", "normal", "high", "urgent")
 
@@ -508,6 +510,24 @@ class StockMovedOut(BaseModel):
     part_id: int
     name: str
     delta: int
+
+
+class OrderPrintDefectsIn(BaseModel):
+    """What came out bad on one of the order's prints: per part when the print
+    has part rows, else one flat count. Absolute values, clamped server-side."""
+
+    parts: list[ArchivePartDefective] | None = None
+    defective_count: int | None = Field(default=None, ge=0)
+
+
+class OrderPrintDefectsOut(BaseModel):
+    archive_id: int
+    quantity: int
+    defective_count: int
+    parts: list[ArchivePartRow] = []
+    # How many product parts the shelf correction refused (stock already spent).
+    # 0 for a print filed under an order — its figures count the defects live.
+    ledger_refused_parts: int = 0
 
 
 class BankSurplusResponse(BaseModel):

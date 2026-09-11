@@ -25,6 +25,7 @@ from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
 from backend.app.i18n.api_errors import json_error
 from backend.app.models.archive import PrintArchive
+from backend.app.models.archive_part import PrintArchivePart
 from backend.app.models.auto_queue import AutoQueueItem
 from backend.app.models.customer import Customer
 from backend.app.models.library import LibraryFile
@@ -34,6 +35,7 @@ from backend.app.models.product import Product, ProductPart, ProductPlate
 from backend.app.models.project import Project
 from backend.app.models.project_line import ProjectLine, ProjectProcurement
 from backend.app.models.user import User
+from backend.app.schemas.archive import ArchivePartRow
 from backend.app.schemas.auto_queue import AutoQueueItemCreate
 from backend.app.schemas.farm_forecast import (
     FarmForecastOut,
@@ -54,6 +56,8 @@ from backend.app.schemas.project import (
     LinePlanOut,
     LineProductOut,
     OrderPlanResponse,
+    OrderPrintDefectsIn,
+    OrderPrintDefectsOut,
     PartFiguresOut,
     PlanAlternativeOut,
     PlanEnqueueCreated,
@@ -85,6 +89,7 @@ from backend.app.services import (
     product_delete,
     queue_rebalance,
 )
+from backend.app.services.archive_defects import DefectsWrite, record_defects
 from backend.app.services.auto_queue_add import add_items_to_auto_queue
 from backend.app.services.filament_intake import require_source_requirements
 from backend.app.services.filament_requirements import PrintRequirementsCache
@@ -962,6 +967,85 @@ async def remove_archives_from_project(
             )
             updated += 1
     return {"message": f"Removed {updated} archives from project"}
+
+
+async def _order_print(db: AsyncSession, project_id: int, archive_id: int) -> PrintArchive:
+    """One of this order's prints — filed under it, not trashed — or 404."""
+    archive = (
+        await db.execute(
+            PrintArchive.active().where(PrintArchive.id == archive_id, PrintArchive.project_id == project_id)
+        )
+    ).scalar_one_or_none()
+    if archive is None:
+        raise HTTPException(status_code=404, detail="Print not found in this order")
+    return archive
+
+
+def _print_defects_out(
+    archive: PrintArchive, rows: list[PrintArchivePart], *, refused: int = 0
+) -> OrderPrintDefectsOut:
+    return OrderPrintDefectsOut(
+        archive_id=archive.id,
+        quantity=int(archive.quantity or 0),
+        defective_count=int(archive.defective_count or 0),
+        parts=[
+            ArchivePartRow(id=r.id, name=r.name, name_key=r.name_key, quantity=r.quantity, defective=r.defective)
+            for r in rows
+        ],
+        ledger_refused_parts=refused,
+    )
+
+
+@router.get("/{project_id}/archives/{archive_id}/parts", response_model=OrderPrintDefectsOut)
+async def get_order_print_parts(
+    project_id: int,
+    archive_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: User | None = RequirePermission(Permission.PROJECTS_READ),
+):
+    """The print's part rows for the order page's defects dialog.
+
+    The archives LIST never carries rows (no N+1 per page), and the order page
+    reads under the order's permission, not the archive's — so the rows come
+    from here rather than from ``GET /archives/{id}``.
+    """
+    archive = await _order_print(db, project_id, archive_id)
+    rows = list(
+        (
+            await db.execute(
+                select(PrintArchivePart).where(PrintArchivePart.archive_id == archive.id).order_by(PrintArchivePart.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return _print_defects_out(archive, rows)
+
+
+@router.post("/{project_id}/archives/{archive_id}/defects", response_model=OrderPrintDefectsOut)
+async def record_order_print_defects(
+    project_id: int,
+    archive_id: int,
+    data: OrderPrintDefectsIn,
+    db: AsyncSession = Depends(get_db),
+    current_user: User | None = RequirePermission(Permission.PROJECTS_UPDATE),
+):
+    """Record what came out bad on one of this order's prints (spec 2026-09-11 §4).
+
+    Under ``projects:update`` and scoped to a print FILED under this order: the
+    defects change the order's figures, so the order's permission is the right
+    one, and an operator who may edit the order need not hold
+    ``archives:update_all`` for a print somebody else started. The writer is the
+    same one the archive editor uses (``services/archive_defects``).
+    """
+    archive = await _order_print(db, project_id, archive_id)
+    result = await record_defects(
+        db,
+        archive,
+        DefectsWrite(parts=tuple((p.id, p.defective) for p in data.parts or ()), flat=data.defective_count),
+        actor_id=current_user.id if current_user else None,
+    )
+    return _print_defects_out(archive, result.parts, refused=len(result.ledger_refused))
 
 
 @router.post("/{project_id}/add-queue")

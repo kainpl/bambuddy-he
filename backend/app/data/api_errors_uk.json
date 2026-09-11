@@ -566,6 +566,7 @@
   "Preference not found": "Налаштування не знайдено",
   "preset row not found in this family": "рядок пресета не знайдено в цій сімʼї",
   "preset_type must be filament, printer, or process": "preset_type має бути filament, printer або process",
+  "Print not found in this order": "Друк не знайдено в цьому замовленні",
   "Printer did not acknowledge HMS action within 2.5s": "Принтер не підтвердив дію HMS протягом 2.5 с",
   "Printer does not offer air-duct mode {}": "Принтер не підтримує режим повітроводу {}",
   "printer does not offer AMS firmware id {}": "принтер не має AMS з id прошивки {}",
