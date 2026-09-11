@@ -7091,6 +7091,7 @@ export default {
     quantityHint: 'Кілька копій. Додаткові стають у чергу після першої.',
     copiesOfThisPlate: 'Копій цієї плити',
     quantityMode: {
+      label: 'Що означає кількість',
       perPrinter: 'На кожен принтер',
       total: 'Загальна',
     },

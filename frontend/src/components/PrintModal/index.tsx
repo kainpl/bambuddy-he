@@ -775,10 +775,17 @@ export function PrintModal({
   // `api.getPrinters`) — not the order they were ticked. A round-robin tail
   // goes to the first of these, and the plan line names them in this order,
   // so what the operator reads is what the deal does.
-  const orderedTargets = useMemo(
-    () => (printers ?? []).filter((p) => selectedPrinters.includes(p.id)).map((p) => p.id),
-    [printers, selectedPrinters],
-  );
+  // ⚠️ **Every picked printer is in here, listed or not.** Filtering the
+  // query's rows alone drops the whole selection while that query is still
+  // in flight — and a total dealt over zero targets gives every printer
+  // nothing, skips every request, and still reports success: the operator is
+  // told the batch was queued and no row exists. Anything the list does not
+  // carry comes last, in tick order; the plan line names it `#id`.
+  const orderedTargets = useMemo(() => {
+    const listed = (printers ?? []).filter((p) => selectedPrinters.includes(p.id)).map((p) => p.id);
+    const unlisted = selectedPrinters.filter((id) => !listed.includes(id));
+    return [...listed, ...unlisted];
+  }, [printers, selectedPrinters]);
   const planPlateIds = selectedPlateIds.length > 0 ? selectedPlateIds : [selectedPlate ?? 0];
   // Copies per (plate, printer). Per printer: the plate's own number for every
   // target. Total: the plate's number dealt round-robin over the targets, the
@@ -2446,7 +2453,7 @@ export function PrintModal({
                 <div
                   data-testid="quantity-mode-toggle"
                   role="group"
-                  aria-label={t('printModal.quantity')}
+                  aria-label={t('printModal.quantityMode.label')}
                   className="inline-flex rounded-md border border-bambu-dark-tertiary overflow-hidden text-xs"
                 >
                   {(['perPrinter', 'total'] as const).map((m) => (

@@ -7001,6 +7001,7 @@ export default {
     quantityHint: 'Print multiple copies. Extras are queued after the first.',
     copiesOfThisPlate: 'Copies of this plate',
     quantityMode: {
+      label: 'What the quantity means',
       perPrinter: 'Per printer',
       total: 'Total',
     },
