@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { Package, Unlink } from 'lucide-react';
 import { api } from '../../api/client';
 import type { Archive, Order, ProjectLine } from '../../api/client';

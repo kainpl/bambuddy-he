@@ -90,7 +90,7 @@ import {
 } from 'lucide-react';
 import { SelectionBox } from '../components/SelectionBox';
 
-import { Link as RouterLink, useNavigate } from 'react-router-dom';
+import { Link as RouterLink, useNavigate } from 'react-router';
 import { api, discoveryApi, firmwareApi, macrosApi, withStreamToken } from '../api/client';
 import { BulkPrinterToolbar } from '../components/BulkPrinterToolbar';
 import { PauseChip } from '../components/PauseChip';

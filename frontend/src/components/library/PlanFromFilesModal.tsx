@@ -1,7 +1,7 @@
 import { useId, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { ClipboardList, Loader2 } from 'lucide-react';
 import { api } from '../../api/client';
 import type { Order, PartsPreview } from '../../api/client';

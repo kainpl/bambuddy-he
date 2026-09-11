@@ -1,4 +1,4 @@
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import { Pencil, Copy, CheckCircle2, RotateCcw, Ban, Trash2, Package } from 'lucide-react';
 import { api } from '../../api/client';

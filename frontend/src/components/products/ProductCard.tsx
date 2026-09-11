@@ -1,4 +1,4 @@
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import { Copy, Download, Eye, EyeOff, Package, Pencil, Trash2 } from 'lucide-react';
 import { api, ApiError } from '../../api/client';

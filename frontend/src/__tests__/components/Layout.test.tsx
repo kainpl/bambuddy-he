@@ -17,8 +17,8 @@ import { server } from '../mocks/server';
 // LoginPageAuthedRedirect.test.tsx); NavLink keeps the real implementation, so
 // the sidebar-link tests in this file are untouched by it.
 const navigateSpy = vi.fn();
-vi.mock('react-router-dom', async () => {
-  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom');
+vi.mock('react-router', async () => {
+  const actual = await vi.importActual<typeof import('react-router')>('react-router');
   return { ...actual, useNavigate: () => navigateSpy };
 });
 

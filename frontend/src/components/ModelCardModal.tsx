@@ -1,6 +1,6 @@
 import { useState, useEffect, useId } from 'react';
 import DOMPurify from 'dompurify';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import DOMPurify from 'dompurify';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { AlertCircle, ArrowRight, Check, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Download, ExternalLink, FolderOpen, History, Images, Loader2, Trash2, X } from 'lucide-react';

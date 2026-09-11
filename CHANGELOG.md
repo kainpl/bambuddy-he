@@ -123,6 +123,8 @@
 
 - **New identity.** The bar mark replaces the mascot everywhere: browser tab and PWA icons (adaptive SVG, maskable Android tile, Apple touch icon), the sidebar, sign-in and setup pages, the stream overlay, the Windows installer and the README. The PWA theme colour follows the brand ink. The full pack is published at [bamdude.top/brand](https://bamdude.top/brand/README.md). The two Bambuddy splash screenshots that the PWA install dialog used to show are gone.
 
+- **The router moved to React Router 8.** The `react-router-dom` package no longer exists in v8, so the app now imports everything from `react-router`; React itself moved to 19.2.8, which v8 requires. Nothing changes for the operator — routes, links and the back button behave exactly as before — and the weekly dependency audit stops flagging the 7.x line.
+
 ### Fixed
 
 - **Missing or unresponsive queue files no longer keep retrying indefinitely.** AutoQueue and printer queues mark the affected job as a file error and continue with other jobs, without pausing the printer queue or treating the missing file as a failed physical print. Restore the source and retry explicitly. Source checks use bounded workers and deadlines, so a stalled SMB mount cannot block the event loop or accumulate unlimited file-check threads. AutoQueue shows failed jobs and offers retry and removal.
