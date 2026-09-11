@@ -28,9 +28,12 @@ describe('the queued-count toast', () => {
     // ⚠️ `copies` is the SAME number the request carries as its `quantity` —
     // since the «Total» quantity mode (spec 2026-09-11) deals a different one
     // to each printer, the rows counter must add what was SENT, never the
-    // field's own figure.
-    expect(source).toMatch(/const copies = mode === 'edit-queue-item' \? 1 : copiesFor\(plateId, printerId\)/);
-    expect(source).toMatch(/quantity: mode === 'edit-queue-item' \? 1 : copiesFor\(plateId, printerId\)/);
+    // field's own figure. Both now read one helper, `dealtCopies`, which is
+    // also what decides who is skipped and whose spools are weighed — so the
+    // helper's own body is pinned here too.
+    expect(source).toMatch(/const dealtCopies = \([\s\S]{0,120}?mode === 'edit-queue-item' \? 1 : copiesFor\(plateIndex, printerId\)/);
+    expect(source).toMatch(/const copies = dealtCopies\(plateId, printerId\);/);
+    expect(source).toMatch(/quantity: dealtCopies\(plateId, printerId\),/);
     expect(source).toMatch(/results\.queued \+= copies;/);
   });
 

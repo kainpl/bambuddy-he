@@ -805,6 +805,13 @@ export function PrintModal({
     if (effectiveQuantityMode !== 'total') return quantityForPlate(plateIndex);
     return copiesByPlate.get(plateIndex ?? 0)?.get(printerId) ?? 0;
   };
+  // What a (plate, printer) pair is actually dealt. `edit-queue-item` replaces
+  // ONE row and always carries a single copy; every other mode follows the
+  // deal, which in total mode can be zero. Zero is the same answer everywhere
+  // it is asked — no request, no attempt, no progress step, and no spool
+  // weighed in the shortage warning (spec §3).
+  const dealtCopies = (plateIndex: number | null | undefined, printerId: number): number =>
+    mode === 'edit-queue-item' ? 1 : copiesFor(plateIndex, printerId);
 
   // Decision 6: a BATCH is a submission that makes two or more prints — copies,
   // plates, printers — whatever the mode. The count is prints, not rows. In
@@ -1213,7 +1220,10 @@ export function PrintModal({
     }
     return planPlateIds.map((p) =>
       t('printModal.quantityPlan.totalPlate', {
-        plate: plates.find((x) => x.index === p)?.name || `Plate ${p}`,
+        // An unnamed plate is «Plate 1» / «Платформа 1» — the same fallback the
+        // plate picker right above this line uses, so the two never disagree in
+        // the same dialog.
+        plate: plates.find((x) => x.index === p)?.name || t('printModal.plateNFallback', { index: p }),
         total: quantityForPlate(p),
         split: split(p),
       }),
@@ -1479,6 +1489,12 @@ export function PrintModal({
         };
 
         for (const printerId of selectedPrinters) {
+          // In total mode a picked printer can end up dealt nothing at all —
+          // the submit sends it no request, so a shortage on its spools is not
+          // this batch's problem and must not raise a blocking warning about a
+          // machine that was never going to print (spec §3).
+          if (!plateJobs.some((job) => dealtCopies(job.plateId, printerId) > 0)) continue;
+
           const printerStatusForWarning = selectedPrinters.length > 1
             ? multiPrinterMapping.printerResults.find((result) => result.printerId === printerId)?.status
             : printerStatus;
@@ -1498,6 +1514,9 @@ export function PrintModal({
 
           const gramsByTray = new Map<number, number>();
           for (const job of plateJobs) {
+            // The same question per plate: a plate this printer is dealt none
+            // of costs it no filament.
+            if (dealtCopies(job.plateId, printerId) === 0) continue;
             // No mapping means the scheduler picks the trays at dispatch, against
             // an AMS state we cannot see from here - nothing to weigh.
             const printerMapping = getMappingForPrinter(printerId, job.plateId);
@@ -1587,7 +1606,7 @@ export function PrintModal({
     // in total mode a printer can end with none of a plate and is skipped.
     const totalCount = platesToQueue.reduce(
       (sum, plate) =>
-        sum + selectedPrinters.filter((id) => copiesFor(plate ? plate.index : selectedPlate, id) > 0).length,
+        sum + selectedPrinters.filter((id) => dealtCopies(plate ? plate.index : selectedPlate, id) > 0).length,
       0,
     );
     setSubmitProgress({ current: 0, total: totalCount });
@@ -1652,7 +1671,7 @@ export function PrintModal({
         : undefined,
       ...printOptions,
       ...getSwapPayloadForPrinter(printerId),
-      quantity: mode === 'edit-queue-item' ? 1 : copiesFor(plateId, printerId),
+      quantity: dealtCopies(plateId, printerId),
       project_id: submitProjectId,
       project_line_id: submitProjectLineId,
       };
@@ -1665,7 +1684,7 @@ export function PrintModal({
 
       for (let i = 0; i < selectedPrinters.length; i++) {
         const printerId = selectedPrinters[i];
-        const copies = mode === 'edit-queue-item' ? 1 : copiesFor(plateId, printerId);
+        const copies = dealtCopies(plateId, printerId);
         // Total mode dealt this printer none of this plate: nothing to send,
         // nothing to count — not an attempt, not a progress step.
         if (copies === 0) continue;
@@ -1735,7 +1754,7 @@ export function PrintModal({
         } catch (error) {
           results.failed++;
           const printerName = printers?.find(p => p.id === printerId)?.name || `Printer ${printerId}`;
-          const plateName = plate ? (plate.name || `Plate ${plate.index}`) : '';
+          const plateName = plate ? (plate.name || t('printModal.plateNFallback', { index: plate.index })) : '';
           const label = plateName ? `${printerName} (${plateName})` : printerName;
           results.errors.push(`${label}: ${(error as Error).message}`);
         }
@@ -1972,7 +1991,11 @@ export function PrintModal({
 
   // Modal title and action button text based on mode
   const getModalConfig = () => {
-    const printerCount = selectedPrinters.length;
+    // The button counts the printers this submit will actually write to, not
+    // the ones ticked: in total mode a picked printer can be dealt nothing of
+    // every plate, and «Queue to 3 printers» would then name a machine that
+    // gets no request at all.
+    const printerCount = selectedPrinters.filter((id) => planPlateIds.some((p) => copiesFor(p, id) > 0)).length;
 
     if (mode === 'reprint') {
       return {
@@ -2473,11 +2496,15 @@ export function PrintModal({
                     </button>
                   ))}
                 </div>
-                {planLines.map((line, i) => (
-                  <div key={i} data-testid="quantity-plan" className="text-xs text-bambu-gray">
-                    {line}
-                  </div>
-                ))}
+                {/* One line per plate in total mode, so the whole plan is one
+                    element (`quantity-plan`) and each line its own. */}
+                <div data-testid="quantity-plan" className="space-y-1.5">
+                  {planLines.map((line, i) => (
+                    <div key={i} data-testid={`quantity-plan-${i}`} className="text-xs text-bambu-gray">
+                      {line}
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 
