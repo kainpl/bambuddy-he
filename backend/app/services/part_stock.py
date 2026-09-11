@@ -846,10 +846,12 @@ async def unfiled_credit_net(db: AsyncSession, archive_id: int) -> int:
     """How much free stock this archive is currently holding on the shelf.
 
     ``Σ delta`` over EVERY movement carrying this ``archive_id`` — the credit,
-    its reversal when the print was filed under an order, and the re-credit
-    when it was un-filed again. That sum, not the existence of a row, is what
-    "already counted" means: an archive that was credited and then filed has
-    rows but holds nothing, and crediting it again after un-filing is right.
+    its reversal when the print was filed under an order, the re-credit when it
+    was un-filed again, and the correction :func:`adjust_unfiled_print` writes
+    when defects were recorded after the credit. That sum, not the existence of
+    a row, is what "already counted" means: an archive that was credited and
+    then filed has rows but holds nothing, and crediting it again after
+    un-filing is right.
 
     One function, two readers (the writer's own idempotency check and the
     archive route's 409) — a second copy of the query is a second answer to
@@ -874,9 +876,13 @@ async def _net_by_part(db: AsyncSession, archive_id: int) -> dict[int, int]:
     (Ruling 28): which parts of this print are still standing on the shelf, and
     which of them a reversal has anything to take back.
 
-    ⚠️ This counts EVERY row carrying the id, whatever its reason. Only
-    ``unfiled_print`` and its own reversals ever set that column — do not set it
-    on movements of another reason without revisiting both readers.
+    ⚠️ This counts EVERY row carrying the id, whatever its reason. Three writers
+    set that column and no others: ``unfiled_print`` (the credit), the
+    ``manual`` reversal of :func:`reverse_unfiled_print`, and the ``manual``
+    late-defects correction of :func:`adjust_unfiled_print` — which is exactly
+    why the correction may be written as ``manual`` without touching either
+    reader, both of which were revisited for it. Do not set it on movements of
+    another reason without revisiting both again.
     """
     rows = (
         await db.execute(
@@ -1183,6 +1189,12 @@ async def adjust_unfiled_print(
     if archive.project_id is not None or archive.status != _COMPLETED or archive.library_file_id is None:
         return result
     wanted, _parts = await _wanted_by_part(db, archive)
+    if not wanted:
+        # Unresolvable, not zero: no part rows, or a plate no product claims any
+        # more (the file was unlinked since the credit). The credit refuses to
+        # write in this state and so does the correction — a print we cannot
+        # judge is not a print that produced nothing.
+        return result
     credited = {part_id: net for part_id, net in (await _net_by_part(db, archive.id)).items() if net > 0}
     if not credited:
         return result
@@ -1199,7 +1211,9 @@ async def adjust_unfiled_print(
         part = parts.get(part_id)
         if part is None or not is_counted(part):
             logger.info(
-                "part_stock: part %s no longer holds stock; archive %s not corrected on it", part_id, archive.id
+                "part_stock: part %s is not a counted part of this correction; archive %s not corrected on it",
+                part_id,
+                archive.id,
             )
             continue
         delta = wanted.get(part_id, 0) - net

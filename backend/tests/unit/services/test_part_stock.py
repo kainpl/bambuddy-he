@@ -1286,11 +1286,15 @@ async def test_a_print_filed_under_an_order_is_left_alone(db_session, shelf):
     product, parts, archive = shelf
     await credit_unfiled_print(db_session, archive)
     archive.project_id = 1
+    await db_session.flush()
     await _set_defective(db_session, archive, "lid", 2)
 
     result = await adjust_unfiled_print(db_session, archive, note=NOTE_DEFECTS_RECORDED)
 
     assert result.written == []
+    # The shelf as the credit left it — so an early return for the WRONG reason
+    # (an empty ``wanted``, say) could not pass this by writing nothing.
+    assert await balances(db_session, product.id) == {parts["lid"].id: 3, parts["base"].id: 4}
 
 
 async def test_spent_stock_is_refused_by_part_and_the_rest_is_still_corrected(db_session, shelf):
@@ -1315,3 +1319,51 @@ async def test_the_credit_and_the_correction_read_one_wanted_map(db_session, she
     wanted, _parts = await part_stock_module._wanted_by_part(db_session, archive)
     written = await credit_unfiled_print(db_session, archive)
     assert wanted == {m.product_part_id: m.delta for m in written}
+
+
+async def test_a_plate_no_product_claims_any_more_is_unresolvable_not_empty(db_session, shelf):
+    """The file was unlinked from the product between the credit and the defects
+    (``product_sync`` deletes and re-plants ``ProductPlate`` rows). ``_wanted_by_part``
+    then answers ``{}`` — "I cannot tell", not "this plate produced nothing" — and
+    reading it as a zero would write the WHOLE credit off as scrap. The credit
+    refuses to write in this state; so does the correction."""
+    product, parts, archive = shelf
+    await credit_unfiled_print(db_session, archive)
+    plate = (await db_session.execute(select(ProductPlate).where(ProductPlate.library_file_id == 77))).scalar_one()
+    await db_session.delete(plate)
+    await db_session.flush()
+    await _set_defective(db_session, archive, "lid", 2)
+
+    result = await adjust_unfiled_print(db_session, archive, note=NOTE_DEFECTS_RECORDED)
+
+    assert result.written == [] and result.refused == []
+    assert await balances(db_session, product.id) == {parts["lid"].id: 3, parts["base"].id: 4}
+
+
+async def test_a_part_whose_credit_was_already_reversed_is_left_out_of_the_correction(db_session, shelf):
+    """The mixed case: one part standing, its sibling back at zero.
+
+    A PARTIAL reversal makes it — the lids' reversal went through, the bases'
+    was refused because two of them had been sold. So the lid's net for this
+    archive is 0 and the base's is still 4. The correction touches only what is
+    standing: the base loses the newly-scrapped one, and the lid — which this
+    archive no longer holds anything of — is not re-credited behind the
+    reversal's back."""
+    product, parts, archive = shelf
+    await credit_unfiled_print(db_session, archive)
+    await move(db_session, part_id=parts["base"].id, delta=-2, reason="manual", note="sold")
+    with pytest.raises(PartStockError):
+        await reverse_unfiled_print(db_session, archive, note=NOTE_FILED_UNDER_ORDER)
+    # The state the partial reversal actually leaves, asserted rather than assumed.
+    assert await part_stock_module._net_by_part(db_session, archive.id) == {
+        parts["lid"].id: 0,
+        parts["base"].id: 4,
+    }
+    assert await balances(db_session, product.id) == {parts["lid"].id: 0, parts["base"].id: 2}
+
+    await _set_defective(db_session, archive, "base", 1)
+    result = await adjust_unfiled_print(db_session, archive, note=NOTE_DEFECTS_RECORDED)
+
+    assert [(m.product_part_id, m.delta) for m in result.written] == [(parts["base"].id, -1)]
+    assert result.refused == []
+    assert await balances(db_session, product.id) == {parts["lid"].id: 0, parts["base"].id: 1}
