@@ -41,6 +41,9 @@ describe('modalStack', () => {
   beforeEach(() => _resetForTests());
   afterEach(() => {
     cleanup();
+    // A failing assertion skips a test's own `root.remove()`, and the leaked
+    // node then fails `a missing #root is not an error` as collateral.
+    document.getElementById('root')?.remove();
     _resetForTests();
   });
 

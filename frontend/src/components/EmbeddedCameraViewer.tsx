@@ -563,10 +563,14 @@ export function EmbeddedCameraViewer({ printerId, printerName, viewerIndex = 0, 
   const streamUrl = withStreamToken(`/api/v1/printers/${printerId}/camera/stream?fps=15&t=${imageKey}`);
 
   return (
+    // Fullscreen paints one step below the modal layer (Modal.tsx: z = 50 +
+    // stack position), never above it: a dialog raised from the viewer's own
+    // header must be visible, and while it is open the viewer — inside #root —
+    // is inert anyway. z-[100] used to bury that dialog under the video.
     // not-a-modal: viewer
     <div
       ref={containerRef}
-      className={`${isFullscreen ? 'fixed inset-0 z-[100]' : 'fixed z-40 rounded-lg shadow-2xl border border-bambu-dark-tertiary'} bg-bambu-dark-secondary overflow-hidden`}
+      className={`${isFullscreen ? 'fixed inset-0 z-[49]' : 'fixed z-40 rounded-lg shadow-2xl border border-bambu-dark-tertiary'} bg-bambu-dark-secondary overflow-hidden`}
       style={isFullscreen ? undefined : {
         left: state.x,
         top: state.y,

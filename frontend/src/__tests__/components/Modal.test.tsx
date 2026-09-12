@@ -15,6 +15,10 @@ import { _resetForTests } from '../../components/modalStack';
 describe('Modal', () => {
   afterEach(() => {
     cleanup();
+    // A failing assertion skips a test's own `root.remove()`; a leftover #root
+    // would make `the opener is read before #root becomes inert` hold a second
+    // root nobody marks inert, and pass vacuously.
+    document.getElementById('root')?.remove();
     _resetForTests();
   });
 
@@ -272,6 +276,55 @@ describe('Modal', () => {
         delete (document as { activeElement?: unknown }).activeElement;
         root.remove();
       }
+    });
+
+    it('an outer modal unmounting together with its nested modal still returns focus to the opener', async () => {
+      const root = mountRoot();
+      const opener = document.createElement('button');
+      root.appendChild(opener);
+      opener.focus();
+      // Same spy as the first trap test — defineProperty because patchFocus
+      // left the prototype's `focus` a getter with no setter. It records
+      // whether the opener was OUT of every inert subtree when focus was
+      // handed back: in a browser a focus() inside one is a silent no-op.
+      const openerLiveWhenFocused: boolean[] = [];
+      const nativeFocus = opener.focus.bind(opener);
+      Object.defineProperty(opener, 'focus', {
+        configurable: true,
+        value: () => {
+          openerLiveWhenFocused.push(!opener.closest('[inert]'));
+          nativeFocus();
+        },
+      });
+
+      function Host() {
+        const [open, setOpen] = useState(true);
+        const [confirm, setConfirm] = useState(false);
+        if (!open) return null;
+        return (
+          <Modal onClose={() => setOpen(false)} title="Outer">
+            <button onClick={() => setConfirm(true)}>open confirm</button>
+            {confirm && (
+              <Modal onClose={() => setConfirm(false)} title="Confirm">
+                <button onClick={() => setOpen(false)}>discard</button>
+              </Modal>
+            )}
+          </Modal>
+        );
+      }
+      render(<Host />);
+      fireEvent.click(screen.getByText('open confirm'));
+      expect(root).toHaveAttribute('inert');
+      // One click unmounts both modals in one commit: React cleans a deleted
+      // subtree top-down, so the outer modal's focus return runs before the
+      // inner one has unregistered and #root is still inert at that moment.
+      fireEvent.click(screen.getByText('discard'));
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(root).not.toHaveAttribute('inert');
+      await Promise.resolve();
+      expect(document.activeElement).toBe(opener);
+      expect(openerLiveWhenFocused).toEqual([true]);
+      root.remove();
     });
   });
 

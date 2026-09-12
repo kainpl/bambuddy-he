@@ -32,6 +32,9 @@ import { useEffect, useLayoutEffect, useRef } from 'react';
  * passive cleanup — on purpose, and they must not be merged: the read has
  * to happen before the stack's passive effect marks `#root` inert, the
  * return has to happen after the stack's passive cleanup makes it live.
+ * When the opener is still inside an inert subtree at cleanup time — two
+ * modals unmounting in one commit, cleaned up top-down — the return is
+ * deferred by a microtask, which runs after the whole passive flush.
  *
  * ⚠️ The element to return focus TO is read at OPEN, not at close: by the time
  * the overlay unmounts `document.activeElement` is whatever the overlay left
@@ -56,11 +59,21 @@ export function useDialogFocus<T extends HTMLElement>(open: boolean) {
     if (!open) return;
     ref.current?.focus();
     return () => {
+      const el = returnFocusTo.current;
+      returnFocusTo.current = null;
       // `?.` on the method as well as on the ref: jsdom hands back elements
       // that have been detached from the document, and a page that navigated
       // away has nothing left to focus.
-      returnFocusTo.current?.focus?.();
-      returnFocusTo.current = null;
+      if (el?.closest?.('[inert]')) {
+        // Still inside an inert subtree: two modals are unmounting in ONE
+        // commit and React ran this outer cleanup before the inner modal
+        // unregistered (deleted subtrees clean up top-down). A microtask runs
+        // after the whole passive flush — every unregister done, #root live —
+        // and still before the browser's focus fixup at "update the rendering".
+        queueMicrotask(() => el.focus?.());
+      } else {
+        el?.focus?.();
+      }
     };
   }, [open]);
 

@@ -14,10 +14,10 @@
  *   focus in/out (`useDialogFocus`);
  * - the focus trap: while it is open the stack marks `#root` inert, and marks
  *   this modal's overlay inert whenever another modal sits above it
- *   (`modalStack.ts` owns every `inert` attribute). Tab therefore cannot
- *   reach the page behind the topmost modal — no key handler of our own is
- *   involved; the toast viewport and popovers portalled into body stay live
- *   on purpose.
+ *   (`modalStack.ts` owns every `inert` attribute of the modal layers). Tab
+ *   therefore cannot reach the page behind the topmost modal — no key handler
+ *   of our own is involved; the toast viewport and popovers portalled into
+ *   body stay live on purpose.
  *
  * The body has no padding of its own: a migrated modal keeps its inner markup
  * exactly as it was. `size` is a closed table of literal classes — Tailwind's

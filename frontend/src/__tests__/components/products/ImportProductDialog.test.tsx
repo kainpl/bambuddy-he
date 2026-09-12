@@ -196,10 +196,11 @@ describe('ImportProductDialog', () => {
     // ⚠️ The overlay is opened from a page that stays in the tree behind it, so
     // without the role and the focus move a screen reader announces nothing at
     // all and a keyboard user starts at the top of the PAGE — every control
-    // behind the dialog comes before anything in it. `useDialogFocus` is not a
-    // trap and does not claim to be: Tab still walks out. What it fixes is the
-    // two ends, and the return end is only observable if the dialog actually
-    // unmounts — hence the opener rather than a bare mount.
+    // behind the dialog comes before anything in it. The trap itself is
+    // `modalStack`'s `inert` on `#root` (pinned by `Modal.test.tsx`), not this
+    // hook; what this test checks is the two ENDS — focus in on open, focus
+    // back on close — and the return end is only observable if the dialog
+    // actually unmounts, hence the opener rather than a bare mount.
     render(<Openable />);
     const opener = screen.getByRole('button', { name: 'open import' });
     opener.focus();
