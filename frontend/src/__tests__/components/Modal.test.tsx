@@ -5,6 +5,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { useState } from 'react';
 import { screen, fireEvent, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { render } from '../utils';
@@ -137,6 +138,105 @@ describe('Modal', () => {
     unmount();
     expect(document.activeElement).toBe(opener);
     opener.remove();
+  });
+
+  describe('focus trap through inert', () => {
+    function mountRoot(): HTMLElement {
+      const root = document.createElement('div');
+      root.id = 'root';
+      document.body.appendChild(root);
+      return root;
+    }
+
+    it('#root is inert while the modal is open and live again before focus returns to the opener', () => {
+      const root = mountRoot();
+      const opener = document.createElement('button');
+      root.appendChild(opener);
+      opener.focus();
+      // jsdom does not refuse focus() inside an inert subtree, so the test
+      // pins the ORDER: when the opener is focused back, #root must already
+      // be live, or in a real browser the call would be a silent no-op.
+      // ⚠️ defineProperty, not `opener.focus = …`: the first userEvent.setup()
+      // in this file replaces HTMLElement.prototype.focus with a getter-only
+      // accessor (user-event's patchFocus), so a plain assignment throws.
+      const rootWasLiveWhenFocused: boolean[] = [];
+      const nativeFocus = opener.focus.bind(opener);
+      Object.defineProperty(opener, 'focus', {
+        configurable: true,
+        value: () => {
+          rootWasLiveWhenFocused.push(!root.hasAttribute('inert'));
+          nativeFocus();
+        },
+      });
+
+      const { unmount } = render(<Modal onClose={vi.fn()} title="T">x</Modal>);
+      expect(root).toHaveAttribute('inert');
+      expect(screen.getByRole('dialog').closest('[inert]')).toBeNull();
+
+      unmount();
+      expect(root).not.toHaveAttribute('inert');
+      expect(document.activeElement).toBe(opener);
+      expect(rootWasLiveWhenFocused).toEqual([true]);
+      root.remove();
+    });
+
+    it('a modal under another modal is inert, and live again before focus returns into it', () => {
+      mountRoot();
+      function Outer() {
+        const [confirm, setConfirm] = useState(false);
+        return (
+          <Modal onClose={vi.fn()} title="Outer">
+            <button onClick={() => setConfirm(true)}>open confirm</button>
+            {confirm && (
+              <Modal onClose={() => setConfirm(false)} title="Confirm">
+                <button onClick={() => setConfirm(false)}>done</button>
+              </Modal>
+            )}
+          </Modal>
+        );
+      }
+      render(<Outer />);
+      const openConfirm = screen.getByText('open confirm');
+      const outerOverlay = screen.getByRole('dialog', { name: 'Outer' }).parentElement!;
+      const outerWasLiveWhenFocused: boolean[] = [];
+      const nativeFocus = openConfirm.focus.bind(openConfirm);
+      // defineProperty for the same reason as above: patchFocus made the
+      // prototype's `focus` a getter with no setter.
+      Object.defineProperty(openConfirm, 'focus', {
+        configurable: true,
+        value: () => {
+          outerWasLiveWhenFocused.push(!outerOverlay.hasAttribute('inert'));
+          nativeFocus();
+        },
+      });
+
+      openConfirm.focus();
+      fireEvent.click(openConfirm);
+      expect(outerOverlay).toHaveAttribute('inert');
+      const inner = screen.getByRole('dialog', { name: 'Confirm' });
+      expect(inner.parentElement).not.toHaveAttribute('inert');
+      expect(document.activeElement).toBe(inner);
+
+      fireEvent.click(screen.getByText('done'));
+      expect(screen.queryByRole('dialog', { name: 'Confirm' })).toBeNull();
+      expect(outerOverlay).not.toHaveAttribute('inert');
+      expect(document.activeElement).toBe(openConfirm);
+      // One call from the test itself (before the confirm opened), one from
+      // useDialogFocus returning focus — that one must see a live outer modal.
+      expect(outerWasLiveWhenFocused).toEqual([true, true]);
+      document.getElementById('root')!.remove();
+    });
+
+    it('a lightbox under a dialog is inert like any other modal', () => {
+      render(
+        <Modal onClose={vi.fn()} variant="lightbox" ariaLabel="Picture">
+          <img alt="" />
+          <Modal onClose={vi.fn()} title="Over it">x</Modal>
+        </Modal>,
+      );
+      expect(screen.getByRole('dialog', { name: 'Picture' })).toHaveAttribute('inert');
+      expect(screen.getByRole('dialog', { name: 'Over it' }).parentElement).not.toHaveAttribute('inert');
+    });
   });
 
   it('two nested modals: Escape closes the inner first, then the outer', () => {

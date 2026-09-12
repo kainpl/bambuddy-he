@@ -11,14 +11,18 @@
  *   ⚠️ The backdrop has NO click handler — a tap outside a form must not throw
  *   the form away. `variant="lightbox"` is the one exception.
  * - `role="dialog"`, `aria-modal`, the accessible name, `tabIndex={-1}` and
- *   focus in/out (`useDialogFocus`).
+ *   focus in/out (`useDialogFocus`);
+ * - the focus trap: while it is open the stack marks `#root` inert, and marks
+ *   this modal's overlay inert whenever another modal sits above it
+ *   (`modalStack.ts` owns every `inert` attribute). Tab therefore cannot
+ *   leave the topmost modal — no key handler of our own is involved.
  *
  * The body has no padding of its own: a migrated modal keeps its inner markup
  * exactly as it was. `size` is a closed table of literal classes — Tailwind's
  * scanner cannot see a template string; `8xl` needs `--container-8xl` in
  * `index.css`.
  */
-import { useId, type CSSProperties, type MouseEvent, type ReactNode } from 'react';
+import { useId, useRef, type CSSProperties, type MouseEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { X } from 'lucide-react';
@@ -92,8 +96,16 @@ export function Modal({
 }: ModalProps) {
   const { t } = useTranslation();
   const titleId = useId();
+  // The outermost portalled element: the stack marks it inert while another
+  // modal is above this one (modalStack.ts owns the attribute).
+  const overlayRef = useRef<HTMLDivElement>(null);
+  // ⚠️ Declared BEFORE useDialogFocus on purpose. React runs a component's
+  // effect cleanups in declaration order: on unmount this one unregisters
+  // first, which makes #root (or the modal below) live again, and only then
+  // does useDialogFocus give focus back — focus() into an inert subtree is a
+  // silent no-op. Modal.test.tsx pins the order.
+  const { position, childAncestry } = useModalStackEntry({ onClose, closeDisabled }, overlayRef);
   const focusRef = useDialogFocus<HTMLDivElement>(true);
-  const { position, childAncestry } = useModalStackEntry({ onClose, closeDisabled });
   // Computed, never hand-written: paint order follows the stack.
   const zIndex = 50 + position;
   const body = <ModalAncestryContext.Provider value={childAncestry}>{children}</ModalAncestryContext.Provider>;
@@ -103,9 +115,14 @@ export function Modal({
       e.stopPropagation();
       if (e.target === e.currentTarget && !closeDisabled) onClose();
     };
+    // The ground is both the overlay and the dialog, so it carries both refs.
+    const groundRef = (el: HTMLDivElement | null) => {
+      overlayRef.current = el;
+      focusRef.current = el;
+    };
     return createPortal(
       <div
-        ref={focusRef}
+        ref={groundRef}
         role="dialog"
         aria-modal="true"
         aria-label={ariaLabel}
@@ -128,6 +145,7 @@ export function Modal({
 
   return createPortal(
     <div
+      ref={overlayRef}
       style={{ zIndex }}
       className={`fixed inset-0 flex items-center justify-center bg-black/50 backdrop-blur-sm ${size === 'full' ? '' : 'p-4'}`}
       onClick={stopClick}
