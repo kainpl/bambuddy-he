@@ -301,6 +301,7 @@ describe('modalStack', () => {
     });
 
     it('useModalStackEntry passes its overlay to the stack', () => {
+      // The inner Shell is a DOM child of the outer one here; real modals are body siblings. jsdom does not inherit inert, so the child-shape is safe for asserting which element got the attribute.
       function Shell({ label, children }: { label: string; children?: ReactNode }) {
         const ref = useRef<HTMLDivElement>(null);
         const { childAncestry } = useModalStackEntry({ onClose: vi.fn(), closeDisabled: false }, ref);

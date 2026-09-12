@@ -127,6 +127,8 @@
 
 ### Fixed
 
+- Keyboard focus no longer walks out of an open dialog into the page behind it. While a dialog is open the page and any dialog beneath it are inert; Tab stays inside the topmost dialog, and focus returns to the control that opened it when it closes. Toasts remain usable over an open dialog.
+
 - **Missing or unresponsive queue files no longer keep retrying indefinitely.** AutoQueue and printer queues mark the affected job as a file error and continue with other jobs, without pausing the printer queue or treating the missing file as a failed physical print. Restore the source and retry explicitly. Source checks use bounded workers and deadlines, so a stalled SMB mount cannot block the event loop or accumulate unlimited file-check threads. AutoQueue shows failed jobs and offers retry and removal.
 
 - **Backup and restore no longer report success with skipped files.** Copies are verified, include empty directories, and respect custom archive paths. New ZIPs carry a file manifest; older ZIPs remain supported. Restore stages every incoming file before replacing the database, keeps mount roots in place, and rolls back all file changes if copying, renaming or the database swap fails. A failed rollback retains recovery copies. Zigbee is stopped before replacing its database, and manual/scheduled backup and restore cannot overlap. Windows file-lock and real PostgreSQL/SQLite ZIP round trips cover the failure and recovery paths.

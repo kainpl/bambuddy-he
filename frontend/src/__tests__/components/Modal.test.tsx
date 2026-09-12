@@ -237,6 +237,42 @@ describe('Modal', () => {
       expect(screen.getByRole('dialog', { name: 'Picture' })).toHaveAttribute('inert');
       expect(screen.getByRole('dialog', { name: 'Over it' }).parentElement).not.toHaveAttribute('inert');
     });
+
+    it('the opener is read before #root becomes inert', () => {
+      const root = mountRoot();
+      const opener = document.createElement('button');
+      root.appendChild(opener);
+      opener.focus();
+      // jsdom has no focus-fixup rule, so the test pins the ORDER instead:
+      // every read of document.activeElement the HOOK makes while the modal
+      // mounts must see a live #root — in a browser whose fixup ran
+      // synchronously, a read after the stack marked #root inert would
+      // already return <body>.
+      // ⚠️ The hook's reads only: react-dom reads activeElement itself
+      // (`getActiveElementDeep`, for selection restore) in every commit,
+      // including the one the stack's own `notify()` schedules — which by
+      // definition runs after #root is inert. Those are React's bookkeeping,
+      // not the opener, so the stack frame is what separates them.
+      const desc = Object.getOwnPropertyDescriptor(Document.prototype, 'activeElement')!;
+      const rootLiveAtRead: boolean[] = [];
+      Object.defineProperty(document, 'activeElement', {
+        configurable: true,
+        get() {
+          if (new Error().stack?.includes('useDialogFocus')) rootLiveAtRead.push(!root.hasAttribute('inert'));
+          return desc.get!.call(document);
+        },
+      });
+      try {
+        const { unmount } = render(<Modal onClose={vi.fn()} title="T">x</Modal>);
+        expect(rootLiveAtRead.length).toBeGreaterThan(0);
+        expect(rootLiveAtRead).not.toContain(false);
+        unmount();
+        expect(document.activeElement).toBe(opener);
+      } finally {
+        delete (document as { activeElement?: unknown }).activeElement;
+        root.remove();
+      }
+    });
   });
 
   it('two nested modals: Escape closes the inner first, then the outer', () => {

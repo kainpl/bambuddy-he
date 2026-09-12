@@ -31,9 +31,10 @@
  * The stack also owns every `inert` attribute — it is the same fact, "which
  * layer is live", written into the DOM. While the stack is non-empty `#root`
  * (the element main.tsx renders into) is inert, and so is every registered
- * overlay except the topmost; that is the whole focus trap. Tab cannot leave
- * the top modal because nothing else in the document can take focus, with no
- * key handler of our own. Toasts are portalled into body for this reason
+ * overlay except the topmost; that is the whole focus trap. Tab cannot reach
+ * the page because nothing under #root can take focus, with no key handler of
+ * our own; the toast viewport and popovers portalled into body are
+ * deliberately live. Toasts are portalled into body for this reason
  * (contexts/ToastContext.tsx), and so is every modal.
  *
  * ⚠️ The attributes are written imperatively, in `register`/`unregister`,
@@ -79,7 +80,7 @@ function notify(): void {
   for (const fn of subscribers) fn();
 }
 
-/** §3.1 + §3.2 of the spec: the page is inert while any modal is open; only the top overlay is live. */
+/** The rule: the page (#root) is inert while any modal is open; of the registered overlays only the topmost is live. */
 function applyInert(): void {
   document.getElementById('root')?.toggleAttribute('inert', stack.length > 0);
   stack.forEach((r, i) => r.overlay?.current?.toggleAttribute('inert', i !== stack.length - 1));
@@ -117,6 +118,12 @@ export function unregister(key: string): void {
   const leaving = stack.find((r) => r.key === key);
   stack = stack.filter((r) => r.key !== key);
   if (stack.length === 0) window.removeEventListener('keydown', onKeyDown);
+  // On a real unmount this is dormant — React nulls host refs in the
+  // mutation phase, before passive cleanups run — and the node leaves the
+  // DOM with its attribute. It matters when the effect re-runs for a
+  // still-mounted modal (a new overlay ref). Keep it here, in the passive
+  // path: a layout effect would run before the focus return and break the
+  // cleanup order useDialogFocus relies on.
   leaving?.overlay?.current?.removeAttribute('inert');
   applyInert();
   notify();

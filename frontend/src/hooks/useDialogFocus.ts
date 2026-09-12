@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef } from 'react';
 
 /**
  * Move focus INTO an overlay when it opens, and give it back when it closes.
@@ -13,16 +13,24 @@ import { useEffect, useRef } from 'react';
  * rather than trusting any list written here; a list is what went stale last
  * time.
  *
- * ⚠️ **This is NOT a focus trap and must not be described as one.** Tab still
- * walks out of the overlay and into the page behind it; what the hook fixes is
- * the two ends. Without it a keyboard user who opened the overlay starts at the
- * top of the document — every control of the page behind comes before anything
- * in the dialog — and on close the focus ring is left on `<body>`, which is
- * nowhere: the next Tab restarts from the top of the page rather than from the
- * control that opened the dialog. Trapping properly means inert-ing the rest of
- * the document, which is a change to every page that opens one of these; it is
- * deliberately not done here and no comment in this codebase claims it is
- * (vault: `90-ideas/Focus trap для модалок через inert`).
+ * ⚠️ **This hook is the two ENDS of the trap, not the trap.** The trap itself
+ * is `inert`: while a modal is open the modal stack (`components/modalStack.ts`)
+ * marks `#root` and every non-top modal inert, so nothing outside the topmost
+ * dialog can take focus and Tab has nowhere to go. What this hook fixes is
+ * where focus starts and where it ends up. Without it a keyboard user who
+ * opened the overlay would start at the top of the document, and on close the
+ * focus ring would be left on `<body>`, which is nowhere.
+ *
+ * ⚠️ The return happens in an effect cleanup, and `focus()` on an element
+ * inside an inert subtree is a silent no-op. The shell therefore calls
+ * `useModalStackEntry` BEFORE this hook — React runs cleanups in declaration
+ * order, so the layer below is live again by the time the opener is focused.
+ * `Modal.test.tsx` pins that order; do not reorder the hooks in the shell.
+ *
+ * ⚠️ The opener is READ in a layout effect and focus is RETURNED in the
+ * passive cleanup — on purpose, and they must not be merged: the read has
+ * to happen before the stack's passive effect marks `#root` inert, the
+ * return has to happen after the stack's passive cleanup makes it live.
  *
  * ⚠️ The element to return focus TO is read at OPEN, not at close: by the time
  * the overlay unmounts `document.activeElement` is whatever the overlay left
@@ -32,9 +40,19 @@ export function useDialogFocus<T extends HTMLElement>(open: boolean) {
   const ref = useRef<T | null>(null);
   const returnFocusTo = useRef<HTMLElement | null>(null);
 
-  useEffect(() => {
+  // The opener is read in a LAYOUT effect: layout effects run before every
+  // passive effect of the commit, so this happens before the modal stack
+  // (a passive effect in useModalStackEntry) marks #root inert. The HTML
+  // focus-fixup rule for an ancestor turning inert runs at "update the
+  // rendering" (whatwg/html#8392), so a passive read would still see the
+  // opener today — the layout read simply does not depend on that timing.
+  useLayoutEffect(() => {
     if (!open) return;
     returnFocusTo.current = document.activeElement as HTMLElement | null;
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
     ref.current?.focus();
     return () => {
       // `?.` on the method as well as on the ref: jsdom hands back elements
