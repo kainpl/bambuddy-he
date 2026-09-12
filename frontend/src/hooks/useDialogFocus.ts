@@ -15,8 +15,9 @@ import { useEffect, useLayoutEffect, useRef } from 'react';
  *
  * ⚠️ **This hook is the two ENDS of the trap, not the trap.** The trap itself
  * is `inert`: while a modal is open the modal stack (`components/modalStack.ts`)
- * marks `#root` and every non-top modal inert, so nothing outside the topmost
- * dialog can take focus and Tab has nowhere to go. What this hook fixes is
+ * marks `#root` and every non-top modal inert, so nothing in the page behind
+ * can take focus and Tab has nowhere to go (the toast viewport and popovers
+ * portalled into `body` stay live on purpose). What this hook fixes is
  * where focus starts and where it ends up. Without it a keyboard user who
  * opened the overlay would start at the top of the document, and on close the
  * focus ring would be left on `<body>`, which is nowhere.

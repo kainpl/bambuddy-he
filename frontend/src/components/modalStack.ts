@@ -34,8 +34,8 @@
  * overlay except the topmost; that is the whole focus trap. Tab cannot reach
  * the page because nothing under #root can take focus, with no key handler of
  * our own; the toast viewport and popovers portalled into body are
- * deliberately live. Toasts are portalled into body for this reason
- * (contexts/ToastContext.tsx), and so is every modal.
+ * deliberately live. Every modal is portalled into body for the same reason
+ * (see contexts/ToastContext.tsx for the toast side).
  *
  * ⚠️ The attributes are written imperatively, in `register`/`unregister`,
  * BEFORE `notify()` — never as a React prop. `useDialogFocus` returns focus
@@ -121,9 +121,9 @@ export function unregister(key: string): void {
   // On a real unmount this is dormant — React nulls host refs in the
   // mutation phase, before passive cleanups run — and the node leaves the
   // DOM with its attribute. It matters when the effect re-runs for a
-  // still-mounted modal (a new overlay ref). Keep it here, in the passive
-  // path: a layout effect would run before the focus return and break the
-  // cleanup order useDialogFocus relies on.
+  // still-mounted modal (the ref now pointing at a different node). Keep it
+  // here, in the passive path: a layout effect would run before the focus
+  // return and break the cleanup order useDialogFocus relies on.
   leaving?.overlay?.current?.removeAttribute('inert');
   applyInert();
   notify();
