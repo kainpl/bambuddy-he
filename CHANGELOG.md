@@ -127,6 +127,8 @@
 
 ### Fixed
 
+- **Search finds Cyrillic (and any non-ASCII) names regardless of letter case.** On SQLite, and on a PostgreSQL database created with the `C` locale, `?q=ЛАМПА` used to miss «лампа» in every search — archives, library, products, stock, inventory — and the login lookup by username. Case is now folded the same way on every backend. A PostgreSQL database that cannot fold case itself is used through a Unicode collation (PostgreSQL 17+ or an ICU build) with full-text ranking switched off, and the log says how to restore it (recreate the database with a UTF-8 locale).
+
 - **Keyboard focus stays inside an open dialog.** Tab no longer walks out of a dialog into the page behind it: while a dialog is open, the page and any dialog beneath it cannot be clicked or tabbed into, and when it closes focus returns to the control that opened it. Toasts remain usable over an open dialog. A dialog opened from a card menu returns focus to the menu's button when it closes.
 
 - **Missing or unresponsive queue files no longer keep retrying indefinitely.** AutoQueue and printer queues mark the affected job as a file error and continue with other jobs, without pausing the printer queue or treating the missing file as a failed physical print. Restore the source and retry explicitly. Source checks use bounded workers and deadlines, so a stalled SMB mount cannot block the event loop or accumulate unlimited file-check threads. AutoQueue shows failed jobs and offers retry and removal.

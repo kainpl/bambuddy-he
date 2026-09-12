@@ -396,9 +396,13 @@ class TestCyrillicSearch:
         assert result["archives"] == ["Кронштейн"]
 
     def test_the_probe_reports_what_it_did(self, result):
-        """Either the database folds natively or a collation was picked — with
-        rows found, never neither. Without this a green run above could mean the
-        collation path was never taken (a UTF-8 locale database), which is
-        exactly the configuration the feature does not need.
+        """Rows were found above, so a folding mechanism must be on record: the
+        database folds natively, or the probe picked a collation. Neither is
+        impossible — it would mean the search matched with nothing folding it,
+        and the reported state is then not describing this run.
+
+        This does not say WHICH path ran (a UTF-8-locale server legitimately
+        answers "native"); the report itself names it, and the ``C``-locale dev
+        server is what the maintainer runs this against.
         """
         assert result["native"] or result["collation"] in ("pg_c_utf8", "und-x-icu"), result

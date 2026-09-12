@@ -22,7 +22,10 @@ from httpx import AsyncClient
 
 @pytest.fixture
 async def cyrillic_archive(archive_factory, printer_factory):
-    printer = await printer_factory(name="Кронштейн-принтер")
+    # A name that shares no token with the search: were the route ever widened
+    # to printer names, a printer called «Кронштейн-принтер» would keep these
+    # tests green for the wrong reason.
+    printer = await printer_factory(name="Принтер 1")
     return await archive_factory(printer.id, print_name="Кронштейн", filename="kronshtein.gcode.3mf")
 
 

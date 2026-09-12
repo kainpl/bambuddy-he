@@ -552,7 +552,13 @@ async def search_archives(
             # back only the savepoint keeps both the session and its objects.
             async with db.begin_nested():
                 result = await db.execute(fts_query, fts_params)
-                matched_ids = [row[0] for row in result.fetchall()]
+                rows = [row[0] for row in result.fetchall()]
+            # Assigned only once the block has exited: leaving it (RELEASE
+            # SAVEPOINT) can raise too, and a ``matched_ids`` already filled in
+            # there would send the request down the index branch right after
+            # logging that it is falling back. The log and the branch taken must
+            # be the same story.
+            matched_ids = rows
         except Exception as e:
             logger.warning("FTS search failed, falling back to LIKE search: %s", e)
 

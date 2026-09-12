@@ -13,6 +13,7 @@ from unittest.mock import Mock
 import pytest
 from sqlalchemy import Column, MetaData, String, Table, func, select, text
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.exc import OperationalError
 
 from backend.app.core import case_folding
 
@@ -57,6 +58,60 @@ async def test_the_test_engine_lowers_unicode(test_engine):
         assert (await conn.execute(text("SELECT 'Лампа' LIKE '%' || lower('ЛАМПА') || '%'"))).scalar() == 0
         # The shape SQLAlchemy emits for ilike on SQLite: lower(col) LIKE lower(:q)
         assert (await conn.execute(text("SELECT lower('Лампа настільна') LIKE lower('%ЛАМПА%')"))).scalar() == 1
+
+
+# The columns m001 indexes, copied from its ``_FTS_COLS`` — the DDL below is
+# that migration's, minus the triggers (the row is inserted by hand instead).
+_FTS_COLS = "print_name, filename, tags, notes, designer, filament_type"
+
+
+@pytest.mark.asyncio
+async def test_the_sqlite_fts5_index_folds_cyrillic(test_engine):
+    """Measure the production SQLite archives path, rather than reason about it.
+
+    On SQLite ``/archives/?search=`` asks the ``archive_fts`` FTS5 index, and the
+    claim that its default ``unicode61`` tokenizer folds Cyrillic — on both sides,
+    the indexed text and the MATCH term — is why the index branch was never part
+    of this bug. It was reasoning until this test; the route's ``ilike`` fallback
+    is pinned in ``tests/integration/test_archives_search.py``, which cannot
+    reach the index because ``create_all`` does not create a virtual table.
+    """
+    create_fts = text(f"""
+        CREATE VIRTUAL TABLE IF NOT EXISTS archive_fts USING fts5(
+            {_FTS_COLS},
+            content='print_archives',
+            content_rowid='id'
+        )
+    """)
+    try:
+        async with test_engine.begin() as conn:
+            await conn.execute(create_fts)
+    except OperationalError as exc:
+        if "no such module: fts5" not in str(exc):
+            raise
+        pytest.skip(f"this SQLite build has no FTS5, so the index path cannot be measured here: {exc}")
+
+    async with test_engine.begin() as conn:
+        # Straight into the index: the triggers are m001's and a real row in
+        # ``print_archives`` is not what is under test.
+        await conn.execute(
+            text(f"""
+                INSERT INTO archive_fts(rowid, {_FTS_COLS})
+                VALUES (1, 'Кронштейн', 'kronshtein.gcode.3mf', '', '', '', 'PETG')
+            """)
+        )
+
+    async with test_engine.connect() as conn:
+
+        async def matches(term: str) -> list[int]:
+            result = await conn.execute(text("SELECT rowid FROM archive_fts WHERE archive_fts MATCH :t"), {"t": term})
+            return [row[0] for row in result.fetchall()]
+
+        assert await matches("кронштейн") == [1], "the lower-case term must find the capitalised row"
+        assert await matches("КРОНШТЕЙН") == [1], "and the upper-case term the same row"
+        # The guard that makes the two above mean something: a tokenizer that
+        # matched everything would pass them both.
+        assert await matches("кран") == []
 
 
 class TestChooser:

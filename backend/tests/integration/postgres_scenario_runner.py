@@ -297,7 +297,9 @@ async def _cyrillic_search() -> dict:
         )
         await db.commit()
 
-    # A second session so nothing is answered out of the identity map.
+    # A second session, so the searches are a real round trip through the
+    # compiler against committed rows — the way a request asks them — rather
+    # than statements issued inside the transaction that wrote the data.
     async with async_session() as db:
         products = (await db.execute(select(Product.name).where(Product.name.ilike("%ЛАМПА%")))).scalars().all()
         archives = (
