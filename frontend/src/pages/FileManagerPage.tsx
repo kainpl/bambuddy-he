@@ -723,6 +723,14 @@ function FileListActions({ file, t, hasPermission, canModify, onPrint, onSchedul
   const sliceDisabled = useSlicerApi ? !hasPermission('library:upload') : !hasPermission('library:read');
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
+  // Every close hands the focus back to the trigger — the WAI-ARIA menu-button
+  // contract, and what lets a dialog opened from an item return focus somewhere
+  // real: useDialogFocus remembers `document.activeElement` when the dialog
+  // opens, and by then this menu (and the item just clicked) is gone.
+  const closeMenu = () => {
+    setOpen(false);
+    triggerRef.current?.focus();
+  };
   // Portal-rendered dropdown escapes the list container's `overflow-hidden`,
   // so the menu isn't clipped inside the row. The coordinates come from the
   // trigger's own box and are recomputed on scroll/resize — the same
@@ -739,7 +747,7 @@ function FileListActions({ file, t, hasPermission, canModify, onPrint, onSchedul
       {open && createPortal(
         <>
           {/* not-a-modal: menu */}
-          <div className="fixed inset-0 z-[55]" onClick={() => setOpen(false)} />
+          <div className="fixed inset-0 z-[55]" onClick={closeMenu} />
           <div
             style={{
               position: 'fixed',
@@ -754,7 +762,7 @@ function FileListActions({ file, t, hasPermission, canModify, onPrint, onSchedul
               <>
                 <button
                   className={`w-full px-3 py-1.5 text-left text-sm flex items-center gap-2 ${hasPermission('printers:control') ? 'text-bambu-green hover:bg-bambu-dark' : 'text-bambu-gray cursor-not-allowed'}`}
-                  onClick={() => { if (hasPermission('printers:control')) { onPrint(file); setOpen(false); } }}
+                  onClick={() => { if (hasPermission('printers:control')) { onPrint(file); closeMenu(); } }}
                   disabled={!hasPermission('printers:control')}
                 >
                   <Printer className="w-3.5 h-3.5" />
@@ -762,7 +770,7 @@ function FileListActions({ file, t, hasPermission, canModify, onPrint, onSchedul
                 </button>
                 <button
                   className={`w-full px-3 py-1.5 text-left text-sm flex items-center gap-2 ${hasPermission('queue:create') ? 'text-white hover:bg-bambu-dark' : 'text-bambu-gray cursor-not-allowed'}`}
-                  onClick={() => { if (hasPermission('queue:create')) { onSchedule(file); setOpen(false); } }}
+                  onClick={() => { if (hasPermission('queue:create')) { onSchedule(file); closeMenu(); } }}
                   disabled={!hasPermission('queue:create')}
                 >
                   <Clock className="w-3.5 h-3.5" />
@@ -783,7 +791,7 @@ function FileListActions({ file, t, hasPermission, canModify, onPrint, onSchedul
                   if (sliceDisabled) return;
                   if (useSlicerApi) onSlice?.(file);
                   else onOpenInSlicer?.(file);
-                  setOpen(false);
+                  closeMenu();
                 }}
                 disabled={sliceDisabled}
                 title={sliceDisabled ? (useSlicerApi ? t('fileManager.noPermissionSlice') : t('fileManager.noPermissionDownload')) : undefined}
@@ -795,7 +803,7 @@ function FileListActions({ file, t, hasPermission, canModify, onPrint, onSchedul
             {(file.file_type === '3mf' || file.file_type === 'gcode' || file.file_type === 'stl' || file.file_type === 'obj') && (
               <button
                 className={`w-full px-3 py-1.5 text-left text-sm flex items-center gap-2 ${hasPermission('library:read') ? 'text-white hover:bg-bambu-dark' : 'text-bambu-gray cursor-not-allowed'}`}
-                onClick={() => { if (hasPermission('library:read')) { onPreview3d(file); setOpen(false); } }}
+                onClick={() => { if (hasPermission('library:read')) { onPreview3d(file); closeMenu(); } }}
                 disabled={!hasPermission('library:read')}
               >
                 <Box className="w-3.5 h-3.5" />
@@ -818,7 +826,7 @@ function FileListActions({ file, t, hasPermission, canModify, onPrint, onSchedul
             {onModelCard && is3mf(file) && (
               <button
                 className="w-full px-3 py-1.5 text-left text-sm flex items-center gap-2 text-white hover:bg-bambu-dark"
-                onClick={() => { onModelCard(file); setOpen(false); }}
+                onClick={() => { onModelCard(file); closeMenu(); }}
               >
                 <FileText className="w-3.5 h-3.5" />
                 {t('fileManager.modelCard')}
@@ -829,7 +837,7 @@ function FileListActions({ file, t, hasPermission, canModify, onPrint, onSchedul
                 href={file.source_url}
                 target="_blank"
                 rel="noopener noreferrer"
-                onClick={() => setOpen(false)}
+                onClick={closeMenu}
                 className="w-full px-3 py-1.5 text-left text-sm flex items-center gap-2 text-white hover:bg-bambu-dark"
               >
                 <MakerWorldIcon className="w-3.5 h-3.5 text-white" />
@@ -838,7 +846,7 @@ function FileListActions({ file, t, hasPermission, canModify, onPrint, onSchedul
             )}
             <button
               className={`w-full px-3 py-1.5 text-left text-sm flex items-center gap-2 ${hasPermission('library:read') ? 'text-white hover:bg-bambu-dark' : 'text-bambu-gray cursor-not-allowed'}`}
-              onClick={() => { if (hasPermission('library:read')) { onDownload(file.id); setOpen(false); } }}
+              onClick={() => { if (hasPermission('library:read')) { onDownload(file.id); closeMenu(); } }}
               disabled={!hasPermission('library:read')}
             >
               <Download className="w-3.5 h-3.5" />
@@ -846,7 +854,7 @@ function FileListActions({ file, t, hasPermission, canModify, onPrint, onSchedul
             </button>
             <button
               className={`w-full px-3 py-1.5 text-left text-sm flex items-center gap-2 ${canModify('library', 'update', file.created_by_id) ? 'text-white hover:bg-bambu-dark' : 'text-bambu-gray cursor-not-allowed'}`}
-              onClick={() => { if (canModify('library', 'update', file.created_by_id)) { onRename(file); setOpen(false); } }}
+              onClick={() => { if (canModify('library', 'update', file.created_by_id)) { onRename(file); closeMenu(); } }}
               disabled={!canModify('library', 'update', file.created_by_id)}
             >
               <Pencil className="w-3.5 h-3.5" />
@@ -859,7 +867,7 @@ function FileListActions({ file, t, hasPermission, canModify, onPrint, onSchedul
             {onMove && (
               <button
                 className={`w-full px-3 py-1.5 text-left text-sm flex items-center gap-2 ${canModify('library', 'update', file.created_by_id) ? 'text-white hover:bg-bambu-dark' : 'text-bambu-gray cursor-not-allowed'}`}
-                onClick={() => { if (canModify('library', 'update', file.created_by_id)) { onMove(file); setOpen(false); } }}
+                onClick={() => { if (canModify('library', 'update', file.created_by_id)) { onMove(file); closeMenu(); } }}
                 disabled={!canModify('library', 'update', file.created_by_id)}
               >
                 <MoveRight className="w-3.5 h-3.5" />
@@ -875,7 +883,7 @@ function FileListActions({ file, t, hasPermission, canModify, onPrint, onSchedul
                   // portal-rendered away from the row it belongs to, so the
                   // cursor is nowhere near the file being tagged.
                   onTags(file, anchorFrom(triggerRef.current, '[data-file-row]', 'row'));
-                  setOpen(false);
+                  closeMenu();
                 }}
                 disabled={!canModify('library', 'update', file.created_by_id)}
               >
@@ -886,7 +894,7 @@ function FileListActions({ file, t, hasPermission, canModify, onPrint, onSchedul
             {(file.file_type === 'stl' || file.file_type === 'obj') && (
               <button
                 className={`w-full px-3 py-1.5 text-left text-sm flex items-center gap-2 ${canModify('library', 'update', file.created_by_id) ? 'text-white hover:bg-bambu-dark' : 'text-bambu-gray cursor-not-allowed'}`}
-                onClick={() => { if (canModify('library', 'update', file.created_by_id)) { onGenerateThumbnail(file); setOpen(false); } }}
+                onClick={() => { if (canModify('library', 'update', file.created_by_id)) { onGenerateThumbnail(file); closeMenu(); } }}
                 disabled={!canModify('library', 'update', file.created_by_id)}
               >
                 <Image className="w-3.5 h-3.5" />
@@ -895,7 +903,7 @@ function FileListActions({ file, t, hasPermission, canModify, onPrint, onSchedul
             )}
             <button
               className={`w-full px-3 py-1.5 text-left text-sm flex items-center gap-2 ${canModify('library', 'delete', file.created_by_id) ? 'text-red-700 dark:text-red-400 hover:bg-bambu-dark' : 'text-bambu-gray cursor-not-allowed'}`}
-              onClick={() => { if (canModify('library', 'delete', file.created_by_id)) { onDelete(file.id); setOpen(false); } }}
+              onClick={() => { if (canModify('library', 'delete', file.created_by_id)) { onDelete(file.id); closeMenu(); } }}
               disabled={!canModify('library', 'delete', file.created_by_id)}
             >
               <Trash2 className="w-3.5 h-3.5" />
@@ -919,6 +927,14 @@ function FileCard({ file, isSelected, isMobile, onSelect, onOpenArchives, onDele
   // edge on narrow viewports. Coords are computed from the trigger button
   // and recalculated on scroll/resize to track the card's position.
   const triggerRef = useRef<HTMLButtonElement | null>(null);
+  // Every close hands the focus back to the trigger — the WAI-ARIA menu-button
+  // contract, and what lets a dialog opened from an item return focus somewhere
+  // real: useDialogFocus remembers `document.activeElement` when the dialog
+  // opens, and by then this menu (and the item just clicked) is gone.
+  const closeActions = () => {
+    setShowActions(false);
+    triggerRef.current?.focus();
+  };
   // Anchor the menu's bottom edge to the trigger's top (default) so the gap
   // stays a fixed 4 px regardless of menu height. Flip to top-anchor when
   // there isn't enough room above (e.g. trigger near top of viewport).
@@ -1155,7 +1171,7 @@ function FileCard({ file, isSelected, isMobile, onSelect, onOpenArchives, onDele
         {showActions && createPortal(
           <>
             {/* not-a-modal: menu */}
-            <div className="fixed inset-0 z-[55]" onClick={() => setShowActions(false)} />
+            <div className="fixed inset-0 z-[55]" onClick={closeActions} />
             <div
               style={{
                 position: 'fixed',
@@ -1172,7 +1188,7 @@ function FileCard({ file, isSelected, isMobile, onSelect, onOpenArchives, onDele
                   className={`w-full px-3 py-1.5 text-left text-sm flex items-center gap-2 ${
                     hasPermission('printers:control') ? 'text-bambu-green hover:bg-bambu-dark' : 'text-bambu-gray cursor-not-allowed'
                   }`}
-                  onClick={() => { if (hasPermission('printers:control')) { onPrint(file); setShowActions(false); } }}
+                  onClick={() => { if (hasPermission('printers:control')) { onPrint(file); closeActions(); } }}
                   disabled={!hasPermission('printers:control')}
                   title={!hasPermission('printers:control') ? t('fileManager.noPermissionPrint') : undefined}
                 >
@@ -1185,7 +1201,7 @@ function FileCard({ file, isSelected, isMobile, onSelect, onOpenArchives, onDele
                   className={`w-full px-3 py-1.5 text-left text-sm flex items-center gap-2 ${
                     hasPermission('queue:create') ? 'text-white hover:bg-bambu-dark' : 'text-bambu-gray cursor-not-allowed'
                   }`}
-                  onClick={() => { if (hasPermission('queue:create')) { onAddToQueue(file.id); setShowActions(false); } }}
+                  onClick={() => { if (hasPermission('queue:create')) { onAddToQueue(file.id); closeActions(); } }}
                   disabled={!hasPermission('queue:create')}
                   title={!hasPermission('queue:create') ? t('fileManager.noPermissionAddToQueue') : undefined}
                 >
@@ -1204,7 +1220,7 @@ function FileCard({ file, isSelected, isMobile, onSelect, onOpenArchives, onDele
                     if (sliceDisabled) return;
                     if (useSlicerApi) onSlice?.(file);
                     else onOpenInSlicer?.(file);
-                    setShowActions(false);
+                    closeActions();
                   }}
                   disabled={sliceDisabled}
                   title={sliceDisabled ? (useSlicerApi ? t('fileManager.noPermissionSlice') : t('fileManager.noPermissionDownload')) : undefined}
@@ -1218,7 +1234,7 @@ function FileCard({ file, isSelected, isMobile, onSelect, onOpenArchives, onDele
                   className={`w-full px-3 py-1.5 text-left text-sm flex items-center gap-2 ${
                     hasPermission('library:read') ? 'text-white hover:bg-bambu-dark' : 'text-bambu-gray cursor-not-allowed'
                   }`}
-                  onClick={() => { if (hasPermission('library:read')) { onPreview3d(file); setShowActions(false); } }}
+                  onClick={() => { if (hasPermission('library:read')) { onPreview3d(file); closeActions(); } }}
                   disabled={!hasPermission('library:read')}
                   title={!hasPermission('library:read') ? t('fileManager.noPermissionPreview', { defaultValue: 'You do not have permission to preview files' }) : undefined}
                 >
@@ -1242,7 +1258,7 @@ function FileCard({ file, isSelected, isMobile, onSelect, onOpenArchives, onDele
               {onModelCard && is3mf(file) && (
                 <button
                   className="w-full px-3 py-1.5 text-left text-sm flex items-center gap-2 text-white hover:bg-bambu-dark"
-                  onClick={() => { onModelCard(file); setShowActions(false); }}
+                  onClick={() => { onModelCard(file); closeActions(); }}
                 >
                   <FileText className="w-3.5 h-3.5" />
                   {t('fileManager.modelCard')}
@@ -1253,7 +1269,7 @@ function FileCard({ file, isSelected, isMobile, onSelect, onOpenArchives, onDele
                   href={file.source_url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  onClick={() => setShowActions(false)}
+                  onClick={closeActions}
                   className="w-full px-3 py-1.5 text-left text-sm flex items-center gap-2 text-white hover:bg-bambu-dark"
                 >
                   <MakerWorldIcon className="w-3.5 h-3.5 text-white" />
@@ -1264,7 +1280,7 @@ function FileCard({ file, isSelected, isMobile, onSelect, onOpenArchives, onDele
                 className={`w-full px-3 py-1.5 text-left text-sm flex items-center gap-2 ${
                   hasPermission('library:read') ? 'text-white hover:bg-bambu-dark' : 'text-bambu-gray cursor-not-allowed'
                 }`}
-                onClick={() => { if (hasPermission('library:read')) { onDownload(file.id); setShowActions(false); } }}
+                onClick={() => { if (hasPermission('library:read')) { onDownload(file.id); closeActions(); } }}
                 disabled={!hasPermission('library:read')}
                 title={!hasPermission('library:read') ? t('fileManager.noPermissionDownload') : undefined}
               >
@@ -1276,7 +1292,7 @@ function FileCard({ file, isSelected, isMobile, onSelect, onOpenArchives, onDele
                   className={`w-full px-3 py-1.5 text-left text-sm flex items-center gap-2 ${
                     canModify('library', 'update', file.created_by_id) ? 'text-white hover:bg-bambu-dark' : 'text-bambu-gray cursor-not-allowed'
                   }`}
-                  onClick={() => { if (canModify('library', 'update', file.created_by_id)) { onRename(file); setShowActions(false); } }}
+                  onClick={() => { if (canModify('library', 'update', file.created_by_id)) { onRename(file); closeActions(); } }}
                   disabled={!canModify('library', 'update', file.created_by_id)}
                   title={!canModify('library', 'update', file.created_by_id) ? t('fileManager.noPermissionRenameFile') : undefined}
                 >
@@ -1290,7 +1306,7 @@ function FileCard({ file, isSelected, isMobile, onSelect, onOpenArchives, onDele
                   className={`w-full px-3 py-1.5 text-left text-sm flex items-center gap-2 ${
                     canModify('library', 'update', file.created_by_id) ? 'text-white hover:bg-bambu-dark' : 'text-bambu-gray cursor-not-allowed'
                   }`}
-                  onClick={() => { if (canModify('library', 'update', file.created_by_id)) { onMove(file); setShowActions(false); } }}
+                  onClick={() => { if (canModify('library', 'update', file.created_by_id)) { onMove(file); closeActions(); } }}
                   disabled={!canModify('library', 'update', file.created_by_id)}
                 >
                   <MoveRight className="w-3.5 h-3.5" />
@@ -1305,7 +1321,7 @@ function FileCard({ file, isSelected, isMobile, onSelect, onOpenArchives, onDele
                   onClick={() => {
                     if (!canModify('library', 'update', file.created_by_id)) return;
                     onTags(file, anchorFrom(triggerRef.current, '[data-file-card]', 'card'));
-                    setShowActions(false);
+                    closeActions();
                   }}
                   disabled={!canModify('library', 'update', file.created_by_id)}
                 >
@@ -1318,7 +1334,7 @@ function FileCard({ file, isSelected, isMobile, onSelect, onOpenArchives, onDele
                   className={`w-full px-3 py-1.5 text-left text-sm flex items-center gap-2 ${
                     canModify('library', 'update', file.created_by_id) ? 'text-white hover:bg-bambu-dark' : 'text-bambu-gray cursor-not-allowed'
                   }`}
-                  onClick={() => { if (canModify('library', 'update', file.created_by_id)) { onGenerateThumbnail(file); setShowActions(false); } }}
+                  onClick={() => { if (canModify('library', 'update', file.created_by_id)) { onGenerateThumbnail(file); closeActions(); } }}
                   disabled={!canModify('library', 'update', file.created_by_id)}
                   title={!canModify('library', 'update', file.created_by_id) ? t('fileManager.noPermissionGenerateThumbnail') : undefined}
                 >
@@ -1330,7 +1346,7 @@ function FileCard({ file, isSelected, isMobile, onSelect, onOpenArchives, onDele
                 className={`w-full px-3 py-1.5 text-left text-sm flex items-center gap-2 ${
                   canModify('library', 'delete', file.created_by_id) ? 'text-red-700 dark:text-red-400 hover:bg-bambu-dark' : 'text-bambu-gray cursor-not-allowed'
                 }`}
-                onClick={() => { if (canModify('library', 'delete', file.created_by_id)) { onDelete(file.id); setShowActions(false); } }}
+                onClick={() => { if (canModify('library', 'delete', file.created_by_id)) { onDelete(file.id); closeActions(); } }}
                 disabled={!canModify('library', 'delete', file.created_by_id)}
                 title={!canModify('library', 'delete', file.created_by_id) ? t('fileManager.noPermissionDeleteFile') : undefined}
               >

@@ -848,7 +848,11 @@ export function Layout() {
       <aside
         className={`bg-bambu-dark-secondary border-r border-bambu-dark-tertiary flex flex-col transition-all duration-300 ${
           isSidebarCompact
-            ? `fixed inset-y-0 left-0 z-50 w-72 transform ${mobileDrawerOpen ? 'translate-x-0' : '-translate-x-full'}`
+            // z-[49]: above the drawer's own backdrop and the header (both z-40),
+            // below the modal layer (z = 50 + stack position) — the drawer is
+            // inside #root, which the modal stack marks inert while a dialog is
+            // open, so a drawer painting over one would be visible but dead.
+            ? `fixed inset-y-0 left-0 z-[49] w-72 transform ${mobileDrawerOpen ? 'translate-x-0' : '-translate-x-full'}`
             : `fixed inset-y-0 left-0 z-30 ${sidebarExpanded ? 'w-64' : 'w-16'}`
         }`}
       >

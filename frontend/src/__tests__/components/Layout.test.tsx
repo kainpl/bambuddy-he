@@ -137,7 +137,7 @@ describe('Layout', () => {
 
       // A modal is on the stack: `1` must not move the app out from under it.
       act(() => {
-        register('probe', [], { current: { onClose: vi.fn(), closeDisabled: false } });
+        register('probe', [], { current: { onClose: vi.fn(), closeDisabled: false } }, { current: null });
       });
       navigateSpy.mockClear();
       fireEvent.keyDown(document, { key: '1' });

@@ -7038,10 +7038,12 @@ function PrinterCard({
         return (
           <>
             {/* not-a-modal: popover */}
-            <div className="fixed inset-0 z-[100]" onClick={() => setDryingPopoverAmsId(null)} />
-            {/* Popover */}
+            <div className="fixed inset-0 z-[48]" onClick={() => setDryingPopoverAmsId(null)} />
+            {/* Popover — below the modal layer (z = 50 + stack position): it lives
+                inside #root, which the modal stack marks inert, so anything of
+                ours painting over a dialog would be visible but dead. */}
             <div
-              className="fixed z-[101] flex flex-col w-[240px] bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-xl shadow-2xl overflow-hidden"
+              className="fixed z-[49] flex flex-col w-[240px] bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-xl shadow-2xl overflow-hidden"
               style={{
                 top: dryingPopoverPos.top,
                 left: dryingPopoverPos.left,

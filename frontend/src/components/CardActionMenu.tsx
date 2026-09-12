@@ -115,7 +115,14 @@ export function CardActionMenu({ label, testId, width = 180, children }: CardAct
     return () => window.removeEventListener('keydown', onKeyDown, true);
   }, [open, items]);
 
-  const close = () => setOpen(false);
+  // Focus goes back to the trigger on every close — the WAI-ARIA menu-button
+  // contract, and what lets a dialog opened from an item return focus somewhere
+  // real: useDialogFocus remembers `document.activeElement` when the dialog
+  // opens, and by then this menu (and its focused item) is gone.
+  const close = () => {
+    setOpen(false);
+    triggerRef.current?.focus();
+  };
 
   return (
     <>

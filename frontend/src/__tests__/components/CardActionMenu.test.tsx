@@ -105,6 +105,36 @@ describe('CardActionMenu keyboard', () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
+  it('activating an item gives the focus back to the trigger', () => {
+    // The panel is on `body` and the focus is on one of its items, so the item
+    // vanishing with the menu would leave the focus on `<body>` — and a dialog
+    // the item opens reads `document.activeElement` as the element to return
+    // focus to when it closes.
+    const { trigger, onSelect } = mount();
+    fireEvent.click(trigger);
+    expect(focused()).toBe('Edit');
+
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }));
+
+    expect(onSelect).toHaveBeenCalledWith('edit');
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('closing by a click outside gives the focus back to the trigger', () => {
+    const { trigger } = mount();
+    fireEvent.click(trigger);
+    // The click-catcher the portal lays over the page — the menu's own
+    // dismiss-on-outside-click, marked `not-a-modal: menu`.
+    const catcher = document.querySelector('div.fixed.inset-0');
+    expect(catcher).not.toBeNull();
+
+    fireEvent.click(catcher!);
+
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(trigger);
+  });
+
   it('closes on Escape and gives the focus back to the trigger', () => {
     const { trigger } = mount();
     fireEvent.click(trigger);

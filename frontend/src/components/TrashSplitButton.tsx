@@ -57,6 +57,15 @@ export function TrashSplitButton({
     };
   }, [open]);
 
+  // Focus goes back to the caret on every close — the WAI-ARIA menu-button
+  // contract, and what lets the purge dialog this item opens return focus
+  // somewhere real: useDialogFocus remembers `document.activeElement` when the
+  // dialog opens, and by then this menu is gone.
+  const closeMenu = () => {
+    setOpen(false);
+    caretRef.current?.focus();
+  };
+
   const hasCaret = !!onPurgeClick;
   const baseCls =
     'inline-flex items-center px-3 py-1.5 text-sm border border-bambu-dark-tertiary bg-bambu-dark-secondary text-bambu-gray hover:text-white hover:bg-bambu-dark-tertiary transition-colors';
@@ -93,7 +102,7 @@ export function TrashSplitButton({
           {open && createPortal(
             <>
               {/* not-a-modal: menu */}
-              <div className="fixed inset-0 z-[55]" onClick={() => setOpen(false)} />
+              <div className="fixed inset-0 z-[55]" onClick={closeMenu} />
               <div
                 style={{
                   position: 'fixed',
@@ -108,7 +117,7 @@ export function TrashSplitButton({
                   type="button"
                   className="w-full px-3 py-1.5 text-left text-sm flex items-center gap-2 text-white hover:bg-bambu-dark"
                   onClick={() => {
-                    setOpen(false);
+                    closeMenu();
                     onPurgeClick?.();
                   }}
                   role="menuitem"

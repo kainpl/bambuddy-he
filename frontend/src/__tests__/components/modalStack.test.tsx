@@ -23,6 +23,11 @@ function entry(onClose = vi.fn(), closeDisabled = false): RefObject<ModalStackEn
   return { current: { onClose, closeDisabled } };
 }
 
+/** A ref the stack can mark; tests that only care about #root pass one anyway. */
+function overlayRef(): RefObject<HTMLElement | null> {
+  return { current: null };
+}
+
 /** The element main.tsx renders into; the stack marks it inert while a modal is open. */
 function mountRoot(): HTMLElement {
   const root = document.createElement('div');
@@ -50,8 +55,8 @@ describe('modalStack', () => {
   it('Escape reaches only the topmost entry, then the next one once the top is gone', () => {
     const outer = vi.fn();
     const inner = vi.fn();
-    register('a', [], entry(outer));
-    register('b', [], entry(inner));
+    register('a', [], entry(outer), overlayRef());
+    register('b', [], entry(inner), overlayRef());
 
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(inner).toHaveBeenCalledTimes(1);
@@ -66,8 +71,8 @@ describe('modalStack', () => {
   it('a closeDisabled top swallows Escape without touching the one below', () => {
     const below = vi.fn();
     const top = vi.fn();
-    register('a', [], entry(below));
-    register('b', [], entry(top, true));
+    register('a', [], entry(below), overlayRef());
+    register('b', [], entry(top, true), overlayRef());
 
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(top).not.toHaveBeenCalled();
@@ -76,14 +81,14 @@ describe('modalStack', () => {
 
   it('an Escape dispatched on document reaches the stack too', () => {
     const onClose = vi.fn();
-    register('a', [], entry(onClose));
+    register('a', [], entry(onClose), overlayRef());
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it('other keys are ignored', () => {
     const onClose = vi.fn();
-    register('a', [], entry(onClose));
+    register('a', [], entry(onClose), overlayRef());
     fireEvent.keyDown(window, { key: 'Enter' });
     expect(onClose).not.toHaveBeenCalled();
   });
@@ -93,8 +98,8 @@ describe('modalStack', () => {
     const remove = vi.spyOn(window, 'removeEventListener');
     const keydownCalls = (spy: typeof add) => spy.mock.calls.filter((c) => c[0] === 'keydown');
 
-    register('a', [], entry());
-    register('b', [], entry());
+    register('a', [], entry(), overlayRef());
+    register('b', [], entry(), overlayRef());
     expect(keydownCalls(add)).toHaveLength(1);
 
     unregister('a');
@@ -112,8 +117,8 @@ describe('modalStack', () => {
     const onParentClose = vi.fn();
     const onChildClose = vi.fn();
 
-    register('child', ['parent'], entry(onChildClose));
-    register('parent', [], entry(onParentClose));
+    register('child', ['parent'], entry(onChildClose), overlayRef());
+    register('parent', [], entry(onParentClose), overlayRef());
 
     expect(positionOf('parent')).toBe(0);
     expect(positionOf('child')).toBe(1);
@@ -128,9 +133,9 @@ describe('modalStack', () => {
     const onA = vi.fn();
     const onC = vi.fn();
     const onB = vi.fn();
-    register('a', [], entry(onA));
-    register('c', ['a'], entry(onC));
-    register('b', [], entry(onB));
+    register('a', [], entry(onA), overlayRef());
+    register('c', ['a'], entry(onC), overlayRef());
+    register('b', [], entry(onB), overlayRef());
 
     expect([positionOf('a'), positionOf('c'), positionOf('b')]).toEqual([0, 1, 2]);
     fireEvent.keyDown(window, { key: 'Escape' });
@@ -152,7 +157,7 @@ describe('modalStack', () => {
     expect(isAnyModalOpen()).toBe(false);
     expect(screen.getByTestId('probe')).toHaveTextContent('closed');
 
-    act(() => register('a', [], entry()));
+    act(() => register('a', [], entry(), overlayRef()));
     expect(isAnyModalOpen()).toBe(true);
     expect(screen.getByTestId('probe')).toHaveTextContent('open');
 
@@ -172,10 +177,13 @@ describe('modalStack', () => {
     disabled?: boolean;
     children?: ReactNode;
   }) {
-    const { position, childAncestry } = useModalStackEntry({ onClose, closeDisabled: disabled });
+    const overlay = useRef<HTMLSpanElement>(null);
+    const { position, childAncestry } = useModalStackEntry({ onClose, closeDisabled: disabled }, overlay);
     return (
       <ModalAncestryContext.Provider value={childAncestry}>
-        <span data-testid={label}>{position}</span>
+        <span ref={overlay} data-testid={label}>
+          {position}
+        </span>
         {children}
       </ModalAncestryContext.Provider>
     );
@@ -238,9 +246,9 @@ describe('modalStack', () => {
       const root = mountRoot();
       expect(root.hasAttribute('inert')).toBe(false);
 
-      register('a', [], entry());
+      register('a', [], entry(), overlayRef());
       expect(root.hasAttribute('inert')).toBe(true);
-      register('b', [], entry());
+      register('b', [], entry(), overlayRef());
       expect(root.hasAttribute('inert')).toBe(true);
 
       unregister('a');
@@ -253,7 +261,7 @@ describe('modalStack', () => {
     it('a missing #root is not an error', () => {
       expect(document.getElementById('root')).toBeNull();
       expect(() => {
-        register('a', [], entry());
+        register('a', [], entry(), overlayRef());
         unregister('a');
       }).not.toThrow();
     });
@@ -296,7 +304,7 @@ describe('modalStack', () => {
 
     it('_resetForTests clears inert from #root', () => {
       const root = mountRoot();
-      register('a', [], entry());
+      register('a', [], entry(), overlayRef());
       expect(root.hasAttribute('inert')).toBe(true);
       _resetForTests();
       expect(root.hasAttribute('inert')).toBe(false);

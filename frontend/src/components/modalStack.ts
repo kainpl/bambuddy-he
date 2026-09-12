@@ -37,6 +37,10 @@
  * body are deliberately live. Every modal is portalled into body for the same
  * reason (see contexts/ToastContext.tsx for the toast side).
  *
+ * The overlay ref is REQUIRED of every caller, so a new modal cannot silently
+ * opt out of the trap and stay live under the one above it; the ref itself may
+ * of course still hold `null` before its first mount, hence `current?.`.
+ *
  * ⚠️ The attributes are written imperatively, in `register`/`unregister`,
  * BEFORE `notify()` — never as a React prop. `useDialogFocus` returns focus
  * to the opener in the same effect-cleanup pass in which the modal
@@ -67,7 +71,7 @@ interface Registered {
   ancestors: readonly string[];
   entry: RefObject<ModalStackEntry>;
   /** The outermost portalled element; inert unless topmost. Read at apply time, never cached. */
-  overlay: RefObject<HTMLElement | null> | undefined;
+  overlay: RefObject<HTMLElement | null>;
 }
 
 /** Keys of the <Modal>s enclosing the current subtree, outermost first. The shell provides its `childAncestry`. */
@@ -83,7 +87,7 @@ function notify(): void {
 /** The rule: the page (#root) is inert while any modal is open; of the registered overlays only the topmost is live. */
 function applyInert(): void {
   document.getElementById('root')?.toggleAttribute('inert', stack.length > 0);
-  stack.forEach((r, i) => r.overlay?.current?.toggleAttribute('inert', i !== stack.length - 1));
+  stack.forEach((r, i) => r.overlay.current?.toggleAttribute('inert', i !== stack.length - 1));
 }
 
 function onKeyDown(e: KeyboardEvent): void {
@@ -101,7 +105,7 @@ export function register(
   key: string,
   ancestors: readonly string[],
   entry: RefObject<ModalStackEntry>,
-  overlay?: RefObject<HTMLElement | null>,
+  overlay: RefObject<HTMLElement | null>,
 ): void {
   // Mount order — unless a descendant is already here (a same-commit mount
   // registers child-first): then this one goes just below it.
@@ -125,7 +129,7 @@ export function unregister(key: string): void {
   // — the old ref still points at a live node). Keep it here, in the passive
   // path: a layout effect would run before the focus return and break the
   // cleanup order useDialogFocus relies on.
-  leaving?.overlay?.current?.removeAttribute('inert');
+  leaving?.overlay.current?.removeAttribute('inert');
   applyInert();
   notify();
 }
@@ -165,7 +169,7 @@ export interface ModalStackPlacement {
  */
 export function useModalStackEntry(
   entry: ModalStackEntry,
-  overlay?: RefObject<HTMLElement | null>,
+  overlay: RefObject<HTMLElement | null>,
 ): ModalStackPlacement {
   const key = useId();
   const ancestors = useContext(ModalAncestryContext);
@@ -184,7 +188,7 @@ export function useModalStackEntry(
 }
 
 export function _resetForTests(): void {
-  for (const r of stack) r.overlay?.current?.removeAttribute('inert');
+  for (const r of stack) r.overlay.current?.removeAttribute('inert');
   stack = [];
   window.removeEventListener('keydown', onKeyDown);
   applyInert();

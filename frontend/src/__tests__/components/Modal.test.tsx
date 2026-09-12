@@ -10,6 +10,7 @@ import { screen, fireEvent, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { render } from '../utils';
 import { Modal, MODAL_SIZE_CLASS, type ModalSize } from '../../components/Modal';
+import { CardActionMenu, CardActionMenuItem } from '../../components/CardActionMenu';
 import { _resetForTests } from '../../components/modalStack';
 
 describe('Modal', () => {
@@ -325,6 +326,49 @@ describe('Modal', () => {
       expect(document.activeElement).toBe(opener);
       expect(openerLiveWhenFocused).toEqual([true]);
       root.remove();
+    });
+
+    it('a dialog opened from a card menu returns focus to the menu trigger', () => {
+      // The end-to-end pin. The menu is portalled onto `body` and unmounts with
+      // the very click that opens the dialog, so the item this hook would
+      // otherwise remember as the opener is detached by the time focus comes
+      // back. The menu refocusing its trigger in the handler — before React
+      // commits — is what leaves a live element for the layout-effect capture.
+      function Host() {
+        const [open, setOpen] = useState(false);
+        return (
+          <>
+            <CardActionMenu label="Actions" testId="card-menu">
+              {(close) => (
+                <CardActionMenuItem
+                  onSelect={() => {
+                    close();
+                    setOpen(true);
+                  }}
+                >
+                  Rename
+                </CardActionMenuItem>
+              )}
+            </CardActionMenu>
+            {open && (
+              <Modal onClose={() => setOpen(false)} title="Rename">
+                <button>save</button>
+              </Modal>
+            )}
+          </>
+        );
+      }
+      render(<Host />);
+      const trigger = screen.getByTestId('card-menu');
+      fireEvent.click(trigger);
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }));
+
+      expect(screen.queryByRole('menu')).toBeNull();
+      expect(document.activeElement).toBe(screen.getByRole('dialog', { name: 'Rename' }));
+
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(document.activeElement).toBe(trigger);
     });
   });
 

@@ -64,8 +64,12 @@ interface BugReportBubbleProps {
    *
    * ⚠️ The panel deliberately stays at the Layout root rather than moving into
    * the header with its button: the header is `fixed z-40` and therefore its
-   * own stacking context, so a `z-50` panel nested inside it would be capped
-   * at the header's level and end up underneath every ordinary z-50 modal.
+   * own stacking context, so a panel nested inside it would be capped at the
+   * header's level whatever its own z-index says. At the Layout root it sits at
+   * `z-[49]` — above the header, just below the modal layer (z = 50 + stack
+   * position), because it lives inside `#root`, which the modal stack marks
+   * inert while a dialog is open: a panel painting over a dialog would be
+   * visible but dead.
    */
   showTrigger?: boolean;
   /** Controlled open state. Falls back to internal state when omitted. */
@@ -283,7 +287,7 @@ export function BugReportBubble({ showTrigger = true, open, onOpenChange }: BugR
       {isOpen && (
         <div
           id="bug-report-modal"
-          className="fixed bottom-20 right-4 left-4 z-50 w-auto max-w-md ml-auto"
+          className="fixed bottom-20 right-4 left-4 z-[49] w-auto max-w-md ml-auto"
           onPaste={handlePaste}
         >
           <div
