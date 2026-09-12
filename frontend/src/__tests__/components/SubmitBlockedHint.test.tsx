@@ -11,8 +11,8 @@ describe('SubmitBlockedHint', () => {
   afterEach(cleanup);
 
   it('renders nothing when the form is ready to submit', () => {
-    // The shared render wrapper mounts a toast viewport, so check for the
-    // hint itself rather than an empty container.
+    // Check for the hint itself rather than an empty container: the shared
+    // render wrapper mounts providers around it.
     const { container } = render(<SubmitBlockedHint missing={[]} />);
     expect(container.querySelector('p')).toBeNull();
   });

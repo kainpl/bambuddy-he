@@ -90,8 +90,8 @@ describe('StaggerBanner', () => {
     // Wait for the snapshot to actually arrive: otherwise "nothing rendered"
     // would only ever mean "nothing had rendered yet".
     await waitFor(() => expect(served).toBe(true));
-    // The shared render wrapper mounts a toast viewport into `container`, so
-    // the assertion is about the banner, not about an empty tree.
+    // The assertion is about the banner itself, not about an empty tree: the
+    // shared render wrapper mounts providers around it.
     expect(container.querySelector('[title]')).toBeNull();
     expect(screen.queryByText(/Stagger:/)).not.toBeInTheDocument();
   });
