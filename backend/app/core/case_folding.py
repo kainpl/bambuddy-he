@@ -13,9 +13,9 @@ app assumes "case-insensitive" means Unicode. Two backends disagree:
   ``lower()``, ``ILIKE`` and ``to_tsvector``. Fix: probe once at engine start;
   when the database cannot fold, pick a collation that can (``pg_c_utf8`` on
   17+, else ICU's ``und-x-icu``) and let the compiler render it — see
-  ``pg_fold_collation`` and ``BamDudePGCompiler``. A database that folds
-  natively (the bundled server, the official Docker image) compiles exactly as
-  before.
+  ``pg_fold_collation``, ``CaseFoldingCompilerMixin`` and ``compiler_for``. A
+  database that folds natively (the bundled server, the official Docker image)
+  compiles exactly as before.
 
 Routes never re-implement any of this.
 """
@@ -25,7 +25,6 @@ from __future__ import annotations
 import logging
 
 from sqlalchemy import text
-from sqlalchemy.dialects.postgresql.base import PGCompiler
 from sqlalchemy.sql import sqltypes
 
 logger = logging.getLogger(__name__)
@@ -112,6 +111,13 @@ async def _verified_collation(conn) -> tuple[str | None, str | None]:
     chosen — and a candidate that answers wrong, or raises, costs only its own
     turn. ``choose_fold_collation`` stays the single place that knows the
     preference order; this loop just takes the candidates off the list.
+
+    The verify also covers a server too old to honour the rewrite at all: before
+    PostgreSQL 12 ``lower()`` ignored the argument's ``COLLATE`` and folded by
+    the database's ``LC_CTYPE``, so the collated SQL would compile, run and
+    quietly fold nothing. Asking the candidate to fold one letter is what turns
+    that into the honest "no Unicode collation" warning instead of a search that
+    silently misses rows.
     """
     ctype = (await conn.execute(text("SELECT datctype FROM pg_database WHERE datname = current_database()"))).scalar()
     # The names are our own constants, never anything a user can reach, so they
@@ -119,7 +125,16 @@ async def _verified_collation(conn) -> tuple[str | None, str | None]:
     # ``= ANY(:names)`` — an array parameter, and this statement decides whether
     # the whole feature engages, so it must not depend on driver array handling.
     quoted = ", ".join(f"'{name}'" for name in FOLD_COLLATIONS)
-    rows = await conn.execute(text(f"SELECT collname FROM pg_collation WHERE collname IN ({quoted})"))
+    # Qualified to the catalog: a collation of the same name created in
+    # ``public`` would otherwise be found here through ``search_path`` and
+    # rendered into every folded statement. The verify below already keeps that
+    # from being wrong rather than merely surprising — this makes it moot.
+    rows = await conn.execute(
+        text(
+            "SELECT collname FROM pg_collation "
+            f"WHERE collname IN ({quoted}) AND collnamespace = 'pg_catalog'::regnamespace"
+        )
+    )
     remaining = {r[0] for r in rows}
 
     def whats_next() -> str:
@@ -220,10 +235,16 @@ def _collated(sql: str) -> str:
     return f'({sql}) COLLATE "{pg_fold_collation}"'
 
 
-class BamDudePGCompiler(PGCompiler):
-    """Stock PostgreSQL SQL, except that when the database cannot fold case the
+class CaseFoldingCompilerMixin:
+    """Stock SQL, except that when the database cannot fold case the
     case-insensitive operators go through ``pg_fold_collation``. With the
-    collation unset every method defers to the stock compiler."""
+    collation unset every method defers to the compiler underneath.
+
+    A mixin, not a ``PGCompiler`` subclass: ``compiler_for`` lays it over
+    whichever statement compiler the driver's dialect carries, so the driver
+    keeps its own overrides. Every ``super()`` call below therefore reaches that
+    compiler, which is why this class is never instantiated on its own.
+    """
 
     def _like_through_collation(self, binary, negate: bool, **kw) -> str:
         escape = binary.modifiers.get("escape", None)
@@ -257,3 +278,19 @@ class BamDudePGCompiler(PGCompiler):
 
     def visit_upper_func(self, fn, **kw):
         return self._fold_func("upper", fn, **kw)
+
+
+def compiler_for(dialect):
+    """Subclass the dialect's OWN statement compiler with the folding mixin, so a
+    driver-specific compiler (psycopg's, if ever) keeps its overrides.
+
+    Assigning a fixed ``PGCompiler`` subclass instead would silently discard
+    whatever the driver brought. Today asyncpg's ``PGCompiler_asyncpg`` is empty,
+    so that costs nothing — which is precisely why the day it stops being empty
+    would go unnoticed. Idempotent, so a second call (a rebuilt engine reusing a
+    dialect) does not stack a second layer of the mixin.
+    """
+    base = dialect.statement_compiler
+    if issubclass(base, CaseFoldingCompilerMixin):
+        return base
+    return type(f"CaseFolding{base.__name__}", (CaseFoldingCompilerMixin, base), {})

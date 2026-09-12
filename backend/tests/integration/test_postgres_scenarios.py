@@ -406,3 +406,20 @@ class TestCyrillicSearch:
         server is what the maintainer runs this against.
         """
         assert result["native"] or result["collation"] in ("pg_c_utf8", "und-x-icu"), result
+
+    def test_the_collated_sql_runs_on_this_server(self, result):
+        """The collated SQL is sent to a server here even when this one folds
+        natively — otherwise the branch would only ever be measured on the
+        maintainer's ``C``-locale database, and CI (and every modern default
+        install) would report the feature green without having compiled it once.
+
+        The runner picks the collation the probe would have picked, sets the
+        compiler's switch by hand and asks the same two searches again with a
+        private compiled-SQL cache. A wrong rewrite does not reach this assertion
+        at all — the server refuses the statement and the scenario fails.
+        """
+        if result["forced_collation"] is None:
+            pytest.skip("this server offers no Unicode collation (pre-17 without ICU) — nothing to force")
+        assert result["forced_collation"] in ("pg_c_utf8", "und-x-icu"), result
+        assert result["forced_products"] == result["products"], result
+        assert result["forced_archives"] == result["archives"], result

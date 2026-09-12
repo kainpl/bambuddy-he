@@ -2,6 +2,7 @@ import asyncio
 import logging
 
 from sqlalchemy import event
+from sqlalchemy.dialects.postgresql.base import PGDialect
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Session
 
@@ -123,9 +124,12 @@ def _create_engine():
         # Fold ilike/lower/upper through a collation when this database cannot
         # fold Unicode case itself — which collation is decided by the probe in
         # init_db, and until it runs the compiler renders stock SQL. See
-        # core/case_folding.py. (asyncpg's own PGCompiler_asyncpg is an empty
-        # PGCompiler subclass, so subclassing PGCompiler loses nothing.)
-        eng.dialect.statement_compiler = case_folding.BamDudePGCompiler
+        # core/case_folding.py. The folding compiler is derived FROM the one the
+        # driver's dialect carries, never assigned over it, so a psycopg URL
+        # would keep PGCompiler_psycopg's own overrides; the isinstance guard is
+        # what keeps a third dialect out (this branch is "not SQLite").
+        if isinstance(eng.dialect, PGDialect):
+            eng.dialect.statement_compiler = case_folding.compiler_for(eng.dialect)
     # ⚠️ Outside the branch above on purpose: _strip_tz_from_params is the
     # PostgreSQL half only, and hanging the timing beside it would instrument
     # half the installs. Inside _create_engine rather than at module level,

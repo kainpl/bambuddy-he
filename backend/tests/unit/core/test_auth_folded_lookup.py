@@ -94,6 +94,31 @@ async def test_the_same_rule_covers_email(db_session):
 
 
 @pytest.mark.asyncio
+async def test_the_email_warning_names_ids_and_not_the_addresses(db_session, caplog):
+    """A log line is pasted into issues and support threads, so the e-mail form
+    of the warning identifies the rows by id.
+
+    The folded key stays — it is the value that was just looked up, and without
+    it the line names no problem at all — but the addresses the rows actually
+    hold do not appear, so reading the log cannot hand out another account's
+    address. The username form keeps its names on purpose (see the helper): a
+    rename is the fix, and ids alone are not something an administrator can act
+    on in a login screen.
+    """
+    older, newer = await _two_case_variants(db_session)
+
+    with caplog.at_level(logging.WARNING, logger="backend.app.core.auth"):
+        assert (await auth.get_user_by_email(db_session, "ірина@example.com")).id == older.id
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    message = warnings[0].getMessage()
+    assert "Ірина@example.com" not in message and "ІРИНА@example.com" not in message, message
+    assert f"ids {older.id}, {newer.id}" in message, message
+    assert f"using id {older.id}" in message, message
+
+
+@pytest.mark.asyncio
 async def test_one_match_answers_with_its_groups_already_loaded(db_session, caplog):
     """The rewrite from ``scalar_one_or_none()`` to ``.scalars().all()`` must keep
     ``selectinload(User.groups)``: a lazy load inside an async session raises

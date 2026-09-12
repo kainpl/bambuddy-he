@@ -206,6 +206,9 @@ class _FakeEngine:
             # The lookup carries the two names as literals — no bound array.
             assert "ANY" not in sql and ":names" not in sql, sql
             assert all(f"'{c}'" in sql for c in case_folding.FOLD_COLLATIONS), sql
+            # …and it is qualified to the catalog, so a same-named collation in
+            # ``public`` cannot be found through search_path instead.
+            assert "pg_catalog" in sql, sql
             return _FakeResult(rows=[(c,) for c in self._collations])
         raise AssertionError(f"the probe asked something unexpected: {sql!r}")
 
@@ -370,8 +373,11 @@ class TestProbe:
 
 
 def _pg_dialect():
+    """The dialect as ``core/database.py`` prepares it — through ``compiler_for``,
+    so every test below compiles with a class derived from asyncpg's own
+    compiler rather than from a hand-picked base."""
     d = postgresql.asyncpg.dialect()
-    d.statement_compiler = case_folding.BamDudePGCompiler
+    d.statement_compiler = case_folding.compiler_for(d)
     return d
 
 
@@ -380,6 +386,41 @@ def _compile(stmt) -> str:
 
 
 _t = Table("t", MetaData(), Column("name", String), Column("notes", String))
+
+
+class TestCompilerFor:
+    """The folding behaviour is a mixin laid over the dialect's OWN compiler, not
+    a class assigned over it — measurable on the class, because the compiler
+    asyncpg brings is empty and the SQL would look the same either way."""
+
+    def test_the_compiler_the_dialect_carries_is_the_base(self):
+        d = postgresql.asyncpg.dialect()
+        stock = d.statement_compiler
+
+        folding = case_folding.compiler_for(d)
+
+        assert issubclass(folding, stock), "the driver's compiler must still be in the chain"
+        mro = folding.__mro__
+        assert mro.index(case_folding.CaseFoldingCompilerMixin) < mro.index(stock), (
+            "the mixin must win the method lookup, or ilike would not be folded"
+        )
+
+    def test_an_override_the_driver_brought_survives(self):
+        """The case that is free today and would not be with a psycopg URL: a
+        compiler that carries something of its own keeps it."""
+        d = postgresql.asyncpg.dialect()
+        d.statement_compiler = type("PGCompiler_pretend", (d.statement_compiler,), {"driver_marker": "kept"})
+
+        assert case_folding.compiler_for(d).driver_marker == "kept"
+
+    def test_asking_twice_does_not_stack_a_second_layer(self):
+        """``reinitialize_database`` builds another engine; a dialect that already
+        carries the folding compiler must not be wrapped again."""
+        d = postgresql.asyncpg.dialect()
+        first = case_folding.compiler_for(d)
+        d.statement_compiler = first
+
+        assert case_folding.compiler_for(d) is first
 
 
 class TestCompiler:
@@ -450,16 +491,26 @@ class TestCompiler:
 
 
 @pytest.mark.asyncio
-async def test_archives_fts_branch_needs_native_folding(monkeypatch):
-    # routes/archives.py takes the tsvector branch only when PostgreSQL folds
-    # natively; a C-locale database uses the ilike branch the compiler fixes.
+async def test_the_archives_fts_gate_reads_the_chosen_collation(monkeypatch):
+    """The tsvector branch is wrong exactly where the ilike branch is RIGHT — and
+    that is the collation, not the native flag.
+
+    Both flags are set in every case because the two answers differ precisely in
+    the third row: a database that folds nothing has no collation either, and
+    then neither the m001 vectors nor ``ilike`` fold, so the index stays the
+    faster half of a search that is ASCII-only whichever branch runs.
+    """
     from backend.app.api.routes import archives as archives_route
 
     monkeypatch.setattr(archives_route, "is_postgres", lambda: True)
-    monkeypatch.setattr(case_folding, "pg_native_folds", False)
-    assert archives_route._use_fts_search() is False
-    monkeypatch.setattr(case_folding, "pg_native_folds", True)
-    assert archives_route._use_fts_search() is True
+    for native, collation, uses_fts in (
+        (True, None, True),  # folds itself: the vectors are folded too
+        (False, "pg_c_utf8", False),  # the collation folds ilike and not them
+        (False, None, True),  # nothing folds: the index still ranks and is faster
+    ):
+        monkeypatch.setattr(case_folding, "pg_native_folds", native)
+        monkeypatch.setattr(case_folding, "pg_fold_collation", collation)
+        assert archives_route._use_fts_search() is uses_fts, (native, collation)
 
 
 class _NestedBlock:
@@ -522,15 +573,17 @@ class _Result:
 
 
 @pytest.mark.asyncio
-async def test_a_non_folding_postgres_search_never_asks_an_index(monkeypatch):
-    """With the FTS gate shut there is no index to ask: the tsvector holds
-    unfolded tokens and ``archive_fts`` is SQLite's table. Asking anyway would
-    not just waste a round trip — a failing statement aborts the PostgreSQL
-    transaction, so the ilike fallback in the same handler would fail too."""
+async def test_a_search_folded_through_a_collation_never_asks_an_index(monkeypatch):
+    """A collation was chosen, so ``ilike`` folds and the m001 vectors do not:
+    with the FTS gate shut there is no index to ask (and ``archive_fts`` is
+    SQLite's table). Asking anyway would not just waste a round trip — a failing
+    statement aborts the PostgreSQL transaction, so the ilike fallback in the
+    same handler would fail too."""
     from backend.app.api.routes import archives as archives_route
 
     monkeypatch.setattr(archives_route, "is_postgres", lambda: True)
     monkeypatch.setattr(case_folding, "pg_native_folds", False)
+    monkeypatch.setattr(case_folding, "pg_fold_collation", "pg_c_utf8")
     db = _RecordingDB()
 
     assert await archives_route.search_archives(q="лампа", db=db, auth_result=(None, True)) == []
@@ -539,6 +592,25 @@ async def test_a_non_folding_postgres_search_never_asks_an_index(monkeypatch):
     sql = db.statements[0]
     assert "archive_fts" not in sql and "to_tsquery" not in sql
     assert "FROM print_archives" in sql and "LIKE" in sql.upper()
+
+
+@pytest.mark.asyncio
+async def test_a_postgres_that_folds_nothing_keeps_its_index(monkeypatch):
+    """The third case, and the one the gate used to get wrong: the database folds
+    ASCII only and this server has no Unicode collation either, so nothing folds
+    on either branch. Turning the index off buys no correctness — it only trades
+    a ranked GIN lookup for a six-column ``%q%`` scan."""
+    from backend.app.api.routes import archives as archives_route
+
+    monkeypatch.setattr(archives_route, "is_postgres", lambda: True)
+    monkeypatch.setattr(case_folding, "pg_native_folds", False)
+    monkeypatch.setattr(case_folding, "pg_fold_collation", None)
+    db = _RecordingDB()
+
+    assert await archives_route.search_archives(q="лампа", db=db, auth_result=(None, True)) == []
+
+    assert len(db.statements) == 1, db.statements
+    assert "to_tsquery" in db.statements[0]
 
 
 @pytest.mark.asyncio
@@ -576,6 +648,7 @@ async def test_a_failing_index_query_only_rolls_back_its_own_savepoint(monkeypat
 
     monkeypatch.setattr(archives_route, "is_postgres", lambda: True)
     monkeypatch.setattr(case_folding, "pg_native_folds", True)
+    monkeypatch.setattr(case_folding, "pg_fold_collation", None)
     db = _RecordingDB(fail_first=True)
 
     assert await archives_route.search_archives(q="лампа", db=db, auth_result=(None, True)) == []

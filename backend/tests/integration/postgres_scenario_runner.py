@@ -11,7 +11,8 @@ Modes:
     fresh    run init_db() against an empty PostgreSQL, report the schema
     migrate  run init_db() with a SQLite alongside, triggering auto-migration
     product_roundtrip  export a product to a ZIP and import it back
-    cyrillic_search    upper-case Cyrillic finds its lower-case row
+    cyrillic_search    upper-case Cyrillic finds its lower-case row, naturally
+                       and through the forced collated SQL
 
 Usage: python -m backend.tests.integration.postgres_scenario_runner <mode>
 """
@@ -265,11 +266,17 @@ async def _cyrillic_search() -> dict:
     feature exists for through the real engine, and reports what the probe
     decided at boot so a green assertion cannot come from a database that folds
     natively and never exercised the collation at all.
+
+    And then it forces that path anyway: on a server that folds natively the
+    natural run never compiles the collated SQL, so CI — and any modern
+    PostgreSQL — would report green without the half of the feature this file
+    exists to measure ever having been sent to a server. See the forced run below.
     """
     from sqlalchemy import select
 
     from backend.app.core import case_folding
-    from backend.app.core.database import async_session
+    from backend.app.core.database import async_session, engine
+    from backend.app.core.db_dialect import is_postgres
     from backend.app.models.archive import PrintArchive
     from backend.app.models.printer import Printer
     from backend.app.models.product import Product
@@ -297,21 +304,68 @@ async def _cyrillic_search() -> dict:
         )
         await db.commit()
 
+    async def both_searches(db, **exec_opts) -> tuple[list[str], list[str]]:
+        """The two questions the feature exists for, asked through the compiler."""
+        products = (
+            (await db.execute(select(Product.name).where(Product.name.ilike("%ЛАМПА%")), **exec_opts)).scalars().all()
+        )
+        archives = (
+            (
+                await db.execute(
+                    select(PrintArchive.print_name).where(PrintArchive.print_name.ilike("%кронштейн%")), **exec_opts
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return list(products), list(archives)
+
     # A second session, so the searches are a real round trip through the
     # compiler against committed rows — the way a request asks them — rather
     # than statements issued inside the transaction that wrote the data.
     async with async_session() as db:
-        products = (await db.execute(select(Product.name).where(Product.name.ilike("%ЛАМПА%")))).scalars().all()
-        archives = (
-            (await db.execute(select(PrintArchive.print_name).where(PrintArchive.print_name.ilike("%кронштейн%"))))
-            .scalars()
-            .all()
-        )
+        products, archives = await both_searches(db)
+
+    # The forced run. A database that folds natively answers the two searches
+    # above with stock ILIKE, which says nothing about the collated SQL; so when
+    # the probe found native folding, engage the compiler's switch by hand and
+    # ask again. On SQLite there is nothing to force — no collation to render,
+    # and the fold is Python's — so the forced fields mirror the natural ones and
+    # ``forced_collation`` stays None. On a database that already folds through a
+    # collation the natural run WAS the forced one, which is why these start as
+    # its results.
+    forced_collation = case_folding.pg_fold_collation
+    forced_products, forced_archives = products, archives
+    if is_postgres() and case_folding.pg_native_folds:
+        async with engine.connect() as conn:
+            # The probe's own lookup (catalog-qualified, one candidate verified at
+            # a time), so "what would this server fold through" is answered in
+            # exactly one place.
+            _ctype, candidate = await case_folding._verified_collation(conn)
+        if candidate is not None:
+            previous = case_folding.pg_fold_collation
+            case_folding.pg_fold_collation = candidate  # ``pg_native_folds`` stays as measured
+            try:
+                async with async_session() as db:
+                    # ⚠️ A new session is NOT a fresh compile: the compiled-SQL
+                    # cache lives on the ENGINE and is keyed on the statement, not
+                    # on ``pg_fold_collation`` (the warning in core/case_folding.py).
+                    # Measured 2026-09-12: without a private cache the second run
+                    # re-sends the first run's stock ILIKE text and this whole
+                    # branch proves nothing.
+                    forced_products, forced_archives = await both_searches(db, execution_options={"compiled_cache": {}})
+            finally:
+                case_folding.pg_fold_collation = previous
+            forced_collation = candidate
+
     return {
-        "products": list(products),
-        "archives": list(archives),
+        "products": products,
+        "archives": archives,
         "native": case_folding.pg_native_folds,
         "collation": case_folding.pg_fold_collation,
+        "forced_products": forced_products,
+        "forced_archives": forced_archives,
+        "forced_collation": forced_collation,
     }
 
 

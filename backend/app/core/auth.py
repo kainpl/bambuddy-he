@@ -769,6 +769,14 @@ def _pick_folded_match(rows: list[User], typed: str, field: str) -> User | None:
     folding landed, so such a pair can already exist on disk. Returning one of
     them beats ``scalar_one_or_none()``'s ``MultipleResultsFound``, which is a
     500 on login for both accounts.
+
+    One consequence is not fixable here: a token minted for the exact row keeps
+    resolving through the fold for its whole TTL after that row is deleted or
+    renamed — the lookup then lands on the remaining variant, a different
+    account with the same folded name. This is pre-existing on any natively
+    folding PostgreSQL (the fold was never byte-exact there), and the WARNING is
+    the mitigation: the collision is meant to be resolved by a rename, not lived
+    with.
     """
     if not rows:
         return None
@@ -779,14 +787,30 @@ def _pick_folded_match(rows: list[User], typed: str, field: str) -> User | None:
     key = (field, typed.lower())
     if key not in _collision_warned:
         _collision_warned.add(key)
-        logger.warning(
-            "%d user rows differ only by letter case for %s=%r (%s); using %r — rename one of them",
-            len(rows),
-            field,
-            typed,
-            ", ".join(repr(getattr(u, field)) for u in rows),
-            getattr(chosen, field),
-        )
+        if field == "email":
+            # Addresses are personal data and a log line travels — into an issue,
+            # a paste, a shipped log bundle. The ids are enough to find the rows,
+            # and the folded key is the value that was looked up anyway; the
+            # spellings the rows hold stay out of it.
+            logger.warning(
+                "%d user rows fold to the same %s %r (ids %s); using id %d — rename one of them",
+                len(rows),
+                field,
+                key[1],
+                ", ".join(str(u.id) for u in rows),
+                chosen.id,
+            )
+        else:
+            # Usernames are named: the fix is a rename, and an administrator
+            # reading this cannot act on ids alone.
+            logger.warning(
+                "%d user rows differ only by letter case for %s=%r (%s); using %r — rename one of them",
+                len(rows),
+                field,
+                typed,
+                ", ".join(repr(getattr(u, field)) for u in rows),
+                getattr(chosen, field),
+            )
     return chosen
 
 

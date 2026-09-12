@@ -72,10 +72,14 @@ def _safe_filename(name: str) -> str:
 
 
 def _use_fts_search() -> bool:
-    """The tsvector branch needs a database that folds Unicode case itself: on a
-    C-locale PostgreSQL the m001 vectors hold unfolded tokens, so the ilike
-    branch — which the compiler folds through a collation — is the correct one."""
-    return is_postgres() and case_folding.pg_native_folds
+    """The tsvector branch is wrong exactly where the ilike branch is RIGHT: a
+    chosen collation folds ``ilike`` (core/case_folding.py) and not the m001
+    tsvector, so a folding search must skip the index. With no collation
+    neither folds, and the GIN index with its ranking is still the faster
+    half of a search that is ASCII-only either way — FTS stays on. Reads
+    ``pg_fold_collation`` (the compiler's switch), deliberately not
+    ``pg_native_folds``: the two differ exactly in the no-collation case."""
+    return is_postgres() and case_folding.pg_fold_collation is None
 
 
 def _ensure_archive_visible(
@@ -532,11 +536,14 @@ async def search_archives(
             LIMIT :limit OFFSET :offset
         """)
         fts_params = {"search_term": search_term, "limit": limit + 100, "offset": 0}
-    # else: a PostgreSQL database that cannot fold Unicode case — its tsvector
-    # holds unfolded tokens and ``archive_fts`` is SQLite's table, so there is
-    # no index to ask. The ilike search below is the answer, reached without a
-    # failing statement (on PostgreSQL one would abort the transaction and take
-    # the fallback down with it). See _use_fts_search.
+    # else: a PostgreSQL database whose search folds through a collation — that
+    # collation folds the ilike below and NOT the m001 tsvector, so the index
+    # would answer a different question (and ``archive_fts`` is SQLite's table,
+    # so there is nothing else to ask). The ilike search is the answer, reached
+    # without a failing statement — on PostgreSQL one would abort the
+    # transaction and take the fallback down with it. A database that folds
+    # nothing at all is NOT here: neither branch folds then, so it keeps its
+    # index and its ranking. See _use_fts_search.
 
     matched_ids: list[int] | None = None
     if fts_query is not None:
