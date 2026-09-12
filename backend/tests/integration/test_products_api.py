@@ -283,6 +283,15 @@ async def test_inactive_products_are_filtered_and_duplicate_copies_setup(committ
 
 
 @pytest.mark.asyncio
+async def test_search_folds_cyrillic_case(committing_client):
+    # SQLite's built-in lower() is ASCII-only; the app shadows it on every
+    # connection (core/case_folding.py). Before that, ?q=ЛАМПА found nothing.
+    await committing_client.post("/api/v1/products/", json={"name": "Лампа настільна"})
+    found = [p["name"] for p in (await committing_client.get("/api/v1/products?q=ЛАМПА")).json()]
+    assert found == ["Лампа настільна"]
+
+
+@pytest.mark.asyncio
 async def test_setting_and_unlinking_files_keeps_pivot_and_plates_in_step(committing_client, db_session, sliced_file):
     """The contract the routes delegate to ``sync_product_for_file`` to keep:
     the pivot and ``product_plates`` are never allowed to disagree, and a part

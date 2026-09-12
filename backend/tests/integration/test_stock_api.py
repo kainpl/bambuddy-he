@@ -96,6 +96,15 @@ async def test_search_and_order(committing_client, db_session):
 
 
 @pytest.mark.asyncio
+async def test_search_folds_cyrillic_case(committing_client, db_session):
+    # SQLite's built-in lower() is ASCII-only; the app shadows it on every
+    # connection (core/case_folding.py). Before that, ?q=ЛАМПА found nothing.
+    await _lamp_with_stock(committing_client, db_session, name="Лампа настільна", lids=1, bases=1)
+    found = [p["name"] for p in (await committing_client.get("/api/v1/stock?q=ЛАМПА")).json()["products"]]
+    assert found == ["Лампа настільна"]
+
+
+@pytest.mark.asyncio
 async def test_journal_is_newest_first_with_product_names_and_pages_by_id(committing_client, db_session):
     pid, ids = await _lamp_with_stock(committing_client, db_session, lids=0, bases=0)
     for delta in (1, 2, 3):

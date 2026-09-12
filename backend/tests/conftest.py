@@ -152,6 +152,16 @@ async def test_engine():
     """Create a test database engine."""
     engine = create_async_engine(TEST_DATABASE_URL, echo=False)
 
+    # The same connect listener production uses: pragmas plus the Unicode
+    # lower()/upper() that make ilike fold Cyrillic on SQLite. Without it a
+    # search test would pass on PostgreSQL and fail on the backend most
+    # installs run.
+    from sqlalchemy import event
+
+    from backend.app.core.database import configure_sqlite_connection
+
+    event.listen(engine.sync_engine, "connect", configure_sqlite_connection)
+
     # The test database gets exactly the tables the application gets. The list
     # of model modules lives in ``core/database.py::import_all_models`` — it used
     # to be copied here too, and the copies drifted (a name missing here is a

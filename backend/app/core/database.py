@@ -5,20 +5,28 @@ from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Session
 
-from backend.app.core import query_timing
+from backend.app.core import case_folding, query_timing
 from backend.app.core.config import settings
 from backend.app.core.db_dialect import is_sqlite
 
 logger = logging.getLogger(__name__)
 
 
-def _set_sqlite_pragmas(dbapi_conn, connection_record):
-    """Set SQLite pragmas on each new connection for concurrency and performance."""
+def configure_sqlite_connection(dbapi_conn, connection_record):
+    """Every new SQLite connection: pragmas for concurrency, Unicode case folding.
+
+    The pragmas are per connection by SQLite's design. The ``lower``/``upper``
+    shadowing is per connection too (application-defined functions live on the
+    connection object) — which is why the test engine attaches this same
+    listener (``tests/conftest.py``): a test must see the ``lower`` production
+    sees. Rationale in ``core/case_folding.py``.
+    """
     cursor = dbapi_conn.cursor()
     cursor.execute("PRAGMA journal_mode = WAL")
     cursor.execute("PRAGMA busy_timeout = 15000")
     cursor.execute("PRAGMA synchronous = NORMAL")
     cursor.close()
+    case_folding.register_sqlite_functions(dbapi_conn)
 
 
 def _strip_tz_from_params(conn, cursor, statement, parameters, context, executemany):
@@ -109,7 +117,7 @@ def _create_engine():
         **kwargs,
     )
     if is_sqlite():
-        event.listen(eng.sync_engine, "connect", _set_sqlite_pragmas)
+        event.listen(eng.sync_engine, "connect", configure_sqlite_connection)
     else:
         event.listen(eng.sync_engine, "before_cursor_execute", _strip_tz_from_params, retval=True)
     # ⚠️ Outside the branch above on purpose: _strip_tz_from_params is the
