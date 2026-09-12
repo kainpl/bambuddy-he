@@ -66,6 +66,26 @@ async def test_no_exact_match_takes_the_oldest_and_warns_once(db_session, caplog
 
 
 @pytest.mark.asyncio
+async def test_the_same_typed_value_still_warns_once_per_field(db_session, caplog):
+    """Email-as-username is an ordinary install, and then a username collision
+    and an address collision carry the identical folded value. The once-per-
+    process key is ``(field, value)`` so one problem does not silence the other
+    — they need two different renames."""
+    db_session.add(User(username="Ірина@example.com", email="Ірина@example.com", role="user"))
+    await db_session.flush()
+    db_session.add(User(username="ІРИНА@example.com", email="ІРИНА@example.com", role="user"))
+    await db_session.flush()
+
+    with caplog.at_level(logging.WARNING, logger="backend.app.core.auth"):
+        await auth.get_user_by_username(db_session, "ірина@example.com")
+        await auth.get_user_by_email(db_session, "ірина@example.com")
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 2, "both fields report, once each"
+    assert {w.args[1] for w in warnings} == {"username", "email"}
+
+
+@pytest.mark.asyncio
 async def test_the_same_rule_covers_email(db_session):
     older, newer = await _two_case_variants(db_session)
 

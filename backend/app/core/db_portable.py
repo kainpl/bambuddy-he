@@ -189,6 +189,8 @@ async def _export_pg_to_sqlite(engine, metadata, output_path: Path) -> None:
                 # new snapshot for each table and can mix parent/child revisions.
                 await conn.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY"))
             await _check_export_schema(conn, portable, metadata)
+            # Staging engine: no case-folding listener (core/case_folding.py) — nothing
+            # case-insensitive runs here; add configure_sqlite_connection if that ever changes.
             schema_engine = create_sync_engine(f"sqlite:///{staging}")
             try:
                 portable.create_all(schema_engine)

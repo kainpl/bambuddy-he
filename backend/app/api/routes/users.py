@@ -95,9 +95,12 @@ async def create_user(
     advanced_auth_setting = result.scalar_one_or_none()
     advanced_auth_enabled = advanced_auth_setting and advanced_auth_setting.value.lower() == "true"
 
-    # Check if username already exists (case-insensitive)
+    # Check if username already exists (case-insensitive). Any match means it
+    # exists — ``scalar_one_or_none()`` would raise ``MultipleResultsFound`` (a
+    # 500 instead of this refusal) on an install that already holds two rows
+    # differing only by case, which the pre-Unicode-fold check allowed in.
     existing_user = await db.execute(select(User).where(func.lower(User.username) == func.lower(user_data.username)))
-    if existing_user.scalar_one_or_none():
+    if existing_user.scalars().first():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Username already exists",
@@ -117,9 +120,9 @@ async def create_user(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Email is required when advanced authentication is enabled",
             )
-        # Check if email already exists (case-insensitive)
+        # Check if email already exists (case-insensitive) — any match means it exists, as above.
         existing_email = await db.execute(select(User).where(func.lower(User.email) == func.lower(user_data.email)))
-        if existing_email.scalar_one_or_none():
+        if existing_email.scalars().first():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Email already exists",
@@ -274,11 +277,12 @@ async def update_user(
             )
 
     if user_data.username is not None:
-        # Check if new username already exists (case-insensitive)
+        # Check if new username already exists (case-insensitive) — any match means it exists,
+        # so this reads the first row rather than raising on two case variants (see create_user).
         existing_user = await db.execute(
             select(User).where(func.lower(User.username) == func.lower(user_data.username), User.id != user_id)
         )
-        if existing_user.scalar_one_or_none():
+        if existing_user.scalars().first():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Username already exists",
@@ -286,11 +290,11 @@ async def update_user(
         user.username = user_data.username
 
     if user_data.email is not None:
-        # Check if new email already exists (case-insensitive)
+        # Check if new email already exists (case-insensitive) — any match means it exists, as above.
         existing_email = await db.execute(
             select(User).where(func.lower(User.email) == func.lower(user_data.email), User.id != user_id)
         )
-        if existing_email.scalar_one_or_none():
+        if existing_email.scalars().first():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Email already exists",

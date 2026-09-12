@@ -753,8 +753,10 @@ async def is_jti_revoked(jti: str, db: AsyncSession | None = None) -> bool:
         return await _query(own_db)
 
 
-_collision_warned: set[str] = set()
-"""Folded values already warned about, so the WARNING lands once per process."""
+_collision_warned: set[tuple[str, str]] = set()
+"""``(field, folded value)`` pairs already warned about, so the WARNING lands
+once per process. The field is part of the key: on an email-as-username install
+the same value collides in both columns, and those are two separate renames."""
 
 
 def _pick_folded_match(rows: list[User], typed: str, field: str) -> User | None:
@@ -774,7 +776,7 @@ def _pick_folded_match(rows: list[User], typed: str, field: str) -> User | None:
         return rows[0]
     exact = [u for u in rows if getattr(u, field) == typed]
     chosen = exact[0] if exact else min(rows, key=lambda u: u.id)
-    key = typed.lower()
+    key = (field, typed.lower())
     if key not in _collision_warned:
         _collision_warned.add(key)
         logger.warning(

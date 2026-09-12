@@ -1,14 +1,18 @@
 """Case folding is Unicode-aware on every backend (core/case_folding.py).
 
 SQLite's built-in lower() knows ASCII only; the app shadows it with Python's
-on every connection. A ``C``-locale PostgreSQL folds ASCII only too — the
-PostgreSQL half (probe + compiler) is tested here once it lands.
+on every connection. A ``C``-locale PostgreSQL folds ASCII only too: it is
+probed once at boot, and when it cannot fold, ``ilike``/``lower``/``upper``
+compile through a collation that can — tested here without a server, because
+the compiler is pure text.
 """
 
+import logging
 from unittest.mock import Mock
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import Column, MetaData, String, Table, func, select, text
+from sqlalchemy.dialects import postgresql
 
 from backend.app.core import case_folding
 
@@ -53,3 +57,252 @@ async def test_the_test_engine_lowers_unicode(test_engine):
         assert (await conn.execute(text("SELECT 'Лампа' LIKE '%' || lower('ЛАМПА') || '%'"))).scalar() == 0
         # The shape SQLAlchemy emits for ilike on SQLite: lower(col) LIKE lower(:q)
         assert (await conn.execute(text("SELECT lower('Лампа настільна') LIKE lower('%ЛАМПА%')"))).scalar() == 1
+
+
+class TestChooser:
+    def test_native_needs_no_collation(self):
+        assert case_folding.choose_fold_collation(True, {"pg_c_utf8", "und-x-icu"}) is None
+
+    def test_prefers_the_builtin_over_icu(self):
+        assert case_folding.choose_fold_collation(False, {"und-x-icu", "pg_c_utf8"}) == "pg_c_utf8"
+
+    def test_falls_back_to_icu(self):
+        assert case_folding.choose_fold_collation(False, {"und-x-icu"}) == "und-x-icu"
+
+    def test_nothing_available(self):
+        assert case_folding.choose_fold_collation(False, set()) is None
+
+
+class _FakeResult:
+    def __init__(self, value=None, rows=()):
+        self._value = value
+        self._rows = rows
+
+    def scalar(self):
+        return self._value
+
+    def __iter__(self):
+        return iter(self._rows)
+
+
+class _FakeEngine:
+    """Just enough engine for ``probe_postgres``: ``connect()`` as an async
+    context manager, ``execute()`` answering by the SQL it is handed."""
+
+    def __init__(self, *, folds: bool, collations: tuple[str, ...] = (), collation_folds: bool = True, fail=None):
+        self._folds = folds
+        self._collations = collations
+        self._collation_folds = collation_folds
+        self._fail = fail
+        self.statements: list[str] = []
+
+    def connect(self):
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def execute(self, stmt, params=None):
+        sql = str(stmt)
+        self.statements.append(sql)
+        if self._fail is not None:
+            raise self._fail
+        if "COLLATE" in sql:  # before the bare probe: this statement also contains lower('Ж')
+            return _FakeResult(value=self._collation_folds)
+        if "lower('Ж')" in sql:
+            return _FakeResult(value=self._folds)
+        if "datctype" in sql:
+            return _FakeResult(value="C")
+        if "pg_collation" in sql:
+            return _FakeResult(rows=[(c,) for c in self._collations])
+        raise AssertionError(f"the probe asked something unexpected: {sql!r}")
+
+
+class TestProbe:
+    def setup_method(self):
+        case_folding.reset_for_tests()
+
+    def teardown_method(self):
+        case_folding.reset_for_tests()
+
+    @pytest.mark.asyncio
+    async def test_a_folding_database_is_left_alone(self):
+        engine = _FakeEngine(folds=True, collations=("pg_c_utf8",))
+
+        await case_folding.probe_postgres(engine)
+
+        assert (case_folding.pg_native_folds, case_folding.pg_fold_collation) == (True, None)
+        assert len(engine.statements) == 1, "one question is enough when the answer is yes"
+
+    @pytest.mark.asyncio
+    async def test_a_c_locale_database_picks_the_builtin_collation(self):
+        engine = _FakeEngine(folds=False, collations=("pg_c_utf8", "und-x-icu"))
+
+        await case_folding.probe_postgres(engine)
+
+        assert (case_folding.pg_native_folds, case_folding.pg_fold_collation) == (False, "pg_c_utf8")
+
+    @pytest.mark.asyncio
+    async def test_only_icu_available(self):
+        engine = _FakeEngine(folds=False, collations=("und-x-icu",))
+
+        await case_folding.probe_postgres(engine)
+
+        assert (case_folding.pg_native_folds, case_folding.pg_fold_collation) == (False, "und-x-icu")
+
+    @pytest.mark.asyncio
+    async def test_a_collation_that_does_not_actually_fold_is_rejected(self, caplog):
+        """The collation is verified, not just looked up — an ICU collation can
+        exist on a build whose ICU is broken, and rendering it would be worse
+        than leaving ILIKE alone."""
+        engine = _FakeEngine(folds=False, collations=("und-x-icu",), collation_folds=False)
+
+        with caplog.at_level(logging.WARNING, logger="backend.app.core.case_folding"):
+            await case_folding.probe_postgres(engine)
+
+        assert (case_folding.pg_native_folds, case_folding.pg_fold_collation) == (False, None)
+        assert "no Unicode collation" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_no_collation_at_all_names_the_cure(self, caplog):
+        engine = _FakeEngine(folds=False)
+
+        with caplog.at_level(logging.WARNING, logger="backend.app.core.case_folding"):
+            await case_folding.probe_postgres(engine)
+
+        assert (case_folding.pg_native_folds, case_folding.pg_fold_collation) == (False, None)
+        assert "Recreate the database with a UTF-8" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_a_failing_probe_never_prevents_boot(self, caplog):
+        """Whatever the server says — an old version, a permission error, a
+        dropped connection — the app boots with the native defaults."""
+        engine = _FakeEngine(folds=False, fail=RuntimeError("terminating connection due to administrator command"))
+
+        with caplog.at_level(logging.WARNING, logger="backend.app.core.case_folding"):
+            await case_folding.probe_postgres(engine)
+
+        assert (case_folding.pg_native_folds, case_folding.pg_fold_collation) == (True, None)
+        assert "probe failed" in caplog.text
+
+
+def _pg_dialect():
+    d = postgresql.asyncpg.dialect()
+    d.statement_compiler = case_folding.BamDudePGCompiler
+    return d
+
+
+def _compile(stmt) -> str:
+    return str(stmt.compile(dialect=_pg_dialect(), compile_kwargs={"literal_binds": True}))
+
+
+_t = Table("t", MetaData(), Column("name", String))
+
+
+class TestCompiler:
+    def setup_method(self):
+        case_folding.reset_for_tests()
+
+    def teardown_method(self):
+        case_folding.reset_for_tests()
+
+    def test_native_database_compiles_as_stock(self):
+        case_folding.pg_native_folds, case_folding.pg_fold_collation = True, None
+        sql = _compile(select(_t.c.name).where(_t.c.name.ilike("%лампа%")))
+        assert "ILIKE" in sql and "COLLATE" not in sql
+        sql = _compile(select(func.lower(_t.c.name)))
+        assert sql.strip().startswith("SELECT lower(t.name)")
+
+    def test_the_native_form_is_byte_identical_to_the_stock_compiler(self):
+        """``_fold_func`` renders the stock one-argument form by hand (calling
+        ``visit_function`` from inside ``visit_lower_func`` would recurse), so
+        drift from what stock PostgreSQL emits has to be caught by comparison,
+        not by eye."""
+        case_folding.pg_native_folds, case_folding.pg_fold_collation = True, None
+        stock = postgresql.asyncpg.dialect()
+        for stmt in (
+            select(func.lower(_t.c.name)),
+            select(func.upper(_t.c.name)),
+            select(func.lower(_t.c.name, _t.c.name)),
+            select(_t.c.name).where(_t.c.name.ilike("%лампа%")),
+            select(_t.c.name).where(_t.c.name.not_ilike("50!%", escape="!")),
+        ):
+            assert _compile(stmt) == str(stmt.compile(dialect=stock, compile_kwargs={"literal_binds": True}))
+
+    def test_ilike_renders_the_collation(self):
+        case_folding.pg_native_folds, case_folding.pg_fold_collation = False, "pg_c_utf8"
+        sql = _compile(select(_t.c.name).where(_t.c.name.ilike("%лампа%")))
+        assert 'lower(t.name COLLATE "pg_c_utf8") LIKE lower(\'%лампа%\' COLLATE "pg_c_utf8")' in sql
+
+    def test_not_ilike_keeps_escape(self):
+        case_folding.pg_native_folds, case_folding.pg_fold_collation = False, "pg_c_utf8"
+        sql = _compile(select(_t.c.name).where(_t.c.name.not_ilike("50!%", escape="!")))
+        assert "NOT LIKE" in sql and "ESCAPE '!'" in sql and 'COLLATE "pg_c_utf8"' in sql
+
+    def test_lower_and_upper_render_the_collation(self):
+        case_folding.pg_native_folds, case_folding.pg_fold_collation = False, "und-x-icu"
+        assert 'lower(t.name COLLATE "und-x-icu")' in _compile(select(func.lower(_t.c.name)))
+        assert 'upper(t.name COLLATE "und-x-icu")' in _compile(select(func.upper(_t.c.name)))
+
+    def test_other_arities_are_untouched(self):
+        case_folding.pg_native_folds, case_folding.pg_fold_collation = False, "pg_c_utf8"
+        sql = _compile(select(func.lower(_t.c.name, _t.c.name)))
+        assert "COLLATE" not in sql
+
+
+@pytest.mark.asyncio
+async def test_archives_fts_branch_needs_native_folding(monkeypatch):
+    # routes/archives.py takes the tsvector branch only when PostgreSQL folds
+    # natively; a C-locale database uses the ilike branch the compiler fixes.
+    from backend.app.api.routes import archives as archives_route
+
+    monkeypatch.setattr(archives_route, "is_postgres", lambda: True)
+    monkeypatch.setattr(case_folding, "pg_native_folds", False)
+    assert archives_route._use_fts_search() is False
+    monkeypatch.setattr(case_folding, "pg_native_folds", True)
+    assert archives_route._use_fts_search() is True
+
+
+class _RecordingDB:
+    """Records the SQL a route executes; every result is empty."""
+
+    def __init__(self):
+        self.statements: list[str] = []
+
+    async def execute(self, stmt, params=None):
+        self.statements.append(str(stmt))
+        return _EmptyResult()
+
+
+class _EmptyResult:
+    def fetchall(self):
+        return []
+
+    def scalars(self):
+        return self
+
+    def all(self):
+        return []
+
+
+@pytest.mark.asyncio
+async def test_a_non_folding_postgres_search_never_asks_an_index(monkeypatch):
+    """With the FTS gate shut there is no index to ask: the tsvector holds
+    unfolded tokens and ``archive_fts`` is SQLite's table. Asking anyway would
+    not just waste a round trip — a failing statement aborts the PostgreSQL
+    transaction, so the ilike fallback in the same handler would fail too."""
+    from backend.app.api.routes import archives as archives_route
+
+    monkeypatch.setattr(archives_route, "is_postgres", lambda: True)
+    monkeypatch.setattr(case_folding, "pg_native_folds", False)
+    db = _RecordingDB()
+
+    assert await archives_route.search_archives(q="лампа", db=db, auth_result=(None, True)) == []
+
+    assert len(db.statements) == 1, db.statements
+    sql = db.statements[0]
+    assert "archive_fts" not in sql and "to_tsquery" not in sql
+    assert "FROM print_archives" in sql and "LIKE" in sql.upper()

@@ -1812,7 +1812,10 @@ async def provision_ldap_user(
     # stored, so the conflict check uses that rather than the request
     # payload.
     existing = await db.execute(select(User).where(sa_func.lower(User.username) == sa_func.lower(ldap_user.username)))
-    existing_user = existing.scalar_one_or_none()
+    # First match, not ``scalar_one_or_none()``: an install can hold two rows
+    # differing only by case (the pre-Unicode-fold duplicate check let them in),
+    # and refusing is the point here — raising would answer 500 instead of 409.
+    existing_user = existing.scalars().first()
     if existing_user is not None:
         if existing_user.auth_source == "ldap":
             detail = f"LDAP user '{ldap_user.username}' is already provisioned"

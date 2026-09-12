@@ -120,6 +120,12 @@ def _create_engine():
         event.listen(eng.sync_engine, "connect", configure_sqlite_connection)
     else:
         event.listen(eng.sync_engine, "before_cursor_execute", _strip_tz_from_params, retval=True)
+        # Fold ilike/lower/upper through a collation when this database cannot
+        # fold Unicode case itself — which collation is decided by the probe in
+        # init_db, and until it runs the compiler renders stock SQL. See
+        # core/case_folding.py. (asyncpg's own PGCompiler_asyncpg is an empty
+        # PGCompiler subclass, so subclassing PGCompiler loses nothing.)
+        eng.dialect.statement_compiler = case_folding.BamDudePGCompiler
     # ⚠️ Outside the branch above on purpose: _strip_tz_from_params is the
     # PostgreSQL half only, and hanging the timing beside it would instrument
     # half the installs. Inside _create_engine rather than at module level,
@@ -182,6 +188,10 @@ async def reinitialize_database():
         class_=AsyncSession,
         expire_on_commit=False,
     )
+    # A restore can land a database that folds differently from the one we
+    # probed at boot (a portable backup carries its own locale) — ask again.
+    if not is_sqlite():
+        await case_folding.probe_postgres(engine)
 
 
 class Base(DeclarativeBase):
@@ -341,6 +351,11 @@ async def init_db():
 
     # Register every model on Base.metadata before create_all — see the function.
     import_all_models()
+
+    # Does this database fold Unicode case? Decided once, before the
+    # migrations run (m137's backfill uses ilike). See core/case_folding.py.
+    if not is_sqlite():
+        await case_folding.probe_postgres(engine)
 
     await run_all_migrations(engine, async_session)
 

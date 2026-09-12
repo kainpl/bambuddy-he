@@ -12,12 +12,14 @@ from fastapi.responses import FileResponse, Response
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.app.core import case_folding
 from backend.app.core.auth import (
     RequirePermission,
     require_ownership_permission,
 )
 from backend.app.core.config import settings
 from backend.app.core.database import get_db
+from backend.app.core.db_dialect import is_postgres
 from backend.app.core.permissions import Permission
 from backend.app.core.timezones import client_timezone, day_bounds
 from backend.app.models.archive import PrintArchive
@@ -67,6 +69,13 @@ router = APIRouter(prefix="/archives", tags=["archives"])
 def _safe_filename(name: str) -> str:
     """Sanitize upload filename to prevent path traversal."""
     return Path(name.replace("\\", "/")).name
+
+
+def _use_fts_search() -> bool:
+    """The tsvector branch needs a database that folds Unicode case itself: on a
+    C-locale PostgreSQL the m001 vectors hold unfolded tokens, so the ilike
+    branch — which the compiler folds through a collation — is the correct one."""
+    return is_postgres() and case_folding.pg_native_folds
 
 
 def _ensure_archive_visible(
@@ -495,14 +504,14 @@ async def search_archives(
     from sqlalchemy import text
     from sqlalchemy.orm import selectinload
 
-    from backend.app.core.db_dialect import is_postgres
-
     user, can_read_all = auth_result
     own_only = user is not None and not can_read_all
     search_term = q.strip()
 
     # Build dialect-specific FTS query
-    if is_postgres():
+    fts_query = None
+    fts_params: dict = {}
+    if _use_fts_search():
         # PostgreSQL: tsvector + ts_query with prefix matching
         pg_term = " & ".join(f"{w}:*" for w in search_term.split() if w)
         fts_query = text("""
@@ -512,7 +521,7 @@ async def search_archives(
             LIMIT :limit OFFSET :offset
         """)
         fts_params = {"search_term": pg_term, "limit": limit + 100, "offset": 0}
-    else:
+    elif not is_postgres():
         # SQLite: FTS5 MATCH
         if not search_term.endswith("*"):
             search_term = f"{search_term}*"
@@ -523,13 +532,22 @@ async def search_archives(
             LIMIT :limit OFFSET :offset
         """)
         fts_params = {"search_term": search_term, "limit": limit + 100, "offset": 0}
+    # else: a PostgreSQL database that cannot fold Unicode case — its tsvector
+    # holds unfolded tokens and ``archive_fts`` is SQLite's table, so there is
+    # no index to ask. The ilike search below is the answer, reached without a
+    # failing statement (on PostgreSQL one would abort the transaction and take
+    # the fallback down with it). See _use_fts_search.
 
-    try:
-        result = await db.execute(fts_query, fts_params)
-        matched_ids = [row[0] for row in result.fetchall()]
-    except Exception as e:
-        logger.warning("FTS search failed, falling back to LIKE search: %s", e)
-        # Fallback to LIKE search if FTS fails
+    matched_ids: list[int] | None = None
+    if fts_query is not None:
+        try:
+            result = await db.execute(fts_query, fts_params)
+            matched_ids = [row[0] for row in result.fetchall()]
+        except Exception as e:
+            logger.warning("FTS search failed, falling back to LIKE search: %s", e)
+
+    if matched_ids is None:
+        # No usable index, or the index query failed: LIKE/ilike over the columns.
         like_pattern = f"%{q}%"
         query = (
             select(PrintArchive)
