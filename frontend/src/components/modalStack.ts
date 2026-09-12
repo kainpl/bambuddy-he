@@ -27,6 +27,22 @@
  * Entries are read through a ref at keypress time, so a modal whose
  * `onClose` or `closeDisabled` changed after mount never has a stale
  * closure called.
+ *
+ * The stack also owns every `inert` attribute — it is the same fact, "which
+ * layer is live", written into the DOM. While the stack is non-empty `#root`
+ * (the element main.tsx renders into) is inert, and so is every registered
+ * overlay except the topmost; that is the whole focus trap. Tab cannot leave
+ * the top modal because nothing else in the document can take focus, with no
+ * key handler of our own. Toasts are portalled into body for this reason
+ * (contexts/ToastContext.tsx), and so is every modal.
+ *
+ * ⚠️ The attributes are written imperatively, in `register`/`unregister`,
+ * BEFORE `notify()` — never as a React prop. `useDialogFocus` returns focus
+ * to the opener in the same effect-cleanup pass in which the modal
+ * unregisters, and `focus()` on an element inside an inert subtree silently
+ * does nothing; a prop would land one commit too late. That is also why
+ * `Modal.tsx` calls `useModalStackEntry` before `useDialogFocus`: React runs
+ * a component's cleanups in declaration order.
  */
 import {
   createContext,
@@ -49,6 +65,8 @@ interface Registered {
   key: string;
   ancestors: readonly string[];
   entry: RefObject<ModalStackEntry>;
+  /** The outermost portalled element; inert unless topmost. Read at apply time, never cached. */
+  overlay: RefObject<HTMLElement | null> | undefined;
 }
 
 /** Keys of the <Modal>s enclosing the current subtree, outermost first. The shell provides its `childAncestry`. */
@@ -59,6 +77,12 @@ const subscribers = new Set<() => void>();
 
 function notify(): void {
   for (const fn of subscribers) fn();
+}
+
+/** §3.1 + §3.2 of the spec: the page is inert while any modal is open; only the top overlay is live. */
+function applyInert(): void {
+  document.getElementById('root')?.toggleAttribute('inert', stack.length > 0);
+  stack.forEach((r, i) => r.overlay?.current?.toggleAttribute('inert', i !== stack.length - 1));
 }
 
 function onKeyDown(e: KeyboardEvent): void {
@@ -72,20 +96,29 @@ function onKeyDown(e: KeyboardEvent): void {
   entry.onClose();
 }
 
-export function register(key: string, ancestors: readonly string[], entry: RefObject<ModalStackEntry>): void {
+export function register(
+  key: string,
+  ancestors: readonly string[],
+  entry: RefObject<ModalStackEntry>,
+  overlay?: RefObject<HTMLElement | null>,
+): void {
   // Mount order — unless a descendant is already here (a same-commit mount
   // registers child-first): then this one goes just below it.
   const descendant = stack.findIndex((r) => r.ancestors.includes(key));
   const index = descendant === -1 ? stack.length : descendant;
   const wasEmpty = stack.length === 0;
-  stack = [...stack.slice(0, index), { key, ancestors, entry }, ...stack.slice(index)];
+  stack = [...stack.slice(0, index), { key, ancestors, entry, overlay }, ...stack.slice(index)];
   if (wasEmpty) window.addEventListener('keydown', onKeyDown);
+  applyInert();
   notify();
 }
 
 export function unregister(key: string): void {
+  const leaving = stack.find((r) => r.key === key);
   stack = stack.filter((r) => r.key !== key);
   if (stack.length === 0) window.removeEventListener('keydown', onKeyDown);
+  leaving?.overlay?.current?.removeAttribute('inert');
+  applyInert();
   notify();
 }
 
@@ -122,7 +155,10 @@ export interface ModalStackPlacement {
  * sits. The key is the component's `useId`; the ancestry is whatever
  * `ModalAncestryContext` says encloses it.
  */
-export function useModalStackEntry(entry: ModalStackEntry): ModalStackPlacement {
+export function useModalStackEntry(
+  entry: ModalStackEntry,
+  overlay?: RefObject<HTMLElement | null>,
+): ModalStackPlacement {
   const key = useId();
   const ancestors = useContext(ModalAncestryContext);
   const latest = useRef<ModalStackEntry>(entry);
@@ -130,9 +166,9 @@ export function useModalStackEntry(entry: ModalStackEntry): ModalStackPlacement 
     latest.current = entry;
   });
   useEffect(() => {
-    register(key, ancestors, latest);
+    register(key, ancestors, latest, overlay);
     return () => unregister(key);
-  }, [key, ancestors]);
+  }, [key, ancestors, overlay]);
   const registered = useSyncExternalStore(subscribe, () => positionOf(key), () => -1);
   const position = registered === -1 ? ancestors.length : registered;
   const childAncestry = useMemo(() => [...ancestors, key], [ancestors, key]);
@@ -140,8 +176,10 @@ export function useModalStackEntry(entry: ModalStackEntry): ModalStackPlacement 
 }
 
 export function _resetForTests(): void {
+  for (const r of stack) r.overlay?.current?.removeAttribute('inert');
   stack = [];
   window.removeEventListener('keydown', onKeyDown);
+  applyInert();
   notify();
 }
 

@@ -5,7 +5,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, cleanup, fireEvent, act, screen } from '@testing-library/react';
-import type { ReactNode, RefObject } from 'react';
+import { useRef, type ReactNode, type RefObject } from 'react';
 import {
   register,
   unregister,
@@ -21,6 +21,20 @@ import {
 
 function entry(onClose = vi.fn(), closeDisabled = false): RefObject<ModalStackEntry> {
   return { current: { onClose, closeDisabled } };
+}
+
+/** The element main.tsx renders into; the stack marks it inert while a modal is open. */
+function mountRoot(): HTMLElement {
+  const root = document.createElement('div');
+  root.id = 'root';
+  document.body.appendChild(root);
+  return root;
+}
+
+function overlay(): RefObject<HTMLElement | null> {
+  const el = document.createElement('div');
+  document.body.appendChild(el);
+  return { current: el };
 }
 
 describe('modalStack', () => {
@@ -214,5 +228,100 @@ describe('modalStack', () => {
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(later).toHaveBeenCalledTimes(1);
     expect(chainTop).not.toHaveBeenCalled();
+  });
+
+  describe('inert ownership', () => {
+    it('#root is inert exactly while the stack is non-empty', () => {
+      const root = mountRoot();
+      expect(root.hasAttribute('inert')).toBe(false);
+
+      register('a', [], entry());
+      expect(root.hasAttribute('inert')).toBe(true);
+      register('b', [], entry());
+      expect(root.hasAttribute('inert')).toBe(true);
+
+      unregister('a');
+      expect(root.hasAttribute('inert')).toBe(true);
+      unregister('b');
+      expect(root.hasAttribute('inert')).toBe(false);
+      root.remove();
+    });
+
+    it('a missing #root is not an error', () => {
+      expect(document.getElementById('root')).toBeNull();
+      expect(() => {
+        register('a', [], entry());
+        unregister('a');
+      }).not.toThrow();
+    });
+
+    it('only the topmost overlay is live, and the next one becomes live synchronously', () => {
+      const a = overlay();
+      const b = overlay();
+      const c = overlay();
+      register('a', [], entry(), a);
+      register('b', [], entry(), b);
+      register('c', [], entry(), c);
+      expect(a.current!.hasAttribute('inert')).toBe(true);
+      expect(b.current!.hasAttribute('inert')).toBe(true);
+      expect(c.current!.hasAttribute('inert')).toBe(false);
+
+      unregister('c');
+      // No act(), no await: useDialogFocus returns focus in the SAME cleanup
+      // pass, so the modal below must already be live here.
+      expect(b.current!.hasAttribute('inert')).toBe(false);
+      expect(a.current!.hasAttribute('inert')).toBe(true);
+
+      unregister('b');
+      expect(a.current!.hasAttribute('inert')).toBe(false);
+      unregister('a');
+      for (const r of [a, b, c]) r.current!.remove();
+    });
+
+    it('an ancestor registering after its descendant is inert, the descendant stays live', () => {
+      const parent = overlay();
+      const child = overlay();
+      register('child', ['parent'], entry(), child);
+      register('parent', [], entry(), parent);
+      expect(parent.current!.hasAttribute('inert')).toBe(true);
+      expect(child.current!.hasAttribute('inert')).toBe(false);
+      unregister('child');
+      unregister('parent');
+      parent.current!.remove();
+      child.current!.remove();
+    });
+
+    it('_resetForTests clears inert from #root', () => {
+      const root = mountRoot();
+      register('a', [], entry());
+      expect(root.hasAttribute('inert')).toBe(true);
+      _resetForTests();
+      expect(root.hasAttribute('inert')).toBe(false);
+      root.remove();
+    });
+
+    it('useModalStackEntry passes its overlay to the stack', () => {
+      function Shell({ label, children }: { label: string; children?: ReactNode }) {
+        const ref = useRef<HTMLDivElement>(null);
+        const { childAncestry } = useModalStackEntry({ onClose: vi.fn(), closeDisabled: false }, ref);
+        return (
+          <ModalAncestryContext.Provider value={childAncestry}>
+            <div ref={ref} data-testid={label}>
+              {children}
+            </div>
+          </ModalAncestryContext.Provider>
+        );
+      }
+      const { rerender } = render(
+        <Shell label="outer">
+          <Shell label="inner" />
+        </Shell>,
+      );
+      expect(screen.getByTestId('outer')).toHaveAttribute('inert');
+      expect(screen.getByTestId('inner')).not.toHaveAttribute('inert');
+
+      rerender(<Shell label="outer" />);
+      expect(screen.getByTestId('outer')).not.toHaveAttribute('inert');
+    });
   });
 });
