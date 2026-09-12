@@ -372,3 +372,33 @@ class TestProductExportImport:
     def test_the_attachments_and_the_cover_come_back(self, result):
         assert result["attachments"] == [["pictures", "shot.png", "import"]]
         assert result["cover_is_the_picture"] is True
+
+
+class TestCyrillicSearch:
+    """Upper-case Cyrillic must find its lower-case row on a real server.
+
+    The maintainer's dev database is a ``C``-locale one (measured 2026-09-12:
+    PostgreSQL 18.4, ``datctype = C``), which is the shape that used to fail —
+    ``lower('ЛАМПА')`` came back unchanged, so ``ILIKE`` matched nothing. The
+    unit tests read the collated SQL as text; only a server says whether that
+    text folds. Skipped with everything else here when ``TEST_POSTGRES_URL``
+    is unset.
+    """
+
+    @pytest.fixture(scope="class")
+    def result(self, tmp_path_factory) -> dict:
+        url = _pg_url()
+        _wipe(url)
+        return _run("cyrillic_search", tmp_path_factory.mktemp("pg_cyrillic"), url)
+
+    def test_capitals_find_the_lower_case_rows(self, result):
+        assert result["products"] == ["Лампа настільна"]
+        assert result["archives"] == ["Кронштейн"]
+
+    def test_the_probe_reports_what_it_did(self, result):
+        """Either the database folds natively or a collation was picked — with
+        rows found, never neither. Without this a green run above could mean the
+        collation path was never taken (a UTF-8 locale database), which is
+        exactly the configuration the feature does not need.
+        """
+        assert result["native"] or result["collation"] in ("pg_c_utf8", "und-x-icu"), result

@@ -11,6 +11,7 @@ Modes:
     fresh    run init_db() against an empty PostgreSQL, report the schema
     migrate  run init_db() with a SQLite alongside, triggering auto-migration
     product_roundtrip  export a product to a ZIP and import it back
+    cyrillic_search    upper-case Cyrillic finds its lower-case row
 
 Usage: python -m backend.tests.integration.postgres_scenario_runner <mode>
 """
@@ -254,6 +255,64 @@ async def _product_roundtrip() -> dict:
         }
 
 
+async def _cyrillic_search() -> dict:
+    """A C-locale database must still find «Лампа» for ?q=ЛАМПА (core/case_folding.py).
+
+    The unit tests compile the collated SQL and read its text; only a server
+    answers whether the text is *right*. The maintainer's dev database is the
+    shape that used to fail — ``LC_CTYPE = C``, where ``lower()``, ``ILIKE`` and
+    ``to_tsvector`` all fold ASCII only — so this runs the two searches the
+    feature exists for through the real engine, and reports what the probe
+    decided at boot so a green assertion cannot come from a database that folds
+    natively and never exercised the collation at all.
+    """
+    from sqlalchemy import select
+
+    from backend.app.core import case_folding
+    from backend.app.core.database import async_session
+    from backend.app.models.archive import PrintArchive
+    from backend.app.models.printer import Printer
+    from backend.app.models.product import Product
+
+    async with async_session() as db:
+        printer = Printer(
+            name="cyrillic-printer",
+            ip_address="10.0.0.2",
+            access_code="00000000",
+            serial_number="CYRILLIC1",
+            model="X1C",
+        )
+        db.add(printer)
+        await db.flush()
+        db.add(Product(name="Лампа настільна"))
+        db.add(
+            PrintArchive(
+                printer_id=printer.id,
+                filename="kronshtein.gcode.3mf",
+                file_path="archive/kronshtein.gcode.3mf",
+                file_size=7,
+                print_name="Кронштейн",
+                source_content_hash="a" * 64,
+            )
+        )
+        await db.commit()
+
+    # A second session so nothing is answered out of the identity map.
+    async with async_session() as db:
+        products = (await db.execute(select(Product.name).where(Product.name.ilike("%ЛАМПА%")))).scalars().all()
+        archives = (
+            (await db.execute(select(PrintArchive.print_name).where(PrintArchive.print_name.ilike("%кронштейн%"))))
+            .scalars()
+            .all()
+        )
+    return {
+        "products": list(products),
+        "archives": list(archives),
+        "native": case_folding.pg_native_folds,
+        "collation": case_folding.pg_fold_collation,
+    }
+
+
 async def _main(mode: str) -> dict:
     # One event loop for the whole run. The engine is a module-level singleton
     # holding connections bound to whichever loop created them, so a second
@@ -264,6 +323,8 @@ async def _main(mode: str) -> dict:
         return {"seeded": await _seed()}
     if mode == "product_roundtrip":
         return await _product_roundtrip()
+    if mode == "cyrillic_search":
+        return await _cyrillic_search()
     return await _report()
 
 

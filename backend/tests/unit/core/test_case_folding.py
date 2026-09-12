@@ -98,6 +98,7 @@ class _FakeEngine:
         verify_raises: tuple[str, ...] = (),
         fail=None,
         fail_on: str | None = None,
+        fail_on_close=None,
     ):
         self._folds = folds
         self._collations = collations
@@ -105,6 +106,7 @@ class _FakeEngine:
         self._verify_raises = verify_raises
         self._fail = fail
         self._fail_on = fail_on
+        self._fail_on_close = fail_on_close
         self.statements: list[str] = []
         self.rollbacks = 0
 
@@ -115,6 +117,10 @@ class _FakeEngine:
         return self
 
     async def __aexit__(self, *exc):
+        # Closing the connection is the one step that can still fail after the
+        # collation has been chosen and verified.
+        if self._fail_on_close is not None:
+            raise self._fail_on_close
         return False
 
     async def rollback(self):
@@ -128,7 +134,12 @@ class _FakeEngine:
         if self._fail_on is not None and self._fail_on in sql:
             raise RuntimeError(f"the server refused a statement mentioning {self._fail_on}")
         if "COLLATE" in sql:  # before the bare probe: this statement also contains lower('Ж')
-            name = next(c for c in case_folding.FOLD_COLLATIONS if f'"{c}"' in sql)
+            name = next((c for c in case_folding.FOLD_COLLATIONS if f'"{c}"' in sql), None)
+            if name is None:
+                # A bare ``next()`` would raise StopIteration here, which inside
+                # a coroutine surfaces as a RuntimeError from somewhere else
+                # entirely and hides the statement that caused it.
+                raise AssertionError(f"the probe collated through a collation this stub does not know: {sql!r}")
             if name in self._verify_raises:
                 raise RuntimeError(f"could not open collator for locale {name}")
             return _FakeResult(value=self._collation_folds)
@@ -225,6 +236,43 @@ class TestProbe:
 
         assert (case_folding.pg_native_folds, case_folding.pg_fold_collation) == (False, None)
         assert "Recreate the database with a UTF-8" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_the_last_candidate_is_not_told_to_try_the_next(self, caplog):
+        """Two ways a candidate can drop out — it raises, or it answers "I do not
+        fold" — and both used to promise a next attempt that does not exist. The
+        line an operator reads has to say which of the two happened."""
+        raised = _FakeEngine(folds=False, collations=("und-x-icu",), verify_raises=("und-x-icu",))
+        with caplog.at_level(logging.INFO, logger="backend.app.core.case_folding"):
+            await case_folding.probe_postgres_case_folding(raised)
+        assert "no candidate left" in caplog.text and "trying the next" not in caplog.text, caplog.text
+
+        caplog.clear()
+        case_folding.reset_for_tests()
+        answered = _FakeEngine(folds=False, collations=("und-x-icu",), collation_folds=False)
+        with caplog.at_level(logging.INFO, logger="backend.app.core.case_folding"):
+            await case_folding.probe_postgres_case_folding(answered)
+        assert "does not fold non-ASCII case; no candidate left" in caplog.text, caplog.text
+
+    @pytest.mark.asyncio
+    async def test_a_failure_after_a_collation_was_chosen_says_folding_is_on(self, caplog):
+        """The probe's own tail can fail (closing the connection) after the
+        collation has been chosen and verified. Reporting "folds ASCII only"
+        there is not a harmless overstatement: it is the line that tells the
+        operator to recreate a database whose search works."""
+        engine = _FakeEngine(
+            folds=False,
+            collations=("pg_c_utf8",),
+            fail_on_close=RuntimeError("connection was closed in the middle of operation"),
+        )
+
+        with caplog.at_level(logging.INFO, logger="backend.app.core.case_folding"):
+            await case_folding.probe_postgres_case_folding(engine)
+
+        assert (case_folding.pg_native_folds, case_folding.pg_fold_collation) == (False, "pg_c_utf8")
+        assert "could not finish cleanly" in caplog.text and "pg_c_utf8" in caplog.text
+        assert "folds ASCII only" not in caplog.text
+        assert not [r for r in caplog.records if r.levelno >= logging.WARNING], "folding is engaged — not a warning"
 
     @pytest.mark.asyncio
     async def test_a_failure_after_the_answer_never_claims_the_database_folds(self, caplog):
@@ -359,14 +407,41 @@ async def test_archives_fts_branch_needs_native_folding(monkeypatch):
     assert archives_route._use_fts_search() is True
 
 
+class _NestedBlock:
+    """``AsyncSession.begin_nested()``'s context manager, reduced to a recorder.
+
+    It never swallows: a real SAVEPOINT block rolls the savepoint back and
+    re-raises, and the route's own ``except`` is what decides to fall back.
+    """
+
+    def __init__(self, db: "_RecordingDB"):
+        self._db = db
+
+    async def __aenter__(self):
+        self._db.nested_enters += 1
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        self._db.nested_exits.append(exc_type)
+        return False
+
+
 class _RecordingDB:
     """Records the SQL a route executes; every result is empty."""
 
-    def __init__(self):
+    def __init__(self, *, fail_first: bool = False):
         self.statements: list[str] = []
+        self.nested_enters = 0
+        self.nested_exits: list[type[BaseException] | None] = []
+        self._fail_first = fail_first
+
+    def begin_nested(self):
+        return _NestedBlock(self)
 
     async def execute(self, stmt, params=None):
         self.statements.append(str(stmt))
+        if self._fail_first and len(self.statements) == 1:
+            raise RuntimeError('syntax error in tsquery: "лампа &"')
         return _EmptyResult()
 
 
@@ -416,3 +491,33 @@ async def test_the_sqlite_search_still_goes_through_fts5(monkeypatch):
     assert len(db.statements) == 1, db.statements
     sql = db.statements[0]
     assert "archive_fts" in sql and "to_tsquery" not in sql
+    # The savepoint is not a PostgreSQL-only detail of the handler: the index
+    # query runs inside one on every backend, and on the happy path the block
+    # is entered and left without an exception.
+    assert (db.nested_enters, db.nested_exits) == (1, [None])
+
+
+@pytest.mark.asyncio
+async def test_a_failing_index_query_only_rolls_back_its_own_savepoint(monkeypatch):
+    """A malformed ``to_tsquery`` is a statement the server refuses, and on
+    PostgreSQL a refused statement aborts the whole transaction — so the ilike
+    fallback in the same handler would be refused too ("current transaction is
+    aborted"), turning a bad search string into a 500. A SAVEPOINT around the
+    index query is what keeps the fallback reachable; ``db.rollback()`` is not
+    the alternative, it would expire every object the request has already
+    loaded (the authenticated user among them).
+    """
+    from backend.app.api.routes import archives as archives_route
+
+    monkeypatch.setattr(archives_route, "is_postgres", lambda: True)
+    monkeypatch.setattr(case_folding, "pg_native_folds", True)
+    db = _RecordingDB(fail_first=True)
+
+    assert await archives_route.search_archives(q="лампа", db=db, auth_result=(None, True)) == []
+
+    assert db.nested_enters == 1, "the index query must run inside a SAVEPOINT"
+    assert db.nested_exits == [RuntimeError], "the failure must leave the savepoint block, not be swallowed inside it"
+    assert len(db.statements) == 2, db.statements
+    assert "to_tsquery" in db.statements[0]
+    fallback = db.statements[1]
+    assert "FROM print_archives" in fallback and "lower(" in fallback

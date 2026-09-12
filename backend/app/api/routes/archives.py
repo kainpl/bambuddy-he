@@ -541,8 +541,18 @@ async def search_archives(
     matched_ids: list[int] | None = None
     if fts_query is not None:
         try:
-            result = await db.execute(fts_query, fts_params)
-            matched_ids = [row[0] for row in result.fetchall()]
+            # ⚠️ A SAVEPOINT, and never ``db.rollback()``: on PostgreSQL one
+            # refused statement (a malformed ``to_tsquery`` — the search term is
+            # the user's) aborts the whole transaction, so the ilike fallback
+            # below would be refused too and a bad query string would 500
+            # instead of falling back. Rolling the SESSION back would clear the
+            # abort but expire every object this request has already loaded —
+            # the authenticated user among them — and the next attribute read
+            # would lazy-load from a sync context (MissingGreenlet). Rolling
+            # back only the savepoint keeps both the session and its objects.
+            async with db.begin_nested():
+                result = await db.execute(fts_query, fts_params)
+                matched_ids = [row[0] for row in result.fetchall()]
         except Exception as e:
             logger.warning("FTS search failed, falling back to LIKE search: %s", e)
 

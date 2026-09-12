@@ -123,17 +123,21 @@ async def _verified_collation(conn) -> tuple[str | None, str | None]:
     remaining = {r[0] for r in rows}
     while (candidate := choose_fold_collation(False, remaining)) is not None:
         remaining.discard(candidate)
+        # What actually happens next, said in the line the operator reads: on
+        # the last candidate there is no next one, and "trying the next" there
+        # would leave them waiting for a decision that has already been made.
+        whats_next = "trying the next" if choose_fold_collation(False, remaining) is not None else "no candidate left"
         try:
             folds = bool((await conn.execute(text(f"SELECT lower('Ж' COLLATE \"{candidate}\") = 'ж'"))).scalar())
         except Exception as exc:  # noqa: BLE001 — the next candidate still deserves its turn
-            logger.info("Collation %r could not be used for case folding (%s); trying the next", candidate, exc)
+            logger.info("Collation %r could not be used for case folding (%s); %s", candidate, exc, whats_next)
             # PostgreSQL aborts the transaction on a failed statement, so
             # without this the next candidate would fail too.
             await conn.rollback()
             continue
         if folds:
             return ctype, candidate
-        logger.info("Collation %r exists but does not fold non-ASCII case; trying the next", candidate)
+        logger.info("Collation %r exists but does not fold non-ASCII case; %s", candidate, whats_next)
     return ctype, None
 
 
@@ -166,6 +170,18 @@ async def probe_postgres_case_folding(engine) -> None:
             ctype, chosen = await _verified_collation(conn)
             pg_fold_collation = chosen
     except Exception as exc:  # noqa: BLE001 — the app must boot whatever the server says
+        if pg_fold_collation is not None:
+            # The collation was chosen AND verified before this failure — only
+            # the tail of the probe (closing the connection) can still raise
+            # here. Folding is engaged, so "folds ASCII only" would be untrue
+            # and would send the operator off recreating a database that works.
+            logger.info(
+                "The case-folding probe could not finish cleanly (%s), but case-insensitive search folds "
+                "through collation %r",
+                exc,
+                pg_fold_collation,
+            )
+            return
         if not pg_native_folds:
             logger.warning(
                 "The database does not fold non-ASCII case and the case-folding probe could not finish (%s); "
