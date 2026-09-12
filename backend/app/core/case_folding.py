@@ -170,9 +170,14 @@ async def probe_postgres_case_folding(engine) -> None:
 
     Only the first question — does this database fold? — may leave the native
     defaults behind. Once the answer is measured as *no*, a later failure keeps
-    it: re-opening the FTS gate on a database whose tsvectors hold unfolded
-    tokens would search wrongly and silently, which is worse than searching
-    ASCII-folded and saying so.
+    it, because that flag is what distinguishes the two boots that both end with
+    ``pg_fold_collation`` None: "the database folds itself, nothing to do" (which
+    logs nothing at all) and "it cannot fold and this server offers no collation
+    to fold through" (the WARNING naming the cure). It is also what the
+    PostgreSQL scenario reports as ``native``. Collapsing to the default would
+    tell an operator their search is fine while it quietly folds ASCII only.
+    Nothing else reads the flag — the compiler and the archives FTS gate both
+    key off ``pg_fold_collation``.
     """
     global pg_native_folds, pg_fold_collation
     ctype: str | None = None
