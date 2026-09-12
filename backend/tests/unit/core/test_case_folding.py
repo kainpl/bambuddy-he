@@ -467,6 +467,8 @@ class _NestedBlock:
 
     It never swallows: a real SAVEPOINT block rolls the savepoint back and
     re-raises, and the route's own ``except`` is what decides to fall back.
+    With ``fail_on_release`` it models the other way out — the statement inside
+    succeeded and leaving the block (RELEASE SAVEPOINT) is what raised.
     """
 
     def __init__(self, db: "_RecordingDB"):
@@ -478,17 +480,22 @@ class _NestedBlock:
 
     async def __aexit__(self, exc_type, exc, tb):
         self._db.nested_exits.append(exc_type)
+        if exc_type is None and self._db.fail_on_release:
+            raise RuntimeError("could not release savepoint: server closed the connection unexpectedly")
         return False
 
 
 class _RecordingDB:
-    """Records the SQL a route executes; every result is empty."""
+    """Records the SQL a route executes; results are empty unless ``index_rows``
+    hands the first statement — the index query — some rowids to return."""
 
-    def __init__(self, *, fail_first: bool = False):
+    def __init__(self, *, fail_first: bool = False, fail_on_release: bool = False, index_rows: tuple[int, ...] = ()):
         self.statements: list[str] = []
         self.nested_enters = 0
         self.nested_exits: list[type[BaseException] | None] = []
+        self.fail_on_release = fail_on_release
         self._fail_first = fail_first
+        self._index_rows = index_rows
 
     def begin_nested(self):
         return _NestedBlock(self)
@@ -497,12 +504,15 @@ class _RecordingDB:
         self.statements.append(str(stmt))
         if self._fail_first and len(self.statements) == 1:
             raise RuntimeError('syntax error in tsquery: "лампа &"')
-        return _EmptyResult()
+        return _Result(self._index_rows if len(self.statements) == 1 else ())
 
 
-class _EmptyResult:
+class _Result:
+    def __init__(self, rows: tuple[int, ...] = ()):
+        self._rows = rows
+
     def fetchall(self):
-        return []
+        return [(rowid,) for rowid in self._rows]
 
     def scalars(self):
         return self
@@ -576,3 +586,29 @@ async def test_a_failing_index_query_only_rolls_back_its_own_savepoint(monkeypat
     assert "to_tsquery" in db.statements[0]
     fallback = db.statements[1]
     assert "FROM print_archives" in fallback and "lower(" in fallback
+
+
+@pytest.mark.asyncio
+async def test_an_index_query_whose_savepoint_fails_on_release_also_falls_back(monkeypatch, caplog):
+    """The other way out of the block: the index SELECT answered, and leaving it
+    (RELEASE SAVEPOINT — a dropped connection, a server shutting down) is what
+    raised. ``matched_ids`` is assigned after the block for exactly this. Filled
+    in inside it, it would already hold the rowids when the handler logs its
+    fallback, and the request would then answer from the index branch it has just
+    said it is giving up on — the log and the answer telling different stories.
+    """
+    from backend.app.api.routes import archives as archives_route
+
+    monkeypatch.setattr(archives_route, "is_postgres", lambda: False)
+    db = _RecordingDB(fail_on_release=True, index_rows=(7,))
+
+    with caplog.at_level(logging.WARNING, logger="backend.app.api.routes.archives"):
+        assert await archives_route.search_archives(q="лампа", db=db, auth_result=(None, True)) == []
+
+    assert db.nested_exits == [None], "the SELECT itself did not raise — leaving the block did"
+    assert "falling back to LIKE search" in caplog.text
+    assert len(db.statements) == 2, db.statements
+    assert "archive_fts" in db.statements[0]
+    fallback = db.statements[1]
+    assert "FROM print_archives" in fallback and "lower(" in fallback
+    assert "IN (" not in fallback, "fetching the matched ids would mean the index rows were used after all"
