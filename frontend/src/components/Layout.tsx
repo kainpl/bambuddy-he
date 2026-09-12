@@ -845,13 +845,13 @@ export function Layout() {
       )}
 
       {/* Sidebar / Mobile Drawer */}
+      {/* z-[49]: above the drawer's own backdrop and the header (both z-40),
+          below the modal layer (z = 50 + stack position) — the drawer is
+          inside #root, which the modal stack marks inert while a dialog is
+          open, so a drawer painting over one would be visible but dead. */}
       <aside
         className={`bg-bambu-dark-secondary border-r border-bambu-dark-tertiary flex flex-col transition-all duration-300 ${
           isSidebarCompact
-            // z-[49]: above the drawer's own backdrop and the header (both z-40),
-            // below the modal layer (z = 50 + stack position) — the drawer is
-            // inside #root, which the modal stack marks inert while a dialog is
-            // open, so a drawer painting over one would be visible but dead.
             ? `fixed inset-y-0 left-0 z-[49] w-72 transform ${mobileDrawerOpen ? 'translate-x-0' : '-translate-x-full'}`
             : `fixed inset-y-0 left-0 z-30 ${sidebarExpanded ? 'w-64' : 'w-16'}`
         }`}
@@ -1508,8 +1508,10 @@ export function Layout() {
       {/* ⚠️ The panel always mounts HERE, at the Layout root. It must not move
           into the header alongside its compact-layout trigger: the header is
           `fixed z-40` and so its own stacking context, which would cap the
-          z-50 panel at the header's level and bury it under every ordinary
-          modal in the app. */}
+          panel at the header's level whatever its own z-index says. At the
+          Layout root it sits at `z-[49]`, one below the modal layer
+          (z = 50 + stack position) — above the header, and never over a dialog
+          it would be inert under. */}
       <BugReportBubble
         showTrigger={!isSidebarCompact}
         open={bugReportOpen}

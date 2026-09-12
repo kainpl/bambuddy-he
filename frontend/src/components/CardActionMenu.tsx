@@ -57,6 +57,18 @@ export function CardActionMenu({ label, testId, width = 180, children }: CardAct
     [],
   );
 
+  // Focus goes back to the trigger on every close — the WAI-ARIA menu-button
+  // contract, and what lets a dialog opened from an item return focus somewhere
+  // real: useDialogFocus remembers `document.activeElement` when the dialog
+  // opens, and by then this menu (and its focused item) is gone. Declared above
+  // the key handler so Escape closes through the same function as a click;
+  // `useCallback` keeps it stable, so naming it in that effect's deps does not
+  // re-register the listener on every render.
+  const close = useCallback(() => {
+    setOpen(false);
+    triggerRef.current?.focus();
+  }, []);
+
   // ⚠️ The move waits for the panel to be MEASURED (focusing an element that is
   // still `visibility: hidden` is a no-op in a browser, and the menu would open
   // with the focus left behind on the trigger) and happens ONCE per opening:
@@ -88,8 +100,7 @@ export function CardActionMenu({ label, testId, width = 180, children }: CardAct
         // both halves below: the capture phase to be heard FIRST, and
         // `stopImmediatePropagation` to be heard alone.
         e.stopImmediatePropagation();
-        setOpen(false);
-        triggerRef.current?.focus();
+        close();
         return;
       }
       const rows = items();
@@ -113,16 +124,7 @@ export function CardActionMenu({ label, testId, width = 180, children }: CardAct
     // outside an open menu is intercepted at all.
     window.addEventListener('keydown', onKeyDown, true);
     return () => window.removeEventListener('keydown', onKeyDown, true);
-  }, [open, items]);
-
-  // Focus goes back to the trigger on every close — the WAI-ARIA menu-button
-  // contract, and what lets a dialog opened from an item return focus somewhere
-  // real: useDialogFocus remembers `document.activeElement` when the dialog
-  // opens, and by then this menu (and its focused item) is gone.
-  const close = () => {
-    setOpen(false);
-    triggerRef.current?.focus();
-  };
+  }, [open, items, close]);
 
   return (
     <>

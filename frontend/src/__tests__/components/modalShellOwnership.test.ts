@@ -134,6 +134,13 @@ function classNameOf(tag: string): string {
  * that is NOT portalled never may — `#root` is inert while a modal is open.
  * `fixed` is read from the `className`, so a `position: 'fixed'` style on a
  * portalled panel is not mistaken for one.
+ *
+ * Two accepted limits: the exemption is per FILE, not per element — a file with
+ * any `createPortal(` in it is skipped whole, so an in-tree `fixed z-50` living
+ * beside a portal in the same file is unguarded, and a file protected today
+ * stays protected only until someone adds a portal to it — and `fixed` is read
+ * from the `className` only, so a panel that goes `fixed` through an inline
+ * `style={{ position: 'fixed' }}` is invisible to the rule.
  */
 function overlaysAtModalLayer(file: string, src: string): string[] {
   if (/createPortal\(/.test(src)) return [];

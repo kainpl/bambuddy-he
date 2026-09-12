@@ -226,11 +226,11 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
   };
 
   return (
+    // z-[49], not 50: the menu renders inside #root, which the modal stack
+    // marks inert while a dialog is open, so at the modal layer it would paint
+    // over the dialog while being dead.
     <div
       ref={menuRef}
-      // z-[49], not 50: the menu renders inside #root, which the modal stack
-      // marks inert while a dialog is open, so at the modal layer it would paint
-      // over the dialog while being dead.
       className="fixed z-[49] w-fit max-w-[280px] bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg shadow-xl py-1 whitespace-nowrap"
       style={{
         left: position.x,
