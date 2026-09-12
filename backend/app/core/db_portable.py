@@ -242,6 +242,8 @@ async def _export_pg_to_sqlite(engine, metadata, output_path: Path) -> None:
         if "print_archives" in portable.tables:
             from backend.app.migrations.m001_bamdude_baseline import _setup_sqlite_fts
 
+            # Staging engine: no case-folding listener (core/case_folding.py) — nothing
+            # case-insensitive runs here; add configure_sqlite_connection if that ever changes.
             fts_engine = create_async_engine(f"sqlite+aiosqlite:///{staging}")
             try:
                 async with fts_engine.begin() as conn:
@@ -326,6 +328,8 @@ def _reflect_sqlite_schema(sqlite_path: Path, models_metadata) -> MetaData:
     from sqlalchemy.types import DateTime, LargeBinary, _Binary
 
     reflected = MetaData()
+    # Staging engine: no case-folding listener (core/case_folding.py) — nothing
+    # case-insensitive runs here; add configure_sqlite_connection if that ever changes.
     sync_engine = create_engine(f"sqlite:///{sqlite_path}")
     try:
         reflected.reflect(bind=sync_engine)

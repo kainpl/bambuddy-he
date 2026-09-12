@@ -28,12 +28,28 @@ logger = logging.getLogger(__name__)
 
 
 def sqlite_lower(value):
-    """Unicode ``lower`` for SQLite; NULL stays NULL, non-text passes through."""
+    """Unicode ``lower`` for SQLite; NULL stays NULL, non-text passes through.
+
+    The passthrough is a deliberate divergence from the built-in, which
+    stringifies its argument (``lower(5)`` → ``'5'``, ``lower(1e20)`` →
+    ``'1.0e+20'``); Python's ``str()`` cannot reproduce SQLite's float
+    formatting, so a faithful mirror is not available and guessing one would
+    hand callers subtly wrong text. No caller passes non-text today (every
+    ``func.lower``/``func.upper`` in the app reads a text column). Should one
+    ever appear, note that the ``int`` we return can never satisfy
+    ``lower(col) = :str``: SQLite does not coerce across storage classes, so the
+    comparison is simply false rather than an error.
+    """
     return value.lower() if isinstance(value, str) else value
 
 
 def sqlite_upper(value):
-    """Unicode ``upper`` for SQLite; NULL stays NULL, non-text passes through."""
+    """Unicode ``upper`` for SQLite; NULL stays NULL, non-text passes through.
+
+    Same deliberate divergence as ``sqlite_lower`` for non-text input — see
+    there for why a faithful mirror of the built-in is not available and what a
+    passed-through number does to a comparison.
+    """
     return value.upper() if isinstance(value, str) else value
 
 

@@ -753,20 +753,61 @@ async def is_jti_revoked(jti: str, db: AsyncSession | None = None) -> bool:
         return await _query(own_db)
 
 
+_collision_warned: set[str] = set()
+"""Folded values already warned about, so the WARNING lands once per process."""
+
+
+def _pick_folded_match(rows: list[User], typed: str, field: str) -> User | None:
+    """Several rows fold to the same key (a pre-Unicode-fold install may hold
+    `Ірина` and `ІРИНА`): the byte-exact match wins, else the oldest account;
+    warn once so the administrator renames one. See spec §3.5.
+
+    ``username``/``email`` are UNIQUE under SQLite's BINARY collation and the
+    duplicate check in ``routes/users.py`` folded ASCII only until Unicode case
+    folding landed, so such a pair can already exist on disk. Returning one of
+    them beats ``scalar_one_or_none()``'s ``MultipleResultsFound``, which is a
+    500 on login for both accounts.
+    """
+    if not rows:
+        return None
+    if len(rows) == 1:
+        return rows[0]
+    exact = [u for u in rows if getattr(u, field) == typed]
+    chosen = exact[0] if exact else min(rows, key=lambda u: u.id)
+    key = typed.lower()
+    if key not in _collision_warned:
+        _collision_warned.add(key)
+        logger.warning(
+            "%d user rows differ only by letter case for %s=%r (%s); using %r — rename one of them",
+            len(rows),
+            field,
+            typed,
+            ", ".join(repr(getattr(u, field)) for u in rows),
+            getattr(chosen, field),
+        )
+    return chosen
+
+
 async def get_user_by_username(db: AsyncSession, username: str) -> User | None:
-    """Get a user by username (case-insensitive) with groups loaded for permission checks."""
+    """Get a user by username (case-insensitive) with groups loaded for permission checks.
+
+    Several rows can fold to one username — ``_pick_folded_match`` decides which.
+    """
     result = await db.execute(
         select(User).where(func.lower(User.username) == func.lower(username)).options(selectinload(User.groups))
     )
-    return result.scalar_one_or_none()
+    return _pick_folded_match(list(result.scalars().all()), username, "username")
 
 
 async def get_user_by_email(db: AsyncSession, email: str) -> User | None:
-    """Get a user by email (case-insensitive) with groups loaded for permission checks."""
+    """Get a user by email (case-insensitive) with groups loaded for permission checks.
+
+    Several rows can fold to one address — ``_pick_folded_match`` decides which.
+    """
     result = await db.execute(
         select(User).where(func.lower(User.email) == func.lower(email)).options(selectinload(User.groups))
     )
-    return result.scalar_one_or_none()
+    return _pick_folded_match(list(result.scalars().all()), email, "email")
 
 
 async def authenticate_user(db: AsyncSession, username: str, password: str) -> User | None:

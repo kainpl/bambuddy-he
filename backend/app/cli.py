@@ -110,10 +110,7 @@ def _prompt_for_password() -> str | None:
 
 async def _reset_password(username: str, generate: bool, clear_2fa: bool) -> int:
     """Set a local account's password from the console."""
-    from sqlalchemy import func
-
-    from backend.app.core.auth import get_password_hash, revoke_all_refresh_tokens_for_user
-    from backend.app.models.user import User
+    from backend.app.core.auth import get_password_hash, get_user_by_username, revoke_all_refresh_tokens_for_user
     from backend.app.schemas.auth import _validate_password_complexity
     from backend.app.services.email_service import generate_secure_password
 
@@ -121,8 +118,11 @@ async def _reset_password(username: str, generate: bool, clear_2fa: bool) -> int
     async with async_session() as db:
         # Case-insensitive, like every other username lookup in the codebase —
         # an operator typing "Admin" at 2am should not be told no such user.
-        result = await db.execute(select(User).where(func.lower(User.username) == username.lower()))
-        user = result.scalar_one_or_none()
+        # Through ``get_user_by_username`` rather than its own query, so the
+        # console shares the collision rule for case-variant accounts that
+        # Unicode folding can now match together (spec §3.5): a recovery tool
+        # must not be the one path that raises MultipleResultsFound.
+        user = await get_user_by_username(db, username)
         if user is None:
             print(f"No user named {username!r}. Run 'list_users' to see who exists.", file=sys.stderr)
             return 2
