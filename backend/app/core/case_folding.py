@@ -74,8 +74,16 @@ def register_sqlite_functions(dbapi_conn) -> None:
 # into a COLLATE clause.
 FOLD_COLLATIONS: tuple[str, ...] = ("pg_c_utf8", "und-x-icu")
 
-# Process state, written by ``probe_postgres`` only. Defaults describe a
-# database that folds natively — and are what a failed probe leaves behind.
+# Process state, written by ``probe_postgres_case_folding`` only. Defaults
+# describe a database that folds natively — and are what a probe that never got
+# an answer leaves behind.
+#
+# ⚠️ SQLAlchemy's compiled-SQL cache is keyed on the statement, not on
+# ``pg_fold_collation``, so a statement compiled before this value changed would
+# be reused with the old text. That is correct only because the probe runs once,
+# before any application query (``init_db``), and ``reinitialize_database``
+# builds a fresh engine with a fresh cache. A re-probe mid-life would have to
+# clear ``engine.dialect._compiled_cache`` / the engine's cache as well.
 pg_native_folds: bool = True
 pg_fold_collation: str | None = None
 
@@ -95,44 +103,85 @@ def reset_for_tests() -> None:
     pg_native_folds, pg_fold_collation = True, None
 
 
-async def probe_postgres(engine) -> None:
+async def _verified_collation(conn) -> tuple[str | None, str | None]:
+    """``(datctype, the first collation that verifiably folds)`` on a database
+    that does not fold by itself.
+
+    Trust, but verify, one candidate at a time: a collation can be listed on a
+    build whose ICU is broken, so a candidate is asked to fold «Ж» before it is
+    chosen — and a candidate that answers wrong, or raises, costs only its own
+    turn. ``choose_fold_collation`` stays the single place that knows the
+    preference order; this loop just takes the candidates off the list.
+    """
+    ctype = (await conn.execute(text("SELECT datctype FROM pg_database WHERE datname = current_database()"))).scalar()
+    # The names are our own constants, never anything a user can reach, so they
+    # are written into the statement as literals. A bound list would mean
+    # ``= ANY(:names)`` — an array parameter, and this statement decides whether
+    # the whole feature engages, so it must not depend on driver array handling.
+    quoted = ", ".join(f"'{name}'" for name in FOLD_COLLATIONS)
+    rows = await conn.execute(text(f"SELECT collname FROM pg_collation WHERE collname IN ({quoted})"))
+    remaining = {r[0] for r in rows}
+    while (candidate := choose_fold_collation(False, remaining)) is not None:
+        remaining.discard(candidate)
+        try:
+            folds = bool((await conn.execute(text(f"SELECT lower('Ж' COLLATE \"{candidate}\") = 'ж'"))).scalar())
+        except Exception as exc:  # noqa: BLE001 — the next candidate still deserves its turn
+            logger.info("Collation %r could not be used for case folding (%s); trying the next", candidate, exc)
+            # PostgreSQL aborts the transaction on a failed statement, so
+            # without this the next candidate would fail too.
+            await conn.rollback()
+            continue
+        if folds:
+            return ctype, candidate
+        logger.info("Collation %r exists but does not fold non-ASCII case; trying the next", candidate)
+    return ctype, None
+
+
+async def probe_postgres_case_folding(engine) -> None:
     """Ask the database once whether it folds Unicode; pick a collation if not.
 
     Runs at engine start, before the migrations (m137's backfill uses ilike).
-    Must never prevent boot: any failure logs and keeps the native defaults.
+    Must never prevent boot: any failure logs and carries on.
+
+    Only the first question — does this database fold? — may leave the native
+    defaults behind. Once the answer is measured as *no*, a later failure keeps
+    it: re-opening the FTS gate on a database whose tsvectors hold unfolded
+    tokens would search wrongly and silently, which is worse than searching
+    ASCII-folded and saying so.
     """
     global pg_native_folds, pg_fold_collation
+    ctype: str | None = None
+    # Start from "no answer yet from THIS probe", so the guard in the handler
+    # below means *this* call measured non-folding — a re-probe after a restore
+    # must not inherit the previous database's collation when it cannot even
+    # ask the first question.
+    pg_native_folds, pg_fold_collation = True, None
     try:
         async with engine.connect() as conn:
             native = bool((await conn.execute(text("SELECT lower('Ж') = 'ж'"))).scalar())
             if native:
                 pg_native_folds, pg_fold_collation = True, None
                 return
-            ctype = (
-                await conn.execute(text("SELECT datctype FROM pg_database WHERE datname = current_database()"))
-            ).scalar()
-            rows = await conn.execute(
-                text("SELECT collname FROM pg_collation WHERE collname = ANY(:names)"),
-                {"names": list(FOLD_COLLATIONS)},
-            )
-            available = {r[0] for r in rows}
-            chosen = choose_fold_collation(False, available)
-            if chosen is not None:
-                # Trust, but verify: an ICU collation can exist on a build whose ICU is broken.
-                ok = (await conn.execute(text(f"SELECT lower('Ж' COLLATE \"{chosen}\") = 'ж'"))).scalar()
-                if not ok:
-                    chosen = None
+            pg_native_folds, pg_fold_collation = False, None  # measured; stands from here on
+            ctype, chosen = await _verified_collation(conn)
+            pg_fold_collation = chosen
     except Exception as exc:  # noqa: BLE001 — the app must boot whatever the server says
+        if not pg_native_folds:
+            logger.warning(
+                "The database does not fold non-ASCII case and the case-folding probe could not finish (%s); "
+                "case-insensitive search folds ASCII only",
+                exc,
+            )
+            return
         logger.warning("Case-folding probe failed (%s); assuming the database folds natively", exc)
         pg_native_folds, pg_fold_collation = True, None
         return
-    pg_native_folds, pg_fold_collation = False, chosen
-    if chosen is not None:
+    if pg_fold_collation is not None:
         logger.info(
             "PostgreSQL database ctype is %r and does not fold non-ASCII case; "
             "case-insensitive search will fold through collation %r (full-text ranking is off)",
             ctype,
-            chosen,
+            pg_fold_collation,
         )
     else:
         logger.warning(
@@ -144,7 +193,9 @@ async def probe_postgres(engine) -> None:
 
 
 def _collated(sql: str) -> str:
-    return f'{sql} COLLATE "{pg_fold_collation}"'
+    """``COLLATE`` binds tighter than every operator, so the operand is
+    parenthesised: without it ``a || b COLLATE "c"`` collates only ``b``."""
+    return f'({sql}) COLLATE "{pg_fold_collation}"'
 
 
 class BamDudePGCompiler(PGCompiler):

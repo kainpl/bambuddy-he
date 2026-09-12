@@ -676,8 +676,6 @@ async def rebuild_search_index(
     """
     from sqlalchemy import text
 
-    from backend.app.core.db_dialect import is_postgres
-
     try:
         if is_postgres():
             # PostgreSQL: re-trigger tsvector update for all rows

@@ -190,8 +190,10 @@ async def reinitialize_database():
     )
     # A restore can land a database that folds differently from the one we
     # probed at boot (a portable backup carries its own locale) — ask again.
+    # The fresh engine also brings a fresh compiled-SQL cache, which is what
+    # makes a second answer safe (see the state block in core/case_folding.py).
     if not is_sqlite():
-        await case_folding.probe_postgres(engine)
+        await case_folding.probe_postgres_case_folding(engine)
 
 
 class Base(DeclarativeBase):
@@ -355,7 +357,7 @@ async def init_db():
     # Does this database fold Unicode case? Decided once, before the
     # migrations run (m137's backfill uses ilike). See core/case_folding.py.
     if not is_sqlite():
-        await case_folding.probe_postgres(engine)
+        await case_folding.probe_postgres_case_folding(engine)
 
     await run_all_migrations(engine, async_session)
 
